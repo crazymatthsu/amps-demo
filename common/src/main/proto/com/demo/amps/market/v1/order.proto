@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package com.demo.amps.market.v1;
+
+option java_package = "com.demo.amps.market.v1";
+option java_multiple_files = true;
+option java_outer_classname = "OrderProto";
+
+// The order book entity used by the SOW demos.
+//
+// FIELD-TYPE RULES FOR AMPS + PROTOBUF-JSON (see docs/protobuf-json-and-amps.md):
+//
+//   * Canonical protobuf JSON renders int64/uint64/fixed64 as *quoted strings*
+//     ("42", not 42). AMPS content filters compare JSON numbers numerically and
+//     JSON strings lexically, so a 64-bit field silently breaks `/quantity > 100`.
+//     Every field this demo filters on numerically is therefore int32 or double.
+//
+//   * Protobuf JSON emits lowerCamelCase names by default, so `order_id` appears
+//     on the wire as `orderId`. The SOW key in the server config is `/orderId`.
+//     Do NOT enable JsonFormat.preservingProtoFieldNames() without changing the
+//     server config to match -- the key would stop resolving and every message
+//     would land under an empty key.
+message Order {
+  // SOW key. Configured in server/config/amps-config.xml as <Key>/orderId</Key>.
+  string order_id = 1;
+
+  string symbol = 2;
+  Side side = 3;
+
+  // int32, not int64: must stay a JSON number so `/quantity > 500` works.
+  int32 quantity = 4;
+  int32 filled_quantity = 5;
+
+  double price = 6;
+
+  OrderStatus status = 7;
+
+  // Used by the "query and subscribe by key" demo as a secondary filter.
+  string trader = 8;
+  string desk = 9;
+
+  // Monotonic per-order revision, bumped on every update. Handy for spotting
+  // out-of-order delivery and for the delta demos.
+  int32 revision = 10;
+
+  // Seconds since epoch as a double so it stays a JSON number and can be used
+  // in range filters (`/updatedAtEpochSeconds > 1700000000`).
+  double updated_at_epoch_seconds = 11;
+
+  // Free-form tags. NOTE: AMPS delta updates replace arrays wholesale rather
+  // than merging element-by-element -- see docs/delta-updates.md.
+  repeated string tags = 12;
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY = 1;
+  SIDE_SELL = 2;
+}
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_NEW = 1;
+  ORDER_STATUS_PARTIALLY_FILLED = 2;
+  ORDER_STATUS_FILLED = 3;
+  ORDER_STATUS_CANCELLED = 4;
+  ORDER_STATUS_REJECTED = 5;
+}
