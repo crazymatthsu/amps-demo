@@ -40,3 +40,50 @@ tasks.register<Exec>("serverValidateConfig") {
     description = "Ask ampServer to parse the config without starting the instance."
     commandLine(ampsScript.absolutePath, "validate")
 }
+
+/**
+ * Parse every config as XML.
+ *
+ * This catches the mistake these files are most prone to: an XML comment may not
+ * contain a double hyphen, and these configs carry long explanatory comments full
+ * of rules and em dashes. AMPS rejects a malformed config at startup, which is a
+ * slow and confusing way to find out. `serverValidateConfig` is the real check --
+ * it runs the server's own parser and understands AMPS semantics -- but it needs a
+ * container, so this runs on every build instead.
+ */
+val checkConfigXml = tasks.register("checkConfigXml") {
+    group = "verification"
+    description = "Verify every AMPS config file is well-formed XML."
+
+    val configDir = layout.projectDirectory.dir("config").asFile
+    inputs.dir(configDir)
+    outputs.upToDateWhen { false }
+
+    doLast {
+        val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+        // These configs have no DTD and should never fetch one.
+        factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+        val builder = factory.newDocumentBuilder()
+
+        val failures = mutableListOf<String>()
+        val configs = configDir.listFiles { file -> file.extension == "xml" }?.sorted().orEmpty()
+        require(configs.isNotEmpty()) { "no config files found in $configDir" }
+
+        configs.forEach { config ->
+            try {
+                builder.parse(config)
+            } catch (e: Exception) {
+                failures += "${config.name}: ${e.message}"
+            }
+        }
+
+        if (failures.isNotEmpty()) {
+            throw GradleException("malformed AMPS config:\n  " + failures.joinToString("\n  "))
+        }
+        logger.lifecycle("server: ${configs.size} config files are well-formed XML")
+    }
+}
+
+tasks.named("check") {
+    dependsOn(checkConfigXml)
+}

@@ -10,6 +10,7 @@ exist.
 | [amps-vs-kafka.md](src/amps-vs-kafka.md) | what actually differs, and when each is the right choice |
 | [sow-and-recovery.md](src/sow-and-recovery.md) | SOW, snapshots, query-and-subscribe, restart survival |
 | [transaction-log-sizing.md](src/transaction-log-sizing.md) | keeping the journal small; retention and expiry settings |
+| [high-volume-market-data.md](src/high-volume-market-data.md) | worked case: 500 GB/day of market data on a 100 GB disk |
 | [delta-updates.md](src/delta-updates.md) | delta publish/subscribe semantics and the traps |
 | [protobuf-json-and-amps.md](src/protobuf-json-and-amps.md) | why protobuf schema + JSON wire, and the rules it imposes |
 

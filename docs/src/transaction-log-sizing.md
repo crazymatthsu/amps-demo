@@ -216,6 +216,13 @@ and its bounded-retention sibling implement, and what
 
 ---
 
+## A worked case
+
+[high-volume-market-data.md](high-volume-market-data.md) applies all of this to a
+specific set of numbers — 500 GB/day of market data, 100 GB of disk, a 500 MB SOW
+snapshot — including the arithmetic for how much replay window a given journal cap
+actually buys, and why "compact the journal" is the wrong question.
+
 ## Diagnosing a journal that is too big
 
 1. `du -sh server/data/journal` — how big, in how many files.

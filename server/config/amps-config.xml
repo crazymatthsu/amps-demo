@@ -5,7 +5,7 @@
   The server process runs with its working directory set to /amps/data (see
   server/scripts/amps.sh), which the container engine bind-mounts from
   server/data on the host. Every relative path below therefore lands in a
-  directory you can inspect, delete and measure from outside the container --
+  directory you can inspect, delete and measure from outside the container -
   which is what makes the recovery and journal-size demos observable.
 
   Layout produced at runtime:
@@ -56,7 +56,7 @@
 
     <!--
       ===================================================================
-      SOW  -- State of the World
+      SOW  - State of the World
       ===================================================================
       A SOW topic is a keyed, last-value store maintained by the server as
       messages flow through it. Declaring a topic here is what turns a stream
@@ -108,7 +108,7 @@
                - Durability transient: the SOW lives in memory only. There is
                  nothing to recover on restart, which is correct for a cache and
                  costs nothing to rebuild.
-             This topic is also absent from <TransactionLog> below -- see the
+             This topic is also absent from <TransactionLog> below - see the
              comment there. -->
         <Topic>
             <Name>quote-cache</Name>
@@ -137,21 +137,22 @@
             <Durability>persistent</Durability>
         </Topic>
 
-        <!-- ---------------------------------------------------------------
+        <!-- ===============================================================
              Dynamic SOW topics (regex-matched).
 
              VERIFY THIS AGAINST YOUR AMPS VERSION before relying on it: the
-             exact spelling of a regex topic name has varied across releases,
-             and `ampServer --test-config` (see server/README.md) will tell you
-             in one second whether your build accepts this form. If it does,
+             exact spelling of a regex topic name has varied across releases.
+             The validate command in server/README.md runs the server's own
+             config parser and will tell you in one second whether your build
+             accepts this form. If it does,
              `desk.equities` and `desk.rates` each get their own SOW at first
-             use -- no config edit, no restart. %n in FileName is what keeps
+             use - no config edit, no restart. %n in FileName is what keeps
              their files apart.
 
              The `dynamic-topics` demo does not depend on this block: dynamic
              *pub/sub* topics need no configuration at all and are exercised
              separately.
-             --------------------------------------------------------------- -->
+             =============================================================== -->
         <Topic>
             <Name>^desk\.[A-Za-z0-9_-]+$</Name>
             <MessageType>json</MessageType>
@@ -176,7 +177,7 @@
 
         1. WHAT you log. The journal records messages, so a topic carrying large
            records that change often is expensive to log. Only topics that need
-           replay belong here -- note that `quote-cache` is deliberately absent.
+           replay belong here - note that `quote-cache` is deliberately absent.
            Its data is reconstructible and short-lived, so journalling it would
            buy nothing and cost the most.
 

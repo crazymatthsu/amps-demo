@@ -78,6 +78,7 @@ The combination imposes rules that are easy to get wrong and silent when you do 
 | [amps-vs-kafka.md](docs/src/amps-vs-kafka.md) | the comparison, including where Kafka wins |
 | [sow-and-recovery.md](docs/src/sow-and-recovery.md) | SOW, snapshots, restart survival |
 | [transaction-log-sizing.md](docs/src/transaction-log-sizing.md) | journal size and retention |
+| [high-volume-market-data.md](docs/src/high-volume-market-data.md) | worked case: 500 GB/day on a 100 GB disk |
 | [delta-updates.md](docs/src/delta-updates.md) | delta semantics and traps |
 | [protobuf-json-and-amps.md](docs/src/protobuf-json-and-amps.md) | schema and encoding design |
 

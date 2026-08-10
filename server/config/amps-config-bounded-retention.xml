@@ -9,9 +9,9 @@
   Run it with:
       AMPS_CONFIG=amps-config-bounded-retention.xml ./server/scripts/amps.sh start
 
-  ---------------------------------------------------------------------------
+  ===========================================================================
   READ THIS FIRST
-  ---------------------------------------------------------------------------
+  ===========================================================================
   The <Actions> block at the bottom uses AMPS action modules to age out journal
   files on a schedule. Module and option names in that block have changed across
   AMPS releases, and this file was written without a running server to check
@@ -21,12 +21,12 @@
 
   which runs the server's own config check inside the container. If your build
   rejects a module name, look it up under "Actions" in the AMPS User Guide for
-  your version -- the surrounding structure (<Actions><Action><On>/<Do>) is
+  your version - the surrounding structure (<Actions><Action><On>/<Do>) is
   stable, only the module identifiers move.
 
   Everything above the <Actions> block uses only elements this demo relies on
   elsewhere, so the instance still starts cleanly if you delete that block.
-  ---------------------------------------------------------------------------
+  ===========================================================================
 
   The three levers, in order of how much they save:
 
@@ -39,7 +39,7 @@
 
     3. Age out old journal files.
        The SOW already holds current state, so the journal only needs to cover
-       the replay window your slowest consumer can fall behind by -- plus a
+       the replay window your slowest consumer can fall behind by - plus a
        margin. Everything older is dead weight.
 
   Expiration on SOW topics bounds the *SOW*, which is a separate budget from the
@@ -158,7 +158,7 @@
 
          The pattern: on a schedule, delete journal files older than the replay
          window. Size the window off your worst-case consumer outage, not off
-         disk capacity -- a consumer that falls outside the window cannot resume
+         disk capacity - a consumer that falls outside the window cannot resume
          from its bookmark and must re-bootstrap from the SOW.
          ==================================================================== -->
     <Actions>
