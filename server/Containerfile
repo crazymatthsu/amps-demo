@@ -1,0 +1,54 @@
+# Build an AMPS image from an official release tarball.
+#
+# WHEN YOU NEED THIS
+# ------------------
+# `amps.sh start` defaults to the public docker.io/amps/ce:latest image, which is
+# the quickest way to get going but is an old build of AMPS Community Edition.
+# If you want to run the version that matches the 5.3.x Java client this repo
+# builds against -- or you are on a network that cannot reach Docker Hub -- build
+# your own image here instead.
+#
+# HOW
+# ---
+#   1. Download the Linux server tarball for your edition from 60East
+#      (https://www.crankuptheamps.com/). Community Edition is free; the file is
+#      named something like AMPS-5.3.5.3-Release-Linux.tar.gz.
+#   2. Drop it in server/vendor/.
+#   3. Build and use it:
+#
+#        podman build -f server/Containerfile -t amps-demo:5.3.5.3 \
+#            --build-arg AMPS_TARBALL=AMPS-5.3.5.3-Release-Linux.tar.gz server
+#
+#        AMPS_IMAGE=amps-demo:5.3.5.3 ./server/scripts/amps.sh start
+#
+# The tarball is not vendored into git: it is a third-party distribution with its
+# own licence terms, and it is large. server/vendor/.gitignore keeps it out.
+
+FROM docker.io/library/rockylinux:9
+
+ARG AMPS_TARBALL=AMPS-5.3.5.3-Release-Linux.tar.gz
+
+# AMPS ships as a self-contained tree; it needs little beyond libstdc++.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        libstdc++ \
+        libatomic \
+        ca-certificates \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+COPY vendor/${AMPS_TARBALL} /tmp/amps.tar.gz
+
+RUN mkdir -p /opt/amps \
+    && tar -xzf /tmp/amps.tar.gz -C /opt/amps --strip-components=1 \
+    && rm -f /tmp/amps.tar.gz \
+    && test -x /opt/amps/bin/ampServer
+
+# Matches the layout server/scripts/amps.sh bind-mounts.
+RUN mkdir -p /amps/config /amps/data/sow /amps/data/journal /amps/data/stats
+
+WORKDIR /amps/data
+
+EXPOSE 9007 9008 8085
+
+ENTRYPOINT ["/opt/amps/bin/ampServer"]
+CMD ["/amps/config/amps-config.xml"]

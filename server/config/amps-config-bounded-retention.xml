@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  MINIMUM-FOOTPRINT VARIANT
+  ============================================================================
+  Same topics as amps-config.xml, tuned for the question "how little state can
+  I keep and still restart without losing anything that matters?".
+
+  Run it with:
+      AMPS_CONFIG=amps-config-bounded-retention.xml ./server/scripts/amps.sh start
+
+  ---------------------------------------------------------------------------
+  READ THIS FIRST
+  ---------------------------------------------------------------------------
+  The <Actions> block at the bottom uses AMPS action modules to age out journal
+  files on a schedule. Module and option names in that block have changed across
+  AMPS releases, and this file was written without a running server to check
+  against. Validate before depending on it:
+
+      ./server/scripts/amps.sh validate amps-config-bounded-retention.xml
+
+  which runs the server's own config check inside the container. If your build
+  rejects a module name, look it up under "Actions" in the AMPS User Guide for
+  your version -- the surrounding structure (<Actions><Action><On>/<Do>) is
+  stable, only the module identifiers move.
+
+  Everything above the <Actions> block uses only elements this demo relies on
+  elsewhere, so the instance still starts cleanly if you delete that block.
+  ---------------------------------------------------------------------------
+
+  The three levers, in order of how much they save:
+
+    1. Do not journal what you do not need to replay.
+       Nothing shrinks a transaction log like not writing to it. `quote-cache`
+       is absent from <TransactionLog> entirely.
+
+    2. Publish deltas, not whole records.
+       The journal stores what was published. See docs/transaction-log-sizing.md.
+
+    3. Age out old journal files.
+       The SOW already holds current state, so the journal only needs to cover
+       the replay window your slowest consumer can fall behind by -- plus a
+       margin. Everything older is dead weight.
+
+  Expiration on SOW topics bounds the *SOW*, which is a separate budget from the
+  journal. Both are set aggressively here.
+-->
+<AMPSConfig>
+
+    <Name>amps-demo-bounded</Name>
+
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <SOW>
+        <!-- Persistent: this is the system of record and must survive restart. -->
+        <Topic>
+            <Name>orders</Name>
+            <MessageType>json</MessageType>
+            <Key>/orderId</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+            <!-- Terminal orders are not interesting forever. A TTL keeps the SOW
+                 proportional to the working set instead of to all history. -->
+            <Expiration>24h</Expiration>
+        </Topic>
+
+        <Topic>
+            <Name>instruments</Name>
+            <MessageType>json</MessageType>
+            <Key>/symbol</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- Transient + short TTL: nothing to persist, nothing to recover. -->
+        <Topic>
+            <Name>quote-cache</Name>
+            <MessageType>json</MessageType>
+            <Key>/symbol</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>transient</Durability>
+            <Expiration>30s</Expiration>
+        </Topic>
+
+        <Topic>
+            <Name>bench.full</Name>
+            <MessageType>json</MessageType>
+            <Key>/symbol</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>bench.delta</Name>
+            <MessageType>json</MessageType>
+            <Key>/symbol</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+    </SOW>
+
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <!-- Preallocate the minimum. Each preallocated file is disk you are
+             paying for before a single message arrives. -->
+        <PreallocatedJournalFiles>1</PreallocatedJournalFiles>
+        <MinJournalSize>4MB</MinJournalSize>
+
+        <!-- Only topics whose loss would be unrecoverable. -->
+        <Topic>
+            <Name>orders</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>instruments</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>bench.full</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>bench.delta</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+    </TransactionLog>
+
+    <!-- ====================================================================
+         VERIFY BEFORE USE (see the header). Delete this block and the instance
+         still starts; you just lose automatic journal ageing.
+
+         The pattern: on a schedule, delete journal files older than the replay
+         window. Size the window off your worst-case consumer outage, not off
+         disk capacity -- a consumer that falls outside the window cannot resume
+         from its bookmark and must re-bootstrap from the SOW.
+         ==================================================================== -->
+    <Actions>
+        <Action>
+            <On>
+                <Module>amps-action-on-schedule</Module>
+                <Options>
+                    <Every>1h</Every>
+                </Options>
+            </On>
+            <Do>
+                <Module>amps-action-do-delete-old-journal-files</Module>
+                <Options>
+                    <!-- Keep one day of replay. Anything older is served from
+                         the SOW instead. -->
+                    <Age>1d</Age>
+                </Options>
+            </Do>
+        </Action>
+    </Actions>
+
+</AMPSConfig>

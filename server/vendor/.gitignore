@@ -1,0 +1,4 @@
+# The AMPS distribution tarball is third-party and large; keep it out of git.
+*.tar.gz
+*.tgz
+!.gitignore

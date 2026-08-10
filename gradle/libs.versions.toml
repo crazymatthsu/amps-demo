@@ -1,0 +1,21 @@
+[versions]
+# AMPS Java client, published to Maven Central by 60East Technologies.
+amps = "5.3.5.3"
+protobuf = "4.35.1"
+protobufPlugin = "0.9.5"
+slf4j = "2.0.17"
+junit = "5.13.4"
+
+[libraries]
+amps-client = { module = "com.crankuptheamps:amps-client", version.ref = "amps" }
+protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "protobuf" }
+protobuf-java-util = { module = "com.google.protobuf:protobuf-java-util", version.ref = "protobuf" }
+protoc = { module = "com.google.protobuf:protoc", version.ref = "protobuf" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+
+[plugins]
+protobuf = { id = "com.google.protobuf", version.ref = "protobufPlugin" }

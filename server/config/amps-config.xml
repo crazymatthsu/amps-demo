@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AMPS instance for the 60East demo.
+
+  The server process runs with its working directory set to /amps/data (see
+  server/scripts/amps.sh), which the container engine bind-mounts from
+  server/data on the host. Every relative path below therefore lands in a
+  directory you can inspect, delete and measure from outside the container --
+  which is what makes the recovery and journal-size demos observable.
+
+  Layout produced at runtime:
+     /amps/data/sow/      SOW files, one per topic (%n expands to the topic name)
+     /amps/data/journal/  transaction log
+     /amps/data/stats/    admin statistics database
+-->
+<AMPSConfig>
+
+    <Name>amps-demo</Name>
+
+    <!-- Admin/monitoring HTTP interface. Browse http://localhost:8085/ for live
+         instance, topic, subscription and queue statistics. -->
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <!-- One transport serves every message type. Clients choose the message
+             type in the URI path: tcp://host:9007/amps/json. Nothing here is
+             JSON-specific; the demos simply never use another type. -->
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+
+        <!-- Same instance over WebSocket, for browser clients and the admin UI. -->
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <!--
+      ===================================================================
+      SOW  -- State of the World
+      ===================================================================
+      A SOW topic is a keyed, last-value store maintained by the server as
+      messages flow through it. Declaring a topic here is what turns a stream
+      into a queryable table, and it is the single biggest conceptual break
+      from Kafka: there is no separate store to keep in sync, no compacted
+      topic to wait on, and no consumer-side materialisation.
+
+      Declaring a SOW enables, for that topic:
+        - sow                    point-in-time snapshot query
+        - sow_and_subscribe      atomic snapshot + live stream, no gap, no dupes
+        - delta_publish          server-side field merge into the stored record
+        - sow_and_delta_subscribe deliver only what changed
+        - OOF                    "this record no longer matches your filter"
+        - expiration             per-record TTL
+
+      Topics NOT listed here still work: they are dynamic pub/sub topics,
+      created on first publish, with no state kept. See Topics.java.
+    -->
+    <SOW>
+
+        <!-- The order book. Keyed on the JSON member `orderId`, which is what
+             protobuf's canonical JSON produces for the proto field `order_id`.
+             Change one without the other and every record lands under an empty
+             key. -->
+        <Topic>
+            <Name>orders</Name>
+            <MessageType>json</MessageType>
+            <Key>/orderId</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- Instrument snapshots: ~1.5 KB records whose volatile part is ~70 B.
+             The delta demos and the journal-size lab both target this shape. -->
+        <Topic>
+            <Name>instruments</Name>
+            <MessageType>json</MessageType>
+            <Key>/symbol</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- A volatile cache with a time-to-live.
+
+             Two deliberate choices, both about keeping persistent state small:
+               - Expiration: records evaporate 60s after publication, so the SOW
+                 file stays bounded by the live symbol set rather than growing
+                 forever.
+               - Durability transient: the SOW lives in memory only. There is
+                 nothing to recover on restart, which is correct for a cache and
+                 costs nothing to rebuild.
+             This topic is also absent from <TransactionLog> below -- see the
+             comment there. -->
+        <Topic>
+            <Name>quote-cache</Name>
+            <MessageType>json</MessageType>
+            <Key>/symbol</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>transient</Durability>
+            <Expiration>60s</Expiration>
+        </Topic>
+
+        <!-- Journal-size laboratory. Two identically-shaped SOW topics: the lab
+             publishes whole records to one and deltas to the other, then
+             measures what each cost in ./journal. -->
+        <Topic>
+            <Name>bench.full</Name>
+            <MessageType>json</MessageType>
+            <Key>/symbol</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>bench.delta</Name>
+            <MessageType>json</MessageType>
+            <Key>/symbol</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- ---------------------------------------------------------------
+             Dynamic SOW topics (regex-matched).
+
+             VERIFY THIS AGAINST YOUR AMPS VERSION before relying on it: the
+             exact spelling of a regex topic name has varied across releases,
+             and `ampServer --test-config` (see server/README.md) will tell you
+             in one second whether your build accepts this form. If it does,
+             `desk.equities` and `desk.rates` each get their own SOW at first
+             use -- no config edit, no restart. %n in FileName is what keeps
+             their files apart.
+
+             The `dynamic-topics` demo does not depend on this block: dynamic
+             *pub/sub* topics need no configuration at all and are exercised
+             separately.
+             --------------------------------------------------------------- -->
+        <Topic>
+            <Name>^desk\.[A-Za-z0-9_-]+$</Name>
+            <MessageType>json</MessageType>
+            <Key>/orderId</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+    </SOW>
+
+    <!--
+      ===================================================================
+      TransactionLog
+      ===================================================================
+      The journal is an ordered, durable record of every message published to
+      the listed topics. It is what backs bookmark subscriptions ("replay me
+      everything since bookmark X"), publisher deduplication, and recovery of
+      the SOW after an unclean shutdown.
+
+      Two things about this section drive persistent-storage cost, and both are
+      demonstrated by `journal-lab`:
+
+        1. WHAT you log. The journal records messages, so a topic carrying large
+           records that change often is expensive to log. Only topics that need
+           replay belong here -- note that `quote-cache` is deliberately absent.
+           Its data is reconstructible and short-lived, so journalling it would
+           buy nothing and cost the most.
+
+        2. HOW BIG each message is. A delta_publish journals only the changed
+           fields. For the instrument shape in this demo that is the difference
+           between ~1.5 KB and ~70 B per update: roughly a 20x smaller journal
+           for the same number of updates.
+
+      MinJournalSize is set small here so journal files roll over during a short
+      demo and the growth is visible in `ls`. Production instances use much
+      larger files (hundreds of MB) to reduce rollover overhead.
+
+      For bounding total journal size over time, see
+      server/config/amps-config-bounded-retention.xml and
+      docs/transaction-log-sizing.md.
+    -->
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
+        <MinJournalSize>4MB</MinJournalSize>
+
+        <Topic>
+            <Name>orders</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>instruments</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>bench.full</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>bench.delta</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+    </TransactionLog>
+
+</AMPSConfig>

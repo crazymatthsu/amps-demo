@@ -1,0 +1,18 @@
+# docs
+
+Prose, kept in the build so it cannot rot silently: `./gradlew :docs:check` fails
+if a required document is missing or a relative link points at a file that does not
+exist.
+
+| document | read it for |
+| --- | --- |
+| [runbook.md](src/runbook.md) | how to run everything, and what to do when it breaks |
+| [amps-vs-kafka.md](src/amps-vs-kafka.md) | what actually differs, and when each is the right choice |
+| [sow-and-recovery.md](src/sow-and-recovery.md) | SOW, snapshots, query-and-subscribe, restart survival |
+| [transaction-log-sizing.md](src/transaction-log-sizing.md) | keeping the journal small; retention and expiry settings |
+| [delta-updates.md](src/delta-updates.md) | delta publish/subscribe semantics and the traps |
+| [protobuf-json-and-amps.md](src/protobuf-json-and-amps.md) | why protobuf schema + JSON wire, and the rules it imposes |
+
+Suggested order for someone new to AMPS: **runbook** to get an instance up, then
+**amps-vs-kafka** for the mental model, then **sow-and-recovery**. The other three
+are reference material for when you hit the relevant problem.
