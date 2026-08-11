@@ -152,16 +152,17 @@ everywhere, including recovery time.
 Per-message TTL overrides the topic default:
 
 ```java
-client.executeAsync(new Command("publish")
-        .setTopic("quote-cache")
-        .setData(json)
-        .setExpiration(30), message -> { });
+client.publish("quote-cache", json, 30);   // this record lives 30 seconds
 ```
 
 Expiring records generate OOF messages with reason `expired`, so subscribers drop
 them from their views rather than displaying rows that no longer exist. The
 [`expiration`](../../clients/src/main/java/com/demo/amps/clients/demos/ExpirationDemo.java)
-demo shows this happening live.
+demo shows this happening live, and
+[sow-and-recovery.md](sow-and-recovery.md#how-expiration-works) explains the
+mechanism — including the one thing to check on your build, which is whether an
+expiry is itself journalled. If it is, a short TTL over a large key space adds
+journal traffic rather than removing it.
 
 ---
 

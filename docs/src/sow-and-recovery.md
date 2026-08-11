@@ -222,6 +222,106 @@ demo runs all three and reports what each cost.
    removal is event-driven — an order is cancelled, a session ends — and for
    expiry when it is time-driven.
 
+## How expiration works
+
+Expiration is a **time-to-live on SOW records**. It is a property of the stored
+record, not of the message that created it and not of anything in the transaction
+log. When the TTL elapses, AMPS removes the record from the SOW the same way a
+`sow_delete` would, and tells subscribers.
+
+### Turning it on
+
+It has to be enabled on the topic. A topic with no `<Expiration>` ignores
+expiration entirely, including any TTL a publisher sets on an individual message —
+this is the most common reason "expiration doesn't work".
+
+```xml
+<Topic>
+  <Name>quote-cache</Name>
+  <MessageType>json</MessageType>
+  <Key>/symbol</Key>
+  <Expiration>60s</Expiration>   <!-- default TTL for every record here -->
+</Topic>
+```
+
+The topic value is a **default**, not a ceiling. A publisher can set its own TTL in
+seconds per message, which overrides it:
+
+```java
+client.publish("quote-cache", json, 30);        // this record lives 30s
+client.deltaPublish("quote-cache", delta, 30);  // deltas can carry one too
+
+// or, on a Command, where it is a first-class field
+new Command("publish").setTopic("quote-cache").setData(json).setExpiration(30);
+```
+
+Some AMPS versions also accept `<Expiration>enabled</Expiration>` to permit
+per-message TTLs with no topic-wide default. Check yours with
+`./server/scripts/amps.sh validate` before relying on that form.
+
+### What happens when it fires
+
+1. The record is removed from the SOW. Queries stop returning it; a
+   `sow_and_subscribe` starting afterwards never sees it.
+2. Subscribers who asked for `Options.OOF` receive an OOF message with reason
+   **`expired`** (`Message.Reason.Expired`), carrying the SOW key. This is the
+   difference between a view that drops the row and one that displays a quote
+   that AMPS no longer believes in.
+3. Subscribers who did *not* ask for OOF are told nothing, and will keep whatever
+   they last received. Expiration without OOF is a server-side saving only.
+
+```java
+new Command("sow_and_subscribe")
+        .setTopic("quote-cache")
+        .setOptions(Message.Options.OOF + Message.Options.SendKeys);
+// then, in the handler:
+if (message.getCommand() == Message.Command.OOF
+        && message.getReason() == Message.Reason.Expired) { /* drop the row */ }
+```
+
+The [`expiration`](../../clients/src/main/java/com/demo/amps/clients/demos/ExpirationDemo.java)
+demo publishes with a short TTL, polls the record count as it elapses, and prints
+the OOF notifications as they arrive.
+
+### The clock
+
+The TTL runs from when the record was written, and **every publish for that key
+writes the record again** — so an updated record gets a fresh lifetime. That is
+what makes expiration a good fit for "drop keys that have gone quiet": an
+instrument still ticking never expires, one that stopped ticking an hour ago does.
+
+It is not a precise timer. Expect a record to disappear promptly after its TTL,
+not to the millisecond, and do not build logic that depends on the exact instant.
+Two behaviours to confirm on your build rather than assume, because both are
+version-specific and neither is documented here from observation:
+
+- whether an expiry is written to the **transaction log** as a delete. If it is, a
+  short TTL over a large key space generates journal traffic of its own — which
+  matters if you came here from
+  [transaction-log-sizing.md](transaction-log-sizing.md);
+- what happens to records whose TTL elapsed **while the instance was down**. The
+  expected behaviour is that they are gone after recovery, but confirm it if
+  restart semantics matter to you.
+
+### What it does and does not bound
+
+| | effect |
+| --- | --- |
+| SOW record count | **bounded** — this is the point |
+| SOW memory | **bounded**, proportional to live keys |
+| SOW file size on disk | not reclaimed; freed space is reused inside the file |
+| transaction log | **not bounded** — a different budget entirely |
+
+Expiration keeps the *working set* proportional to what is actually live. It is
+the cheapest such control because nothing has to run: no scheduled job, no bulk
+delete, no client involvement.
+
+### Not the same as a queue lease
+
+`Message.getLeasePeriod()` in the client is queue machinery — how long a consumer
+holds a message before it returns to the queue. It has nothing to do with SOW
+expiration despite sounding similar.
+
 ## Practical notes
 
 - **Recovery is not a rebuild.** If you find yourself replaying the whole journal
