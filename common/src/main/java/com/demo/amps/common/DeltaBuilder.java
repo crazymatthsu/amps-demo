@@ -15,8 +15,8 @@ import java.util.Set;
  * <p>AMPS merges a delta into the stored SOW record field by field on the server,
  * so only the changed fields ever cross the network and only the changed fields
  * are written to the transaction log. For the instrument snapshots in this demo
- * that is the difference between re-sending ~1.5 KB of static reference data on
- * every tick and sending ~70 bytes.
+ * that is the difference between re-sending a ~1.3 KB record on every tick and
+ * sending ~134 bytes, measured by the journal-lab demo.
  *
  * <p>Three semantics are worth knowing before relying on this:
  *

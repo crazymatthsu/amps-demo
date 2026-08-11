@@ -72,8 +72,8 @@ everything — list topics explicitly and the cost stays visible.
 
 ## Lever 2 — publish deltas
 
-The journal records **what was published**. Publish 1.5 KB, journal 1.5 KB.
-Publish a 70-byte delta, journal 70 bytes, and the SOW still ends up holding the
+The journal records **what was published**. Publish 1.3 KB, journal 1.3 KB.
+Publish a 134-byte delta, journal 134 bytes, and the SOW still ends up holding the
 same complete record because AMPS merges server-side.
 
 ```java
@@ -81,7 +81,7 @@ DeltaBuilder.Delta delta = DeltaBuilder.between(previous, next, List.of("symbol"
 client.deltaPublish("instruments", delta.json());
 ```
 
-For the instrument shape in this repo that is roughly a **20x smaller journal for
+For the instrument shape in this repo that is roughly a **10x smaller journal for
 the same updates**, and the same reduction in network bytes on the way in.
 [`delta-updates.md`](delta-updates.md) covers the semantics and the two traps
 (arrays are replaced, not merged; a cleared field needs a full publish).

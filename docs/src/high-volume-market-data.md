@@ -175,7 +175,7 @@ Orthogonal to retention, and it multiplies whatever window you choose.
 few fields — a quote inside a record carrying instrument reference data, say —
 publishing deltas cuts journal bytes by the same ratio it cuts message size. The
 [`journal-lab`](../../clients/src/main/java/com/demo/amps/clients/demos/JournalLabDemo.java)
-demo measures roughly 20x for that record shape. At a 10x reduction:
+demo measures roughly 10x for that record shape. At a 10x reduction:
 
 | journal cap | window before | window after |
 | --- | --- | --- |

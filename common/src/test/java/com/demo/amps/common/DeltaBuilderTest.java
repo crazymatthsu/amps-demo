@@ -49,6 +49,57 @@ class DeltaBuilderTest {
     }
 
     @Test
+    @DisplayName("record and delta sizes stay in the range the documentation quotes")
+    void documentedSizesStillHold() {
+        // docs/src/delta-updates.md quotes concrete byte counts and ratios, and
+        // readers size journals off them. Widening the fixture or adding a field
+        // to the proto changes those numbers; this test makes that visible here
+        // rather than leaving the prose quietly wrong.
+        //
+        // The timestamp is set explicitly rather than left to the wall clock:
+        // Fixtures.instrument and Fixtures.tick usually land in the same
+        // millisecond under test, so updatedAtEpochSeconds would not change and
+        // would drop out of the delta, making the measurement 40 bytes lighter
+        // than production and non-deterministic between runs.
+        InstrumentSnapshot before = Fixtures.instrument("AAPL");
+        InstrumentSnapshot dataChangeOnly = Fixtures.tick(before, new Random(42)).toBuilder()
+                .setUpdatedAtEpochSeconds(before.getUpdatedAtEpochSeconds())
+                .build();
+        InstrumentSnapshot withNewTimestamp = dataChangeOnly.toBuilder()
+                .setUpdatedAtEpochSeconds(1.786407452235E9)
+                .build();
+
+        int fullBytes = JsonCodec.byteSize(JsonCodec.toJson(withNewTimestamp));
+        int referenceBytes = JsonCodec.byteSize(JsonCodec.toJson(before.getReference()));
+        int dataDelta = JsonCodec.byteSize(
+                DeltaBuilder.between(before, dataChangeOnly, SYMBOL_KEY).json());
+        int timestampedDelta = JsonCodec.byteSize(
+                DeltaBuilder.between(before, withNewTimestamp, SYMBOL_KEY).json());
+
+        assertTrue(fullBytes > 1250 && fullBytes < 1400,
+                "documented as ~1,328 B, measured " + fullBytes + " B");
+        assertTrue(referenceBytes * 2 > fullBytes,
+                "the static block is documented as the majority of the record: "
+                        + referenceBytes + " B of " + fullBytes + " B");
+        assertTrue(dataDelta > 85 && dataDelta < 105,
+                "documented as ~93 B for the data change, measured " + dataDelta + " B");
+        assertTrue(timestampedDelta > 125 && timestampedDelta < 145,
+                "documented as ~134 B once the timestamp moves, measured "
+                        + timestampedDelta + " B");
+
+        // The doc claims a full-precision double timestamp is roughly a third of
+        // the delta. That is the concrete reason to think about which fields you
+        // touch on every update.
+        int timestampCost = timestampedDelta - dataDelta;
+        assertTrue(timestampCost > 30 && timestampCost < 50,
+                "documented as ~41 B of timestamp, measured " + timestampCost + " B");
+
+        double ratio = (double) fullBytes / timestampedDelta;
+        assertTrue(ratio > 9.0 && ratio < 11.5,
+                "documented as roughly 10x, measured " + String.format("%.1fx", ratio));
+    }
+
+    @Test
     @DisplayName("nested messages merge field by field")
     void nestedMessagesMergeRecursively() {
         InstrumentSnapshot before = Fixtures.instrument("GOOG");

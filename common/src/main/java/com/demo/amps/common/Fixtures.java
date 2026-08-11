@@ -79,8 +79,8 @@ public final class Fixtures {
 
     /**
      * A full instrument snapshot: a large, static {@link ReferenceData} block plus
-     * a small, volatile {@link Quote}. Roughly 1.5 KB of JSON, of which fewer than
-     * 100 bytes change per tick.
+     * a small, volatile {@link Quote}. Roughly 1.3 KB of JSON, of which about
+     * 130 bytes change per tick.
      */
     public static InstrumentSnapshot instrument(String symbol) {
         Random random = new Random(symbol.hashCode());

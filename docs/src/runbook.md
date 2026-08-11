@@ -36,7 +36,7 @@ undeclared topic, what declaring a SOW adds, what adding a transaction log adds.
 | `sow-query` | filtered, ordered, top-N snapshot queries evaluated server-side | `sow-load` |
 | `sow-query-by-key` | business key vs SOW key; query-and-subscribe on one record | `sow-load` |
 | `sow-and-subscribe` | atomic snapshot + live, and OOF when a record leaves the filter | `sow-load` |
-| `delta-publish` | update a 1.5 KB record with a 90 B message; verify the merge | — |
+| `delta-publish` | update a 1.3 KB record with a 134 B message; verify the merge | — |
 | `delta-subscribe` | receive the snapshot once, then only changes | — |
 | `bookmark-replay` | replay from epoch, from a bookmark, and resume where you left off | — |
 | `expiration` | TTL on SOW records, with expiry notifications | — |

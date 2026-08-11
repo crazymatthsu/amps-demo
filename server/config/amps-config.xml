@@ -89,7 +89,7 @@
             <Durability>persistent</Durability>
         </Topic>
 
-        <!-- Instrument snapshots: ~1.5 KB records whose volatile part is ~70 B.
+        <!-- Instrument snapshots: ~1.3 KB records whose volatile part is ~134 B.
              The delta demos and the journal-size lab both target this shape. -->
         <Topic>
             <Name>instruments</Name>
@@ -183,7 +183,7 @@
 
         2. HOW BIG each message is. A delta_publish journals only the changed
            fields. For the instrument shape in this demo that is the difference
-           between ~1.5 KB and ~70 B per update: roughly a 20x smaller journal
+           between ~1.3 KB and ~134 B per update: roughly a 10x smaller journal
            for the same number of updates.
 
       MinJournalSize is set small here so journal files roll over during a short

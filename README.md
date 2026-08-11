@@ -35,7 +35,7 @@ amps-demo/
 | **SOW topics** | `sow-load`, `sow-query` | the broker keeps last-value-per-key, so "what is true now?" is a query, not a rebuild |
 | **Snapshot** | `sow-and-subscribe` | current state plus live updates in one atomic command, with OOF when a record leaves your filter |
 | **Query by key** | `sow-query-by-key` | business key vs server-assigned SOW key, and following one record live |
-| **Delta updates** | `delta-publish`, `delta-subscribe` | update a 1.5 KB record with a 90 B message; receive only what changed |
+| **Delta updates** | `delta-publish`, `delta-subscribe` | update a 1.3 KB record with a 134 B message; receive only what changed |
 | **Transaction log** | `bookmark-replay` | replay from the epoch, from a bookmark, or resume exactly where you stopped |
 | **Recovery** | `recovery` | SOW returns current state instantly; the journal returns history on request |
 | **Expiration** | `expiration` | TTL on SOW records, with expiry notifications to subscribers |
