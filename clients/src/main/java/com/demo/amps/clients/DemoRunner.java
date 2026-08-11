@@ -12,6 +12,7 @@ import com.demo.amps.clients.demos.SowAndSubscribeDemo;
 import com.demo.amps.clients.demos.SowLoadDemo;
 import com.demo.amps.clients.demos.SowQueryByKeyDemo;
 import com.demo.amps.clients.demos.SowQueryDemo;
+import com.demo.amps.clients.demos.TruncateDemo;
 import com.demo.amps.common.Console;
 import com.demo.amps.common.DemoConfig;
 import java.util.LinkedHashMap;
@@ -54,6 +55,7 @@ public final class DemoRunner {
         register(new BookmarkReplayDemo());
         register(new RecoveryDemo());
         register(new ExpirationDemo());
+        register(new TruncateDemo());
         register(new JournalLabDemo());
     }
 

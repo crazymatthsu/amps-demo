@@ -39,6 +39,7 @@ amps-demo/
 | **Transaction log** | `bookmark-replay` | replay from the epoch, from a bookmark, or resume exactly where you stopped |
 | **Recovery** | `recovery` | SOW returns current state instantly; the journal returns history on request |
 | **Expiration** | `expiration` | TTL on SOW records, with expiry notifications to subscribers |
+| **Truncation** | `truncate` | `sow_delete` by filter or by key; why it grows the journal rather than shrinking it |
 | **Journal sizing** | `journal-lab` | measures full-publish vs delta cost in the transaction log, on disk |
 
 `./gradlew :clients:run --args="list"` for the catalogue.

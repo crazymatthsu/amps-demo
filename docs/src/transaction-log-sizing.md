@@ -216,6 +216,65 @@ and its bounded-retention sibling implement, and what
 
 ---
 
+## Can I just set a maximum transaction log size?
+
+Not as a single number, and the distinction matters.
+
+There is no `MaxTransactionLogSize` that AMPS enforces by refusing writes or
+overwriting old entries. What exists is a set of controls whose *product* is the
+cap you get:
+
+| setting | what it actually controls |
+| --- | --- |
+| `<MinJournalSize>` | the size of **each** journal file — not a total |
+| `<PreallocatedJournalFiles>` | how many files exist before any message arrives |
+| journal ageing action | which old files get **deleted**, on a schedule |
+
+So the effective ceiling is:
+
+```
+max journal bytes  ~=  MinJournalSize  x  (files retained by the ageing policy + preallocated)
+```
+
+You bound the journal by **deleting old files**, not by capping a counter. Three
+consequences worth internalising:
+
+1. **It is a lagging control.** Files are removed on a schedule, so usage
+   oscillates: it climbs until the next run, then drops. Size the check interval
+   so the overshoot between runs is acceptable — at 356 MB/min, an hourly check
+   can add 21 GB before it fires.
+
+2. **Granularity is one file.** With 1 GB files and a 10 GB target, real usage
+   swings between roughly 9 and 10 GB. Smaller files track the target more
+   tightly and roll over more often.
+
+3. **Nothing stops the disk filling.** If the ingest rate outruns the ageing
+   policy, AMPS keeps writing until the filesystem says no, and an instance that
+   cannot write its journal is in trouble. Leave real headroom and alert on free
+   disk, not only on journal bytes.
+
+If your version's ageing action accepts a **size or total-bytes** option as well
+as an age, prefer it: it targets the thing you actually care about and does not
+need re-tuning when volumes change. An age-based policy is a proxy that assumes a
+stable message rate, which market data is not. Check with:
+
+```bash
+./server/scripts/amps.sh validate amps-config-bounded-retention.xml
+```
+
+### What will not bound it
+
+- **`sow_delete`** removes SOW records and is journalled as a write. It makes the
+  transaction log bigger. See
+  [sow-and-recovery.md](sow-and-recovery.md#truncating-a-topic).
+- **`<Expiration>`** bounds the SOW, not the journal.
+- **Deleting journal files with `rm`** is not a supported control. AMPS tracks
+  which files back which bookmark ranges; removing them underneath it risks failed
+  replays and a SOW it cannot reconcile after an unclean shutdown.
+
+The one control that reliably bounds the journal to zero is not putting the topic
+in `<TransactionLog>` at all.
+
 ## A worked case
 
 [high-volume-market-data.md](high-volume-market-data.md) applies all of this to a

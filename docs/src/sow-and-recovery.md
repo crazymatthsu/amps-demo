@@ -171,6 +171,57 @@ The client name is the identity both stores key on, so it must be stable across
 runs. A random or hostname-derived name resumes nothing — a mistake that only
 shows up the first time something restarts in production.
 
+## Truncating a topic
+
+Yes, a client can delete a topic's data at runtime. `sow_delete` is the command,
+and it comes in three forms:
+
+```java
+// by content filter -- the synchronous form returns the server's own count
+Message ack = client.sowDelete("orders", "/status = 'ORDER_STATUS_CANCELLED'", timeout);
+ack.getRecordsDeleted();
+
+// by server-assigned SOW key, for deleting exactly the rows you already have
+client.sowDeleteByKeys(handler, "orders", "1234567890,1234567891", timeout);
+
+// by matching data
+client.sowDeleteByData(handler, "orders", json, timeout);
+```
+
+To purge a whole topic, use a filter that matches everything:
+
+```java
+client.sowDelete("orders", "1=1", timeout);
+```
+
+(If your version rejects the constant form, any always-true predicate over a field
+the records carry does the same job, e.g. `/orderId != ''`.)
+
+The [`truncate`](../../clients/src/main/java/com/demo/amps/clients/demos/TruncateDemo.java)
+demo runs all three and reports what each cost.
+
+### Four things to know before using it
+
+1. **It is durable and global.** The records are gone for every client, not hidden
+   from one view. Subscribers with `Options.OOF` receive an OOF with reason
+   `deleted` for each one, so live views correct themselves.
+
+2. **It does not shrink the transaction log — it grows it.** A delete is a write
+   like any other and is journalled as one. Purging a large SOW is one of the
+   faster ways to *add* to your journal. If your goal was disk, this is the wrong
+   tool; see [transaction-log-sizing.md](transaction-log-sizing.md).
+
+3. **It does not return SOW disk to the filesystem.** The freed space is reused
+   for new records inside the existing file rather than shrinking it. Deleting
+   reduces what queries return and what the SOW needs in memory. The only way to
+   actually reclaim the file is to stop the instance and remove it — which
+   discards the topic's state entirely.
+
+4. **`<Expiration>` is usually better.** A TTL removes records with nothing to
+   run, no command to schedule and no bulk write. Reach for `sow_delete` when the
+   removal is event-driven — an order is cancelled, a session ends — and for
+   expiry when it is time-driven.
+
 ## Practical notes
 
 - **Recovery is not a rebuild.** If you find yourself replaying the whole journal

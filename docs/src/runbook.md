@@ -40,6 +40,7 @@ undeclared topic, what declaring a SOW adds, what adding a transaction log adds.
 | `delta-subscribe` | receive the snapshot once, then only changes | — |
 | `bookmark-replay` | replay from epoch, from a bookmark, and resume where you left off | — |
 | `expiration` | TTL on SOW records, with expiry notifications | — |
+| `truncate` | delete SOW records with `sow_delete`, by filter and by key | — |
 | `recovery` | SOW and journal surviving a restart | a restart between phases |
 | `journal-lab` | transaction-log growth: whole records vs deltas | a few minutes |
 
