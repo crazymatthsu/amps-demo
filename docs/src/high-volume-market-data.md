@@ -101,6 +101,14 @@ Journalling only the second population typically removes 95%+ of the volume whil
 keeping every guarantee anyone actually asked for. If you take one thing from this
 document, take this one.
 
+**One caveat on the un-journalled topic.** A persistent SOW survives a restart on
+its own — that is not in question. But the transaction log is also what AMPS
+reconciles the SOW against after an *unclean* shutdown, so without one the
+guarantee after a power loss is "whatever had been flushed". For quotes that is
+irrelevant: the feed republishes and you are current within seconds. It is
+precisely the argument for keeping `trades` journalled. See
+[sow-and-recovery.md](sow-and-recovery.md#the-caveat-crash-consistency).
+
 ## Option B — keep a bounded replay window
 
 If some consumer genuinely needs to resume from a bookmark, keep the topic
