@@ -5,13 +5,16 @@ import com.demo.amps.clients.demos.DeltaPublishDemo;
 import com.demo.amps.clients.demos.DeltaSubscribeDemo;
 import com.demo.amps.clients.demos.DynamicTopicsDemo;
 import com.demo.amps.clients.demos.ExpirationDemo;
+import com.demo.amps.clients.demos.FixLifecycleDemo;
 import com.demo.amps.clients.demos.JournalLabDemo;
+import com.demo.amps.clients.demos.NativeFixDemo;
 import com.demo.amps.clients.demos.PubSubDemo;
 import com.demo.amps.clients.demos.RecoveryDemo;
 import com.demo.amps.clients.demos.SowAndSubscribeDemo;
 import com.demo.amps.clients.demos.SowLoadDemo;
 import com.demo.amps.clients.demos.SowQueryByKeyDemo;
 import com.demo.amps.clients.demos.SowQueryDemo;
+import com.demo.amps.clients.demos.TruncateDemo;
 import com.demo.amps.common.Console;
 import com.demo.amps.common.DemoConfig;
 import java.util.LinkedHashMap;
@@ -54,6 +57,10 @@ public final class DemoRunner {
         register(new BookmarkReplayDemo());
         register(new RecoveryDemo());
         register(new ExpirationDemo());
+        register(new TruncateDemo());
+        register(new FixLifecycleDemo());
+        register(new NativeFixDemo(NativeFixDemo.Encoding.FIX));
+        register(new NativeFixDemo(NativeFixDemo.Encoding.NVFIX));
         register(new JournalLabDemo());
     }
 

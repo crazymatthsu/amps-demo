@@ -38,6 +38,77 @@ Declaring the SOW unlocks, for that topic:
 A topic **not** in `<SOW>` still works. It is a dynamic pub/sub topic: no state, no
 query, no delta. That is the baseline the `pubsub` demo establishes.
 
+## Does a SOW without a transaction log still persist?
+
+Yes. Whether a SOW lives on disk is controlled by **`<Durability>`**, not by
+whether the topic appears in `<TransactionLog>`. They are independent axes, and
+conflating them is the most consequential misunderstanding in this whole document
+— it is what makes people journal topics they did not need to.
+
+| | **journalled** | **not journalled** |
+| --- | --- | --- |
+| **`persistent`** | current state on disk **and** replayable history | current state on disk, no history — *this is the cheap one* |
+| **`transient`** | no state after restart, but history replayable | nothing survives; pure in-memory cache |
+
+Set it explicitly rather than relying on a default:
+
+```xml
+<Topic>
+  <Name>market-data</Name>
+  <Key>/symbol</Key>
+  <FileName>./sow/%n.sow</FileName>
+  <Durability>persistent</Durability>   <!-- a real file, survives restart -->
+</Topic>
+<!-- and no entry in <TransactionLog> at all -->
+```
+
+That combination — persistent SOW, no journal — is the one recommended for
+high-volume market data in
+[high-volume-market-data.md](high-volume-market-data.md). Current state survives a
+restart, is queryable the moment the instance is listening, and costs one record
+per key on disk. What you give up is history: nobody can resume from a bookmark,
+and reconnecting clients call `sow_and_subscribe` instead.
+
+A `transient` SOW is memory-only. It is queryable and supports delta publishing and
+OOF exactly like a persistent one while the instance is up, but writes nothing to
+disk and comes back empty. That is the right choice for anything cheap to rebuild —
+`quote-cache` in the demo config is transient with a 60-second TTL and no journal
+entry, so it costs nothing across a restart by all three mechanisms at once.
+
+### The caveat: crash consistency
+
+One thing the transaction log does contribute to a *persistent* SOW is recovery
+after an **unclean** shutdown. With a journal, AMPS can reconcile the SOW against
+it on the way back up, replaying anything that was journalled but had not yet
+landed in the SOW file. Without a journal there is no second source to reconcile
+against, so the guarantee is weaker: the SOW is what it managed to flush.
+
+How much that matters depends on the failure and on the data:
+
+- **Clean shutdown** (`amps.sh stop`, SIGTERM): no difference. The SOW is written
+  out and comes back complete either way.
+- **Process killed** (`kill -9`): usually fine — the operating system still owns
+  any pages the server had written and flushes them.
+- **Machine or power loss:** unflushed writes are gone, and without a journal they
+  cannot be recovered.
+
+For market data that is a non-issue — the feed republishes and you are current
+within seconds. For orders, trades or positions it is exactly the argument for
+journalling the topic despite the cost. Confirm the flush behaviour of your AMPS
+version before betting a system of record on a persistent SOW with no transaction
+log.
+
+### What it costs on disk
+
+The SOW file is sized by **key count × record size**, plus AMPS's own overhead —
+not by update rate. One million instruments at 1.3 KB is on the order of a
+gigabyte whether each key is updated once a day or a thousand times. This is why
+the SOW stays small while an unbounded journal does not.
+
+Two properties worth knowing: the file does not shrink when records are deleted or
+expire (freed space is reused inside it), and a persistent SOW generally occupies
+memory as well as disk, so a large key space is a RAM sizing question too.
+
 ## Two keys, do not confuse them
 
 **Business key** — the JSON field named in `<Key>`. Query it with an ordinary
@@ -170,6 +241,157 @@ and a crash mid-processing loses the message.
 The client name is the identity both stores key on, so it must be stable across
 runs. A random or hostname-derived name resumes nothing — a mistake that only
 shows up the first time something restarts in production.
+
+## Truncating a topic
+
+Yes, a client can delete a topic's data at runtime. `sow_delete` is the command,
+and it comes in three forms:
+
+```java
+// by content filter -- the synchronous form returns the server's own count
+Message ack = client.sowDelete("orders", "/status = 'ORDER_STATUS_CANCELLED'", timeout);
+ack.getRecordsDeleted();
+
+// by server-assigned SOW key, for deleting exactly the rows you already have
+client.sowDeleteByKeys(handler, "orders", "1234567890,1234567891", timeout);
+
+// by matching data
+client.sowDeleteByData(handler, "orders", json, timeout);
+```
+
+To purge a whole topic, use a filter that matches everything:
+
+```java
+client.sowDelete("orders", "1=1", timeout);
+```
+
+(If your version rejects the constant form, any always-true predicate over a field
+the records carry does the same job, e.g. `/orderId != ''`.)
+
+The [`truncate`](../../clients/src/main/java/com/demo/amps/clients/demos/TruncateDemo.java)
+demo runs all three and reports what each cost.
+
+### Four things to know before using it
+
+1. **It is durable and global.** The records are gone for every client, not hidden
+   from one view. Subscribers with `Options.OOF` receive an OOF with reason
+   `deleted` for each one, so live views correct themselves.
+
+2. **It does not shrink the transaction log — it grows it.** A delete is a write
+   like any other and is journalled as one. Purging a large SOW is one of the
+   faster ways to *add* to your journal. If your goal was disk, this is the wrong
+   tool; see [transaction-log-sizing.md](transaction-log-sizing.md).
+
+3. **It does not return SOW disk to the filesystem.** The freed space is reused
+   for new records inside the existing file rather than shrinking it. Deleting
+   reduces what queries return and what the SOW needs in memory. The only way to
+   actually reclaim the file is to stop the instance and remove it — which
+   discards the topic's state entirely.
+
+4. **`<Expiration>` is usually better.** A TTL removes records with nothing to
+   run, no command to schedule and no bulk write. Reach for `sow_delete` when the
+   removal is event-driven — an order is cancelled, a session ends — and for
+   expiry when it is time-driven.
+
+## How expiration works
+
+Expiration is a **time-to-live on SOW records**. It is a property of the stored
+record, not of the message that created it and not of anything in the transaction
+log. When the TTL elapses, AMPS removes the record from the SOW the same way a
+`sow_delete` would, and tells subscribers.
+
+### Turning it on
+
+It has to be enabled on the topic. A topic with no `<Expiration>` ignores
+expiration entirely, including any TTL a publisher sets on an individual message —
+this is the most common reason "expiration doesn't work".
+
+```xml
+<Topic>
+  <Name>quote-cache</Name>
+  <MessageType>json</MessageType>
+  <Key>/symbol</Key>
+  <Expiration>60s</Expiration>   <!-- default TTL for every record here -->
+</Topic>
+```
+
+The topic value is a **default**, not a ceiling. A publisher can set its own TTL in
+seconds per message, which overrides it:
+
+```java
+client.publish("quote-cache", json, 30);        // this record lives 30s
+client.deltaPublish("quote-cache", delta, 30);  // deltas can carry one too
+
+// or, on a Command, where it is a first-class field
+new Command("publish").setTopic("quote-cache").setData(json).setExpiration(30);
+```
+
+Some AMPS versions also accept `<Expiration>enabled</Expiration>` to permit
+per-message TTLs with no topic-wide default. Check yours with
+`./server/scripts/amps.sh validate` before relying on that form.
+
+### What happens when it fires
+
+1. The record is removed from the SOW. Queries stop returning it; a
+   `sow_and_subscribe` starting afterwards never sees it.
+2. Subscribers who asked for `Options.OOF` receive an OOF message with reason
+   **`expired`** (`Message.Reason.Expired`), carrying the SOW key. This is the
+   difference between a view that drops the row and one that displays a quote
+   that AMPS no longer believes in.
+3. Subscribers who did *not* ask for OOF are told nothing, and will keep whatever
+   they last received. Expiration without OOF is a server-side saving only.
+
+```java
+new Command("sow_and_subscribe")
+        .setTopic("quote-cache")
+        .setOptions(Message.Options.OOF + Message.Options.SendKeys);
+// then, in the handler:
+if (message.getCommand() == Message.Command.OOF
+        && message.getReason() == Message.Reason.Expired) { /* drop the row */ }
+```
+
+The [`expiration`](../../clients/src/main/java/com/demo/amps/clients/demos/ExpirationDemo.java)
+demo publishes with a short TTL, polls the record count as it elapses, and prints
+the OOF notifications as they arrive.
+
+### The clock
+
+The TTL runs from when the record was written, and **every publish for that key
+writes the record again** — so an updated record gets a fresh lifetime. That is
+what makes expiration a good fit for "drop keys that have gone quiet": an
+instrument still ticking never expires, one that stopped ticking an hour ago does.
+
+It is not a precise timer. Expect a record to disappear promptly after its TTL,
+not to the millisecond, and do not build logic that depends on the exact instant.
+Two behaviours to confirm on your build rather than assume, because both are
+version-specific and neither is documented here from observation:
+
+- whether an expiry is written to the **transaction log** as a delete. If it is, a
+  short TTL over a large key space generates journal traffic of its own — which
+  matters if you came here from
+  [transaction-log-sizing.md](transaction-log-sizing.md);
+- what happens to records whose TTL elapsed **while the instance was down**. The
+  expected behaviour is that they are gone after recovery, but confirm it if
+  restart semantics matter to you.
+
+### What it does and does not bound
+
+| | effect |
+| --- | --- |
+| SOW record count | **bounded** — this is the point |
+| SOW memory | **bounded**, proportional to live keys |
+| SOW file size on disk | not reclaimed; freed space is reused inside the file |
+| transaction log | **not bounded** — a different budget entirely |
+
+Expiration keeps the *working set* proportional to what is actually live. It is
+the cheapest such control because nothing has to run: no scheduled job, no bulk
+delete, no client involvement.
+
+### Not the same as a queue lease
+
+`Message.getLeasePeriod()` in the client is queue machinery — how long a consumer
+holds a message before it returns to the queue. It has nothing to do with SOW
+expiration despite sounding similar.
 
 ## Practical notes
 

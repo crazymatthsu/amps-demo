@@ -72,8 +72,8 @@ everything — list topics explicitly and the cost stays visible.
 
 ## Lever 2 — publish deltas
 
-The journal records **what was published**. Publish 1.5 KB, journal 1.5 KB.
-Publish a 70-byte delta, journal 70 bytes, and the SOW still ends up holding the
+The journal records **what was published**. Publish 1.3 KB, journal 1.3 KB.
+Publish a 134-byte delta, journal 134 bytes, and the SOW still ends up holding the
 same complete record because AMPS merges server-side.
 
 ```java
@@ -81,7 +81,7 @@ DeltaBuilder.Delta delta = DeltaBuilder.between(previous, next, List.of("symbol"
 client.deltaPublish("instruments", delta.json());
 ```
 
-For the instrument shape in this repo that is roughly a **20x smaller journal for
+For the instrument shape in this repo that is roughly a **10x smaller journal for
 the same updates**, and the same reduction in network bytes on the way in.
 [`delta-updates.md`](delta-updates.md) covers the semantics and the two traps
 (arrays are replaced, not merged; a cleared field needs a full publish).
@@ -152,16 +152,17 @@ everywhere, including recovery time.
 Per-message TTL overrides the topic default:
 
 ```java
-client.executeAsync(new Command("publish")
-        .setTopic("quote-cache")
-        .setData(json)
-        .setExpiration(30), message -> { });
+client.publish("quote-cache", json, 30);   // this record lives 30 seconds
 ```
 
 Expiring records generate OOF messages with reason `expired`, so subscribers drop
 them from their views rather than displaying rows that no longer exist. The
 [`expiration`](../../clients/src/main/java/com/demo/amps/clients/demos/ExpirationDemo.java)
-demo shows this happening live.
+demo shows this happening live, and
+[sow-and-recovery.md](sow-and-recovery.md#how-expiration-works) explains the
+mechanism — including the one thing to check on your build, which is whether an
+expiry is itself journalled. If it is, a short TTL over a large key space adds
+journal traffic rather than removing it.
 
 ---
 
@@ -215,6 +216,72 @@ and its bounded-retention sibling implement, and what
 [`sow-and-recovery.md`](sow-and-recovery.md) walks through end to end.
 
 ---
+
+## Can I just set a maximum transaction log size?
+
+Not as a single number, and the distinction matters.
+
+There is no `MaxTransactionLogSize` that AMPS enforces by refusing writes or
+overwriting old entries. What exists is a set of controls whose *product* is the
+cap you get:
+
+| setting | what it actually controls |
+| --- | --- |
+| `<MinJournalSize>` | the size of **each** journal file — not a total |
+| `<PreallocatedJournalFiles>` | how many files exist before any message arrives |
+| journal ageing action | which old files get **deleted**, on a schedule |
+
+So the effective ceiling is:
+
+```
+max journal bytes  ~=  MinJournalSize  x  (files retained by the ageing policy + preallocated)
+```
+
+You bound the journal by **deleting old files**, not by capping a counter. Three
+consequences worth internalising:
+
+1. **It is a lagging control.** Files are removed on a schedule, so usage
+   oscillates: it climbs until the next run, then drops. Size the check interval
+   so the overshoot between runs is acceptable — at 356 MB/min, an hourly check
+   can add 21 GB before it fires.
+
+2. **Granularity is one file.** With 1 GB files and a 10 GB target, real usage
+   swings between roughly 9 and 10 GB. Smaller files track the target more
+   tightly and roll over more often.
+
+3. **Nothing stops the disk filling.** If the ingest rate outruns the ageing
+   policy, AMPS keeps writing until the filesystem says no, and an instance that
+   cannot write its journal is in trouble. Leave real headroom and alert on free
+   disk, not only on journal bytes.
+
+If your version's ageing action accepts a **size or total-bytes** option as well
+as an age, prefer it: it targets the thing you actually care about and does not
+need re-tuning when volumes change. An age-based policy is a proxy that assumes a
+stable message rate, which market data is not. Check with:
+
+```bash
+./server/scripts/amps.sh validate amps-config-bounded-retention.xml
+```
+
+### What will not bound it
+
+- **`sow_delete`** removes SOW records and is journalled as a write. It makes the
+  transaction log bigger. See
+  [sow-and-recovery.md](sow-and-recovery.md#truncating-a-topic).
+- **`<Expiration>`** bounds the SOW, not the journal.
+- **Deleting journal files with `rm`** is not a supported control. AMPS tracks
+  which files back which bookmark ranges; removing them underneath it risks failed
+  replays and a SOW it cannot reconcile after an unclean shutdown.
+
+The one control that reliably bounds the journal to zero is not putting the topic
+in `<TransactionLog>` at all.
+
+## A worked case
+
+[high-volume-market-data.md](high-volume-market-data.md) applies all of this to a
+specific set of numbers — 500 GB/day of market data, 100 GB of disk, a 500 MB SOW
+snapshot — including the arithmetic for how much replay window a given journal cap
+actually buys, and why "compact the journal" is the wrong question.
 
 ## Diagnosing a journal that is too big
 

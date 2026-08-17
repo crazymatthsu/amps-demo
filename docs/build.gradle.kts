@@ -15,9 +15,12 @@ val docsDir = layout.projectDirectory.dir("src")
 val requiredDocuments = listOf(
     "amps-vs-kafka.md",
     "transaction-log-sizing.md",
+    "high-volume-market-data.md",
     "sow-and-recovery.md",
     "delta-updates.md",
     "protobuf-json-and-amps.md",
+    "fix-order-state.md",
+    "native-fix-and-nvfix.md",
     "runbook.md"
 )
 

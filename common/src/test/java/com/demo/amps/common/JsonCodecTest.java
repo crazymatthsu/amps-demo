@@ -90,7 +90,7 @@ class JsonCodecTest {
         int whole = JsonCodec.byteSize(JsonCodec.toJson(snapshot));
         int quoteOnly = JsonCodec.byteSize(JsonCodec.toJson(snapshot.getQuote()));
 
-        assertTrue(whole > 1000, "expected a ~1.5 KB record, got " + whole + " B");
+        assertTrue(whole > 1000, "expected a ~1.3 KB record, got " + whole + " B");
         assertTrue(quoteOnly * 8 < whole,
                 "the volatile part should be a small fraction of the record: "
                         + quoteOnly + " B of " + whole + " B");

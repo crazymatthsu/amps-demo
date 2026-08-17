@@ -4,14 +4,15 @@ A working demonstration of [60East AMPS](https://www.crankuptheamps.com/) — th
 messaging features that make it different from a log-based broker, exercised
 against a real instance running in podman.
 
-Everything is JSON on the wire, with **protobuf as the schema** and JSON as the
-encoding. Java and Gradle throughout.
+JSON is the primary wire format, with **protobuf as the schema** and canonical
+protobuf JSON as the encoding; the native `fix` and `nvfix` message types get
+their own demos. Java and Gradle throughout.
 
 ```
 amps-demo/
 ├── common/    protobuf schemas, JSON codec, delta computation, client factories
 ├── server/    AMPS config, Containerfile, podman lifecycle scripts
-├── clients/   twelve runnable feature demos behind one CLI
+├── clients/   sixteen runnable feature demos behind one CLI
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -19,7 +20,7 @@ amps-demo/
 
 ```bash
 ./server/scripts/amps.sh start                # AMPS in a container
-./gradlew build                               # compile + 26 unit tests
+./gradlew build                               # compile + 49 unit tests
 ./gradlew :clients:run --args="sow-load"      # populate the SOW
 ./gradlew :clients:run --args="tour"          # the guided sequence
 ```
@@ -35,10 +36,13 @@ amps-demo/
 | **SOW topics** | `sow-load`, `sow-query` | the broker keeps last-value-per-key, so "what is true now?" is a query, not a rebuild |
 | **Snapshot** | `sow-and-subscribe` | current state plus live updates in one atomic command, with OOF when a record leaves your filter |
 | **Query by key** | `sow-query-by-key` | business key vs server-assigned SOW key, and following one record live |
-| **Delta updates** | `delta-publish`, `delta-subscribe` | update a 1.5 KB record with a 90 B message; receive only what changed |
+| **Delta updates** | `delta-publish`, `delta-subscribe` | update a 1.3 KB record with a 134 B message; receive only what changed |
 | **Transaction log** | `bookmark-replay` | replay from the epoch, from a bookmark, or resume exactly where you stopped |
 | **Recovery** | `recovery` | SOW returns current state instantly; the journal returns history on request |
 | **Expiration** | `expiration` | TTL on SOW records, with expiry notifications to subscribers |
+| **Truncation** | `truncate` | `sow_delete` by filter or by key; why it grows the journal rather than shrinking it |
+| **FIX order state** | `fix-lifecycle` | derive 35=D/G/F/8/9 into a queryable order-state SOW; the thin state machine AMPS cannot replace |
+| **Native FIX / NVFIX** | `fix-native`, `nvfix-native` | raw SOH-separated payloads on MessageType `fix`/`nvfix` topics; keys and filters on tags and names |
 | **Journal sizing** | `journal-lab` | measures full-publish vs delta cost in the transaction log, on disk |
 
 `./gradlew :clients:run --args="list"` for the catalogue.
@@ -78,8 +82,11 @@ The combination imposes rules that are easy to get wrong and silent when you do 
 | [amps-vs-kafka.md](docs/src/amps-vs-kafka.md) | the comparison, including where Kafka wins |
 | [sow-and-recovery.md](docs/src/sow-and-recovery.md) | SOW, snapshots, restart survival |
 | [transaction-log-sizing.md](docs/src/transaction-log-sizing.md) | journal size and retention |
+| [high-volume-market-data.md](docs/src/high-volume-market-data.md) | worked case: 500 GB/day on a 100 GB disk |
 | [delta-updates.md](docs/src/delta-updates.md) | delta semantics and traps |
 | [protobuf-json-and-amps.md](docs/src/protobuf-json-and-amps.md) | schema and encoding design |
+| [fix-order-state.md](docs/src/fix-order-state.md) | FIX 4.2 order state: the AMPS/gateway split |
+| [native-fix-and-nvfix.md](docs/src/native-fix-and-nvfix.md) | raw FIX/NVFIX message types, natively parsed |
 
 ## Requirements
 

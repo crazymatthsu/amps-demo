@@ -69,6 +69,40 @@ public final class Topics {
         return EVENTS_PREFIX + suffix;
     }
 
+    // ---- FIX order-state pattern ----------------------------------------------
+
+    /**
+     * Wire-faithful FIX events, keyed on {@code /eventId} so every message is
+     * its own SOW record: the SOW doubles as a queryable audit trail
+     * ("show me every event for chain X" is a filter, not a replay). Journalled,
+     * because this stream is the system of record the state topic is derived
+     * from.
+     */
+    public static final String FIX_EVENTS = "fix.events";
+
+    /**
+     * Derived order state, keyed on {@code /chainId} -- the stable identity
+     * FixOrderStateMachine maintains across cancel/replace. Deliberately NOT
+     * journalled: it is derivable from {@link #FIX_EVENTS} by replay, so
+     * journalling it would record the same information twice.
+     */
+    public static final String FIX_ORDERS = "fix.orders";
+
+    // ---- Native FIX / NVFIX topics --------------------------------------------
+
+    /**
+     * Raw FIX payloads ({@code 35=8\x0111=A1\x01...}), MessageType {@code fix}.
+     * Events keyed on the custom event-id tag 9001; orders keyed on OrderID
+     * (tag 37) and receiving execution reports only, so the last record per key
+     * IS the current order state. Only the events topic is journalled.
+     */
+    public static final String FIX_NATIVE_EVENTS = "fix.native.events";
+    public static final String FIX_NATIVE_ORDERS = "fix.native.orders";
+
+    /** The same pattern with named fields, MessageType {@code nvfix}. */
+    public static final String NVFIX_NATIVE_EVENTS = "nvfix.native.events";
+    public static final String NVFIX_NATIVE_ORDERS = "nvfix.native.orders";
+
     // ---- Journal-size laboratory ----------------------------------------------
 
     /** SOW + journalled. Receives whole-record publishes in the lab. */

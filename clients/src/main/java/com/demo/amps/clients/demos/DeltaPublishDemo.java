@@ -35,8 +35,8 @@ public final class DeltaPublishDemo implements Demo {
 
     @Override
     public String explanation() {
-        return "An instrument snapshot here is about 1.5 KB, of which a quote tick changes "
-                + "roughly 70 bytes. delta_publish sends only those bytes; AMPS merges them "
+        return "An instrument snapshot here is about 1.3 KB, of which a quote tick changes "
+                + "roughly 134 bytes. delta_publish sends only those bytes; AMPS merges them "
                 + "into the stored record server-side, and the transaction log records the "
                 + "delta rather than the whole record. That last point is the one that "
                 + "matters for storage: the same number of updates produces a journal an "

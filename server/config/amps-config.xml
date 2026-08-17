@@ -5,7 +5,7 @@
   The server process runs with its working directory set to /amps/data (see
   server/scripts/amps.sh), which the container engine bind-mounts from
   server/data on the host. Every relative path below therefore lands in a
-  directory you can inspect, delete and measure from outside the container --
+  directory you can inspect, delete and measure from outside the container -
   which is what makes the recovery and journal-size demos observable.
 
   Layout produced at runtime:
@@ -56,7 +56,7 @@
 
     <!--
       ===================================================================
-      SOW  -- State of the World
+      SOW  - State of the World
       ===================================================================
       A SOW topic is a keyed, last-value store maintained by the server as
       messages flow through it. Declaring a topic here is what turns a stream
@@ -89,7 +89,7 @@
             <Durability>persistent</Durability>
         </Topic>
 
-        <!-- Instrument snapshots: ~1.5 KB records whose volatile part is ~70 B.
+        <!-- Instrument snapshots: ~1.3 KB records whose volatile part is ~134 B.
              The delta demos and the journal-size lab both target this shape. -->
         <Topic>
             <Name>instruments</Name>
@@ -108,7 +108,7 @@
                - Durability transient: the SOW lives in memory only. There is
                  nothing to recover on restart, which is correct for a cache and
                  costs nothing to rebuild.
-             This topic is also absent from <TransactionLog> below -- see the
+             This topic is also absent from <TransactionLog> below - see the
              comment there. -->
         <Topic>
             <Name>quote-cache</Name>
@@ -137,21 +137,102 @@
             <Durability>persistent</Durability>
         </Topic>
 
-        <!-- ---------------------------------------------------------------
+        <!-- FIX 4.2 order-state pattern (see docs/src/fix-order-state.md and
+             the fix-lifecycle demo).
+
+             fix.events: every FIX message as its own record. Keying on the
+             unique event id turns the last-value store into a keyed event log,
+             and the gateway stamps each event with the resolved /chainId, so
+             the full history of one order chain is an ordinary filtered query.
+             Journalled below, because this stream is the system of record.
+
+             fix.orders: one record per order CHAIN, keyed on the stable chain
+             id assigned by the client-side state machine. Not journalled:
+             derivable from fix.events by replaying them through the machine,
+             so a journal entry would record the same information twice. -->
+        <Topic>
+            <Name>fix.events</Name>
+            <MessageType>json</MessageType>
+            <Key>/eventId</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>fix.orders</Name>
+            <MessageType>json</MessageType>
+            <Key>/chainId</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- Native FIX and NVFIX message types (fix-native / nvfix-native
+             demos, docs/src/native-fix-and-nvfix.md).
+
+             Everything else in this instance is MessageType json; these four
+             topics carry raw FIX payloads (SOH-separated tag=value) and their
+             named-field NVFIX twin. AMPS parses both natively, so SOW keys and
+             content filters reference fields directly: tag numbers for fix
+             (/37, /39), names for nvfix (/OrderID, /OrdStatus).
+
+             Per encoding, the same two-topic pattern as the JSON fix.* pair:
+               *.events  every message, keyed on a unique event id (custom tag
+                         9001 / name EventId), journalled: the audit trail.
+               *.orders  execution reports (35=8) only, keyed on OrderID. The
+                         last report per order IS current state, because FIX
+                         4.2 reports are cumulative snapshots. Requests (D/G/F)
+                         must not be published here: they carry no tag 37, and
+                         a SOW publish without its key field fails.
+
+             VERIFY the key syntax for fix/nvfix field references against your
+             AMPS version ('amps.sh validate' answers in a second): tag-number
+             references like /9001 and /37 are the expected form for the fix
+             message type, but this file was written without a server to check
+             against. -->
+        <Topic>
+            <Name>fix.native.events</Name>
+            <MessageType>fix</MessageType>
+            <Key>/9001</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>fix.native.orders</Name>
+            <MessageType>fix</MessageType>
+            <Key>/37</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>nvfix.native.events</Name>
+            <MessageType>nvfix</MessageType>
+            <Key>/EventId</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>nvfix.native.orders</Name>
+            <MessageType>nvfix</MessageType>
+            <Key>/OrderID</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- ===============================================================
              Dynamic SOW topics (regex-matched).
 
              VERIFY THIS AGAINST YOUR AMPS VERSION before relying on it: the
-             exact spelling of a regex topic name has varied across releases,
-             and `ampServer --test-config` (see server/README.md) will tell you
-             in one second whether your build accepts this form. If it does,
+             exact spelling of a regex topic name has varied across releases.
+             The validate command in server/README.md runs the server's own
+             config parser and will tell you in one second whether your build
+             accepts this form. If it does,
              `desk.equities` and `desk.rates` each get their own SOW at first
-             use -- no config edit, no restart. %n in FileName is what keeps
+             use - no config edit, no restart. %n in FileName is what keeps
              their files apart.
 
              The `dynamic-topics` demo does not depend on this block: dynamic
              *pub/sub* topics need no configuration at all and are exercised
              separately.
-             --------------------------------------------------------------- -->
+             =============================================================== -->
         <Topic>
             <Name>^desk\.[A-Za-z0-9_-]+$</Name>
             <MessageType>json</MessageType>
@@ -176,13 +257,13 @@
 
         1. WHAT you log. The journal records messages, so a topic carrying large
            records that change often is expensive to log. Only topics that need
-           replay belong here -- note that `quote-cache` is deliberately absent.
+           replay belong here - note that `quote-cache` is deliberately absent.
            Its data is reconstructible and short-lived, so journalling it would
            buy nothing and cost the most.
 
         2. HOW BIG each message is. A delta_publish journals only the changed
            fields. For the instrument shape in this demo that is the difference
-           between ~1.5 KB and ~70 B per update: roughly a 20x smaller journal
+           between ~1.3 KB and ~134 B per update: roughly a 10x smaller journal
            for the same number of updates.
 
       MinJournalSize is set small here so journal files roll over during a short
@@ -213,6 +294,26 @@
         <Topic>
             <Name>bench.delta</Name>
             <MessageType>json</MessageType>
+        </Topic>
+        <!-- The FIX event stream is the one topic here where the journal is the
+             point rather than a cost: low volume, and it is the system of
+             record for the derived fix.orders state. fix.orders itself is
+             deliberately absent. -->
+        <Topic>
+            <Name>fix.events</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <!-- Same reasoning for the native encodings: the event streams are the
+             systems of record and get the journal; the orders topics are
+             derivable (they hold only the latest 35=8 per order) and do not.
+             Note that a TransactionLog entry names topic AND message type. -->
+        <Topic>
+            <Name>fix.native.events</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>nvfix.native.events</Name>
+            <MessageType>nvfix</MessageType>
         </Topic>
     </TransactionLog>
 
