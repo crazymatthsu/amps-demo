@@ -42,6 +42,8 @@ undeclared topic, what declaring a SOW adds, what adding a transaction log adds.
 | `expiration` | TTL on SOW records, with expiry notifications | — |
 | `truncate` | delete SOW records with `sow_delete`, by filter and by key | — |
 | `fix-lifecycle` | FIX 4.2 messages through a state machine into an order-state SOW | — |
+| `fix-native` | raw FIX payloads on a MessageType `fix` topic; keys/filters on tag numbers | — |
+| `nvfix-native` | the same pattern with named fields on MessageType `nvfix` | — |
 | `recovery` | SOW and journal surviving a restart | a restart between phases |
 | `journal-lab` | transaction-log growth: whole records vs deltas | a few minutes |
 
@@ -90,7 +92,8 @@ Also available as Gradle tasks — `./gradlew :server:serverStart`, `serverStop`
 
 | endpoint | address |
 | --- | --- |
-| clients | `tcp://127.0.0.1:9007/amps/json` |
+| clients (JSON) | `tcp://127.0.0.1:9007/amps/json` |
+| clients (native FIX / NVFIX) | `tcp://127.0.0.1:9007/amps/fix`, `/amps/nvfix` |
 | websocket | `ws://127.0.0.1:9008/amps/json` |
 | admin UI | <http://127.0.0.1:8085/> |
 
@@ -143,7 +146,8 @@ rm -rf build/client-state          # client bookmark and publish stores
 
 Out of scope by design, all documented in the AMPS User Guide:
 
-- non-JSON message types (FIX, NVFIX, XML, composite)
+- XML and composite message types (FIX and NVFIX are covered by the
+  `fix-native` / `nvfix-native` demos)
 - authentication and entitlements
 - HA: replication, failover, `<Replication>` configuration
 - queues (`<Queue>`) and competing consumers

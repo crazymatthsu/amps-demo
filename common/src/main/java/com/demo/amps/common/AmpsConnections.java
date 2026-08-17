@@ -31,11 +31,21 @@ public final class AmpsConnections {
     private AmpsConnections() {
     }
 
-    /** A plain client, connected and logged on. */
+    /** A plain client, connected and logged on, speaking JSON. */
     public static Client connect(String clientName) throws AMPSException {
+        return connect(clientName, "json");
+    }
+
+    /**
+     * A plain client for a specific message type ({@code fix}, {@code nvfix},
+     * {@code json}). The message type is a property of the connection URI, not
+     * of the topic alone: a client logged on via {@code /amps/fix} publishes and
+     * subscribes FIX-typed topics, and the same TCP transport serves them all.
+     */
+    public static Client connect(String clientName, String messageType) throws AMPSException {
         Client client = new Client(clientName);
         try {
-            client.connect(DemoConfig.uri());
+            client.connect(DemoConfig.uri(messageType));
             client.logon(DemoConfig.timeoutMillis());
         } catch (AMPSException e) {
             client.close();

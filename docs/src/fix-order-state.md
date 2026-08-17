@@ -47,10 +47,11 @@ expiration on terminal orders — applies.
 
 **Native FIX parsing, if you want it.** AMPS speaks `fix` and `nvfix` message
 types, so it can key and filter on tag values directly; you do not have to
-convert to JSON. (This repo normalizes to JSON at the gateway instead, which
-keeps every demo and doc here applicable and makes the records readable — check
-the User Guide for your version for the exact key/filter syntax on FIX tags if
-you prefer raw FIX in the SOW.)
+convert to JSON. This repo demonstrates both — the `fix-native` and
+`nvfix-native` demos publish the same simulated lifecycles as raw SOH-separated
+payloads onto `MessageType fix`/`nvfix` topics keyed on tag 37 —
+see [native-fix-and-nvfix.md](native-fix-and-nvfix.md) for the pattern and the
+trade-offs against the JSON normalization used everywhere else here.
 
 **Aggregation, within limits.** AMPS Views can compute grouped aggregates over a
 SOW topic server-side — a per-order `SUM(LastShares)`, a

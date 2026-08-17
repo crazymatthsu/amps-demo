@@ -43,6 +43,15 @@ public final class DemoConfig {
         return "tcp://" + host() + ":" + port() + "/amps/json";
     }
 
+    /**
+     * Client URI for an arbitrary AMPS message type ({@code json}, {@code fix},
+     * {@code nvfix}, ...). One transport serves them all; the URI path is where
+     * a client declares which payload format it speaks.
+     */
+    public static String uri(String messageType) {
+        return "tcp://" + host() + ":" + port() + "/amps/" + messageType;
+    }
+
     /** Base URL of the AMPS admin HTTP interface. */
     public static String adminUrl() {
         return "http://" + host() + ":" + adminPort();

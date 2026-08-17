@@ -14,10 +14,9 @@ import com.demo.amps.common.JsonCodec;
 import com.demo.amps.common.Topics;
 import com.demo.amps.common.fix.FixOrderStateMachine;
 import com.demo.amps.common.fix.FixOrderStateMachine.Outcome;
+import com.demo.amps.common.fix.OrderLifecycleSimulator;
 import com.demo.amps.market.v1.OrderEvent;
 import com.demo.amps.market.v1.OrderState;
-import com.demo.amps.market.v1.Side;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -29,8 +28,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  * in {@code fix.orders} (SOW keyed on the stable chain id).
  */
 public final class FixLifecycleDemo implements Demo {
-
-    private int seq;
 
     @Override
     public String name() {
@@ -62,7 +59,7 @@ public final class FixLifecycleDemo implements Demo {
         try (Client client = AmpsConnections.connect("demo-fix-gateway")) {
 
             FixOrderStateMachine machine = new FixOrderStateMachine();
-            List<OrderEvent> lifecycle = scriptedLifecycle();
+            List<OrderEvent> lifecycle = OrderLifecycleSimulator.primaryScenario();
 
             Console.step("Running the lifecycle through the state machine");
             Console.note("Left: the FIX message as received. Right: the derived record "
@@ -85,8 +82,9 @@ public final class FixLifecycleDemo implements Demo {
                     Console.info("   %-34s | %s", describeEvent(received), describeState(state));
                 } else if (outcome instanceof Outcome.Ignored ignored) {
                     // Still worth auditing: the event arrived, even though it must
-                    // not touch the state. Same /eventId collapses onto the same
-                    // SOW record, so a PossDup resend is naturally idempotent.
+                    // not touch the state. Each arrival gets its own event id, so
+                    // a PossDup resend shows up twice in the audit trail -- which
+                    // is the truth of what the wire delivered.
                     client.publish(Topics.FIX_EVENTS, JsonCodec.toJson(received));
                     Console.info("   %-34s | IGNORED: %s",
                             describeEvent(received), ignored.reason());
@@ -129,66 +127,6 @@ public final class FixLifecycleDemo implements Demo {
             Console.note("The reasoning and the boundaries of the state machine are in "
                     + "docs/src/fix-order-state.md.");
         }
-    }
-
-    // ---- the scripted lifecycle -------------------------------------------
-
-    private List<OrderEvent> scriptedLifecycle() {
-        List<OrderEvent> events = new ArrayList<>();
-        // 1. New order: buy 500 AAPL @ 100.05.
-        events.add(base("D", "A1").setOrderQty(500).setPrice(100.05).build());
-        // 2. Venue ack.
-        events.add(base("8", "A1").setOrderId("ORD-7").setExecId("EXEC-ACK")
-                .setOrdStatus("0").setExecType("0").setOrderQty(500).setPrice(100.05)
-                .setLeavesQty(500).build());
-        // 3. Partial fill 200 @ 100.00.
-        events.add(fill("A1", "EXEC-1", "1", 200, 300, 100.00, 200, 100.00));
-        // 4. Cancel/replace: B1 asks for 800 @ 100.10.
-        events.add(base("G", "B1").setOrigClOrdId("A1")
-                .setOrderQty(800).setPrice(100.10).build());
-        // 5. A fill crosses the pending replace: +100 @ 100.06.
-        events.add(fill("A1", "EXEC-2", "1", 300, 200, 100.02, 100, 100.06));
-        // 6. Replace accepted: 11=B1, 41=A1, new terms 800 @ 100.10.
-        events.add(base("8", "B1").setOrigClOrdId("A1").setOrderId("ORD-7")
-                .setExecId("EXEC-3").setOrdStatus("5").setExecType("5")
-                .setOrderQty(800).setPrice(100.10)
-                .setCumQty(300).setLeavesQty(500).setAvgPx(100.02).build());
-        // 7. Cancel attempt C1...
-        events.add(base("F", "C1").setOrigClOrdId("B1").build());
-        // 8. ...rejected; 39 on the 35=9 states what the order still is.
-        events.add(base("9", "C1").setOrigClOrdId("B1").setOrdStatus("1")
-                .setCxlRejResponseTo("1").setText("too late to cancel").build());
-        // 9. PossDup resend of EXEC-2: must not double-apply.
-        events.add(fill("A1", "EXEC-2", "1", 300, 200, 100.02, 100, 100.06));
-        // 10. Final fill to completion: 800 done, venue-computed AvgPx.
-        events.add(fill("B1", "EXEC-4", "2", 800, 0, 100.04, 500, 100.05));
-        return events;
-    }
-
-    private OrderEvent.Builder base(String msgType, String clOrdId) {
-        seq++;
-        return OrderEvent.newBuilder()
-                .setEventId("EVT-" + String.format("%03d", seq))
-                .setSeq(seq)
-                .setMsgType(msgType)
-                .setClOrdId(clOrdId)
-                .setSymbol("AAPL")
-                .setSide(Side.SIDE_BUY);
-    }
-
-    private OrderEvent fill(String clOrdId, String execId, String ordStatus,
-                            int cumQty, int leavesQty, double avgPx, int lastShares, double lastPx) {
-        return base("8", clOrdId)
-                .setExecId(execId)
-                .setOrdStatus(ordStatus)
-                .setExecType(ordStatus)
-                .setExecTransType("0")
-                .setCumQty(cumQty)
-                .setLeavesQty(leavesQty)
-                .setAvgPx(avgPx)
-                .setLastShares(lastShares)
-                .setLastPx(lastPx)
-                .build();
     }
 
     // ---- rendering ---------------------------------------------------------

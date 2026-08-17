@@ -7,6 +7,7 @@ import com.demo.amps.clients.demos.DynamicTopicsDemo;
 import com.demo.amps.clients.demos.ExpirationDemo;
 import com.demo.amps.clients.demos.FixLifecycleDemo;
 import com.demo.amps.clients.demos.JournalLabDemo;
+import com.demo.amps.clients.demos.NativeFixDemo;
 import com.demo.amps.clients.demos.PubSubDemo;
 import com.demo.amps.clients.demos.RecoveryDemo;
 import com.demo.amps.clients.demos.SowAndSubscribeDemo;
@@ -58,6 +59,8 @@ public final class DemoRunner {
         register(new ExpirationDemo());
         register(new TruncateDemo());
         register(new FixLifecycleDemo());
+        register(new NativeFixDemo(NativeFixDemo.Encoding.FIX));
+        register(new NativeFixDemo(NativeFixDemo.Encoding.NVFIX));
         register(new JournalLabDemo());
     }
 

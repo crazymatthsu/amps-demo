@@ -165,6 +165,58 @@
             <Durability>persistent</Durability>
         </Topic>
 
+        <!-- Native FIX and NVFIX message types (fix-native / nvfix-native
+             demos, docs/src/native-fix-and-nvfix.md).
+
+             Everything else in this instance is MessageType json; these four
+             topics carry raw FIX payloads (SOH-separated tag=value) and their
+             named-field NVFIX twin. AMPS parses both natively, so SOW keys and
+             content filters reference fields directly: tag numbers for fix
+             (/37, /39), names for nvfix (/OrderID, /OrdStatus).
+
+             Per encoding, the same two-topic pattern as the JSON fix.* pair:
+               *.events  every message, keyed on a unique event id (custom tag
+                         9001 / name EventId), journalled: the audit trail.
+               *.orders  execution reports (35=8) only, keyed on OrderID. The
+                         last report per order IS current state, because FIX
+                         4.2 reports are cumulative snapshots. Requests (D/G/F)
+                         must not be published here: they carry no tag 37, and
+                         a SOW publish without its key field fails.
+
+             VERIFY the key syntax for fix/nvfix field references against your
+             AMPS version ('amps.sh validate' answers in a second): tag-number
+             references like /9001 and /37 are the expected form for the fix
+             message type, but this file was written without a server to check
+             against. -->
+        <Topic>
+            <Name>fix.native.events</Name>
+            <MessageType>fix</MessageType>
+            <Key>/9001</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>fix.native.orders</Name>
+            <MessageType>fix</MessageType>
+            <Key>/37</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>nvfix.native.events</Name>
+            <MessageType>nvfix</MessageType>
+            <Key>/EventId</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>nvfix.native.orders</Name>
+            <MessageType>nvfix</MessageType>
+            <Key>/OrderID</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
         <!-- ===============================================================
              Dynamic SOW topics (regex-matched).
 
@@ -250,6 +302,18 @@
         <Topic>
             <Name>fix.events</Name>
             <MessageType>json</MessageType>
+        </Topic>
+        <!-- Same reasoning for the native encodings: the event streams are the
+             systems of record and get the journal; the orders topics are
+             derivable (they hold only the latest 35=8 per order) and do not.
+             Note that a TransactionLog entry names topic AND message type. -->
+        <Topic>
+            <Name>fix.native.events</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>nvfix.native.events</Name>
+            <MessageType>nvfix</MessageType>
         </Topic>
     </TransactionLog>
 

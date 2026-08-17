@@ -4,14 +4,15 @@ A working demonstration of [60East AMPS](https://www.crankuptheamps.com/) — th
 messaging features that make it different from a log-based broker, exercised
 against a real instance running in podman.
 
-Everything is JSON on the wire, with **protobuf as the schema** and JSON as the
-encoding. Java and Gradle throughout.
+JSON is the primary wire format, with **protobuf as the schema** and canonical
+protobuf JSON as the encoding; the native `fix` and `nvfix` message types get
+their own demos. Java and Gradle throughout.
 
 ```
 amps-demo/
 ├── common/    protobuf schemas, JSON codec, delta computation, client factories
 ├── server/    AMPS config, Containerfile, podman lifecycle scripts
-├── clients/   fourteen runnable feature demos behind one CLI
+├── clients/   sixteen runnable feature demos behind one CLI
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -19,7 +20,7 @@ amps-demo/
 
 ```bash
 ./server/scripts/amps.sh start                # AMPS in a container
-./gradlew build                               # compile + 37 unit tests
+./gradlew build                               # compile + 49 unit tests
 ./gradlew :clients:run --args="sow-load"      # populate the SOW
 ./gradlew :clients:run --args="tour"          # the guided sequence
 ```
@@ -41,6 +42,7 @@ amps-demo/
 | **Expiration** | `expiration` | TTL on SOW records, with expiry notifications to subscribers |
 | **Truncation** | `truncate` | `sow_delete` by filter or by key; why it grows the journal rather than shrinking it |
 | **FIX order state** | `fix-lifecycle` | derive 35=D/G/F/8/9 into a queryable order-state SOW; the thin state machine AMPS cannot replace |
+| **Native FIX / NVFIX** | `fix-native`, `nvfix-native` | raw SOH-separated payloads on MessageType `fix`/`nvfix` topics; keys and filters on tags and names |
 | **Journal sizing** | `journal-lab` | measures full-publish vs delta cost in the transaction log, on disk |
 
 `./gradlew :clients:run --args="list"` for the catalogue.
@@ -84,6 +86,7 @@ The combination imposes rules that are easy to get wrong and silent when you do 
 | [delta-updates.md](docs/src/delta-updates.md) | delta semantics and traps |
 | [protobuf-json-and-amps.md](docs/src/protobuf-json-and-amps.md) | schema and encoding design |
 | [fix-order-state.md](docs/src/fix-order-state.md) | FIX 4.2 order state: the AMPS/gateway split |
+| [native-fix-and-nvfix.md](docs/src/native-fix-and-nvfix.md) | raw FIX/NVFIX message types, natively parsed |
 
 ## Requirements
 
