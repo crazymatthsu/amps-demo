@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package com.demo.amps.market.v1;
+
+import "com/demo/amps/market/v1/order.proto";
+
+option java_package = "com.demo.amps.market.v1";
+option java_multiple_files = true;
+option java_outer_classname = "FixOrderProto";
+
+// The FIX 4.2 order-state pattern: two topics, two shapes.
+//
+//   OrderEvent  -> topic `fix.events`  (SOW key /eventId, journalled)
+//                  wire-faithful: FIX tag values carried as-is, one record per
+//                  message, so the SOW doubles as a queryable audit trail and
+//                  the journal gives bookmark replay.
+//
+//   OrderState  -> topic `fix.orders`  (SOW key /chainId, NOT journalled)
+//                  consumer-friendly: derived by FixOrderStateMachine, one
+//                  record per order CHAIN (stable across cancel/replace).
+//                  Derivable from fix.events at any time, so journalling it
+//                  would buy nothing.
+//
+// See docs/src/fix-order-state.md for why the state machine lives outside AMPS
+// and why it is thinner than it first appears.
+
+// A FIX 4.2 admin/execution message, normalized to JSON but keeping FIX
+// semantics: raw tag values stay raw ('D', '8', ord_status '1'), because this
+// record is the audit trail and translation belongs in one place downstream,
+// not at the point of capture.
+//
+// Field-type rules as everywhere in this repo: quantities are int32 and prices
+// are double so AMPS filters compare them numerically. An int64 would render as
+// a quoted string in canonical protobuf JSON and break `/cumQty > 100`.
+message OrderEvent {
+  // SOW key of fix.events. Unique per message; ExecID (17) where the venue
+  // provides one, otherwise assigned by the gateway.
+  string event_id = 1;
+
+  // Gateway-assigned monotonic sequence, for ordering and diagnostics.
+  int32 seq = 2;
+
+  // MsgType (35): "D", "G", "F", "8", "9".
+  string msg_type = 3;
+
+  string cl_ord_id = 4;        // 11
+  string orig_cl_ord_id = 5;   // 41 (cancel/replace linkage)
+  string order_id = 6;         // 37 (venue-assigned)
+  string exec_id = 7;          // 17 (dedup key for executions)
+
+  string symbol = 8;           // 55
+  Side side = 9;               // 54, mapped to the shared enum
+
+  // OrdStatus (39) as the raw FIX character: '0','1','2','4','5','6','8','A','E',...
+  string ord_status = 10;
+  // ExecType (150), raw character. In 4.2 it mostly mirrors 39.
+  string exec_type = 11;
+  // ExecTransType (20): '0' new, '1' cancel, '2' correct, '3' status. 4.2 only.
+  string exec_trans_type = 12;
+
+  int32 order_qty = 13;        // 38
+  double price = 14;           // 44
+  int32 cum_qty = 15;          // 14
+  int32 leaves_qty = 16;       // 151
+  double avg_px = 17;          // 6
+  int32 last_shares = 18;      // 32 (4.2 name; 4.4 calls it LastQty)
+  double last_px = 19;         // 31
+
+  // CxlRejResponseTo (434) on 35=9: '1' = cancel request, '2' = cancel/replace.
+  string cxl_rej_response_to = 20;
+  string text = 21;            // 58
+
+  // Not a FIX tag: the chain id resolved by FixOrderStateMachine, stamped by
+  // the gateway before the event is published. It is what makes "every event
+  // for this order" a single filtered query (/chainId = 'A1') even though the
+  // ClOrdID moved across replaces. Empty when the event could not be resolved.
+  string chain_id = 22;
+}
+
+// Current state of one order chain: what a consumer actually wants to read.
+// Everything here is either copied from the latest authoritative execution
+// report or maintained by FixOrderStateMachine (chain identity, pending
+// request); nothing requires the consumer to know FIX.
+message OrderState {
+  // SOW key of fix.orders. The first ClOrdID of the chain, stable across every
+  // cancel/replace -- this stability is the main thing the state machine adds,
+  // because no AMPS SOW key can follow 41 -> 11 as the identifier moves.
+  string chain_id = 1;
+
+  // The working ClOrdID right now (moves on each accepted replace).
+  string current_cl_ord_id = 2;
+  string order_id = 3;
+
+  string symbol = 4;
+  Side side = 5;
+
+  FixOrdStatus ord_status = 6;
+
+  // The venue-acknowledged terms: OrderQty (38) and Price (44) from the last
+  // report that accepted an order or a replace. This is "latest acknowledged
+  // order qty / price" -- distinct from anything still pending.
+  int32 acked_order_qty = 7;
+  double acked_price = 8;
+
+  // Cumulative execution state, trusted from the report: 14, 151, 6.
+  int32 cum_qty = 9;
+  int32 leaves_qty = 10;
+  double avg_px = 11;
+
+  // The in-flight request, if any: what has been asked of the venue but not
+  // yet acknowledged or rejected. pending_order_qty is "pending order qty";
+  // the trio is "pending changes".
+  PendingRequest pending_request = 12;
+  string pending_cl_ord_id = 13;
+  int32 pending_order_qty = 14;
+  double pending_price = 15;
+
+  // Bookkeeping: bumped on every applied event; seq of the last one applied.
+  int32 revision = 16;
+  int32 last_event_seq = 17;
+  string last_exec_type = 18;
+  string text = 19;
+}
+
+// OrdStatus (39) translated once, here, so every consumer reads names.
+enum FixOrdStatus {
+  FIX_ORD_STATUS_UNSPECIFIED = 0;
+  FIX_ORD_STATUS_PENDING_NEW = 1;        // 'A'
+  FIX_ORD_STATUS_NEW = 2;                // '0'
+  FIX_ORD_STATUS_PARTIALLY_FILLED = 3;   // '1'
+  FIX_ORD_STATUS_FILLED = 4;             // '2'
+  FIX_ORD_STATUS_PENDING_CANCEL = 5;     // '6'
+  FIX_ORD_STATUS_CANCELED = 6;           // '4'
+  FIX_ORD_STATUS_PENDING_REPLACE = 7;    // 'E'
+  FIX_ORD_STATUS_REPLACED = 8;           // '5'
+  FIX_ORD_STATUS_REJECTED = 9;           // '8'
+  FIX_ORD_STATUS_EXPIRED = 10;           // 'C'
+  FIX_ORD_STATUS_DONE_FOR_DAY = 11;      // '3'
+}
+
+enum PendingRequest {
+  PENDING_NONE = 0;
+  PENDING_NEW = 1;
+  PENDING_REPLACE = 2;
+  PENDING_CANCEL = 3;
+}

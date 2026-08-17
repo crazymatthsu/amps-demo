@@ -19,6 +19,7 @@ val requiredDocuments = listOf(
     "sow-and-recovery.md",
     "delta-updates.md",
     "protobuf-json-and-amps.md",
+    "fix-order-state.md",
     "runbook.md"
 )
 

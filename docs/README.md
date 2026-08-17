@@ -13,7 +13,8 @@ exist.
 | [high-volume-market-data.md](src/high-volume-market-data.md) | worked case: 500 GB/day of market data on a 100 GB disk |
 | [delta-updates.md](src/delta-updates.md) | delta publish/subscribe semantics and the traps |
 | [protobuf-json-and-amps.md](src/protobuf-json-and-amps.md) | why protobuf schema + JSON wire, and the rules it imposes |
+| [fix-order-state.md](src/fix-order-state.md) | FIX 4.2 order state: what AMPS derives, what a gateway must |
 
 Suggested order for someone new to AMPS: **runbook** to get an instance up, then
-**amps-vs-kafka** for the mental model, then **sow-and-recovery**. The other three
-are reference material for when you hit the relevant problem.
+**amps-vs-kafka** for the mental model, then **sow-and-recovery**. The rest are
+reference material for when you hit the relevant problem.

@@ -41,6 +41,7 @@ undeclared topic, what declaring a SOW adds, what adding a transaction log adds.
 | `bookmark-replay` | replay from epoch, from a bookmark, and resume where you left off | — |
 | `expiration` | TTL on SOW records, with expiry notifications | — |
 | `truncate` | delete SOW records with `sow_delete`, by filter and by key | — |
+| `fix-lifecycle` | FIX 4.2 messages through a state machine into an order-state SOW | — |
 | `recovery` | SOW and journal surviving a restart | a restart between phases |
 | `journal-lab` | transaction-log growth: whole records vs deltas | a few minutes |
 

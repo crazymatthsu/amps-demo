@@ -5,6 +5,7 @@ import com.demo.amps.clients.demos.DeltaPublishDemo;
 import com.demo.amps.clients.demos.DeltaSubscribeDemo;
 import com.demo.amps.clients.demos.DynamicTopicsDemo;
 import com.demo.amps.clients.demos.ExpirationDemo;
+import com.demo.amps.clients.demos.FixLifecycleDemo;
 import com.demo.amps.clients.demos.JournalLabDemo;
 import com.demo.amps.clients.demos.PubSubDemo;
 import com.demo.amps.clients.demos.RecoveryDemo;
@@ -56,6 +57,7 @@ public final class DemoRunner {
         register(new RecoveryDemo());
         register(new ExpirationDemo());
         register(new TruncateDemo());
+        register(new FixLifecycleDemo());
         register(new JournalLabDemo());
     }
 

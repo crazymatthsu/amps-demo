@@ -3,7 +3,8 @@
   ============================================================================
   MINIMUM-FOOTPRINT VARIANT
   ============================================================================
-  Same topics as amps-config.xml, tuned for the question "how little state can
+  Same core topics as amps-config.xml (minus the fix.* pattern topics),
+  tuned for the question "how little state can
   I keep and still restart without losing anything that matters?".
 
   Run it with:

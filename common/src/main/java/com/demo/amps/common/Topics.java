@@ -69,6 +69,25 @@ public final class Topics {
         return EVENTS_PREFIX + suffix;
     }
 
+    // ---- FIX order-state pattern ----------------------------------------------
+
+    /**
+     * Wire-faithful FIX events, keyed on {@code /eventId} so every message is
+     * its own SOW record: the SOW doubles as a queryable audit trail
+     * ("show me every event for chain X" is a filter, not a replay). Journalled,
+     * because this stream is the system of record the state topic is derived
+     * from.
+     */
+    public static final String FIX_EVENTS = "fix.events";
+
+    /**
+     * Derived order state, keyed on {@code /chainId} -- the stable identity
+     * FixOrderStateMachine maintains across cancel/replace. Deliberately NOT
+     * journalled: it is derivable from {@link #FIX_EVENTS} by replay, so
+     * journalling it would record the same information twice.
+     */
+    public static final String FIX_ORDERS = "fix.orders";
+
     // ---- Journal-size laboratory ----------------------------------------------
 
     /** SOW + journalled. Receives whole-record publishes in the lab. */

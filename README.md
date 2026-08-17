@@ -11,7 +11,7 @@ encoding. Java and Gradle throughout.
 amps-demo/
 ├── common/    protobuf schemas, JSON codec, delta computation, client factories
 ├── server/    AMPS config, Containerfile, podman lifecycle scripts
-├── clients/   twelve runnable feature demos behind one CLI
+├── clients/   fourteen runnable feature demos behind one CLI
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -19,7 +19,7 @@ amps-demo/
 
 ```bash
 ./server/scripts/amps.sh start                # AMPS in a container
-./gradlew build                               # compile + 26 unit tests
+./gradlew build                               # compile + 37 unit tests
 ./gradlew :clients:run --args="sow-load"      # populate the SOW
 ./gradlew :clients:run --args="tour"          # the guided sequence
 ```
@@ -40,6 +40,7 @@ amps-demo/
 | **Recovery** | `recovery` | SOW returns current state instantly; the journal returns history on request |
 | **Expiration** | `expiration` | TTL on SOW records, with expiry notifications to subscribers |
 | **Truncation** | `truncate` | `sow_delete` by filter or by key; why it grows the journal rather than shrinking it |
+| **FIX order state** | `fix-lifecycle` | derive 35=D/G/F/8/9 into a queryable order-state SOW; the thin state machine AMPS cannot replace |
 | **Journal sizing** | `journal-lab` | measures full-publish vs delta cost in the transaction log, on disk |
 
 `./gradlew :clients:run --args="list"` for the catalogue.
@@ -82,6 +83,7 @@ The combination imposes rules that are easy to get wrong and silent when you do 
 | [high-volume-market-data.md](docs/src/high-volume-market-data.md) | worked case: 500 GB/day on a 100 GB disk |
 | [delta-updates.md](docs/src/delta-updates.md) | delta semantics and traps |
 | [protobuf-json-and-amps.md](docs/src/protobuf-json-and-amps.md) | schema and encoding design |
+| [fix-order-state.md](docs/src/fix-order-state.md) | FIX 4.2 order state: the AMPS/gateway split |
 
 ## Requirements
 

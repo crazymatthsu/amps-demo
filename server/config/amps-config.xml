@@ -137,6 +137,34 @@
             <Durability>persistent</Durability>
         </Topic>
 
+        <!-- FIX 4.2 order-state pattern (see docs/src/fix-order-state.md and
+             the fix-lifecycle demo).
+
+             fix.events: every FIX message as its own record. Keying on the
+             unique event id turns the last-value store into a keyed event log,
+             and the gateway stamps each event with the resolved /chainId, so
+             the full history of one order chain is an ordinary filtered query.
+             Journalled below, because this stream is the system of record.
+
+             fix.orders: one record per order CHAIN, keyed on the stable chain
+             id assigned by the client-side state machine. Not journalled:
+             derivable from fix.events by replaying them through the machine,
+             so a journal entry would record the same information twice. -->
+        <Topic>
+            <Name>fix.events</Name>
+            <MessageType>json</MessageType>
+            <Key>/eventId</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>fix.orders</Name>
+            <MessageType>json</MessageType>
+            <Key>/chainId</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
         <!-- ===============================================================
              Dynamic SOW topics (regex-matched).
 
@@ -213,6 +241,14 @@
         </Topic>
         <Topic>
             <Name>bench.delta</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <!-- The FIX event stream is the one topic here where the journal is the
+             point rather than a cost: low volume, and it is the system of
+             record for the derived fix.orders state. fix.orders itself is
+             deliberately absent. -->
+        <Topic>
+            <Name>fix.events</Name>
             <MessageType>json</MessageType>
         </Topic>
     </TransactionLog>
