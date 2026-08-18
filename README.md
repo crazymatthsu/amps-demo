@@ -13,6 +13,7 @@ amps-demo/
 ├── common/    protobuf schemas, JSON codec, delta computation, client factories
 ├── server/    AMPS config, Containerfile, podman lifecycle scripts
 ├── clients/   sixteen runnable feature demos behind one CLI
+├── utils/     operator tools: load a file, dump the SOW or journal, clear down
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -25,7 +26,7 @@ podman build --platform linux/amd64 -f server/Containerfile -t amps-demo:5.3 \
 export AMPS_IMAGE=amps-demo:5.3
 
 ./server/scripts/amps.sh start                # AMPS in a container
-./gradlew build                               # compile + 49 unit tests
+./gradlew build                               # compile + 71 unit tests
 ./gradlew :clients:run --args="sow-load"      # populate the SOW
 ./gradlew :clients:run --args="tour"          # the guided sequence
 ```
@@ -53,6 +54,24 @@ passes `--platform linux/amd64` for you.
 | **Journal sizing** | `journal-lab` | measures full-publish vs delta cost in the transaction log, on disk |
 
 `./gradlew :clients:run --args="list"` for the catalogue.
+
+## Operator tools
+
+Separate from the demos: `utils/` holds shell tools for working against a real
+instance without writing an application.
+
+```bash
+utils/bin/fileToAMPS.sh          --topic orders --file orders.json
+utils/bin/ampsToFileSOW.sh       --topic orders --out /tmp/orders.json
+utils/bin/ampsToFileSOWByKey.sh  --topic orders --filter "/quantity > 3000" --out /tmp/big.json
+utils/bin/ampsToFileTxLog.sh     --topic orders --out /tmp/journal.jsonl
+utils/bin/truncateAMPS.sh        --topic orders          # dry run; --yes to delete
+```
+
+Dumps round-trip — what `ampsToFileSOW.sh` writes, `fileToAMPS.sh` republishes.
+Note that `truncateAMPS.sh` clears the SOW only: the transaction log cannot be
+truncated by any client, and `--journal` explains what to do instead.
+→ [utils/README.md](utils/README.md)
 
 ## The two questions this repo was built to answer
 
