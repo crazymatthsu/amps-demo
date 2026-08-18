@@ -19,4 +19,5 @@ rootProject.name = "amps-demo"
 include("common")
 include("server")
 include("clients")
+include("utils")
 include("docs")

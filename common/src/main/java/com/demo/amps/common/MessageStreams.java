@@ -1,4 +1,4 @@
-package com.demo.amps.clients;
+package com.demo.amps.common;
 
 import com.crankuptheamps.client.Message;
 import com.crankuptheamps.client.MessageStream;
