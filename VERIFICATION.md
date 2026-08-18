@@ -1,10 +1,12 @@
 # Local verification plan
 
-A hand-off document: everything in this repository was built and unit-tested in
-a cloud sandbox that could not pull the AMPS image or reach crankuptheamps.com,
-so **no demo has ever run against a live AMPS instance**. This plan verifies the
-whole project on a local machine with podman, one feature at a time, in an order
-chosen so failures are informative.
+A hand-off document: everything in this repository was originally built and
+unit-tested in a cloud sandbox that could not pull the AMPS image or reach
+crankuptheamps.com, so no demo had ever run against a live AMPS instance. This
+plan verifies the whole project on a local machine with podman, one feature at a
+time, in an order chosen so failures are informative. **It has now been executed
+once — see the result banner below — and is still the procedure to repeat on a
+new AMPS version or a new machine.**
 
 Working through this with a Claude session? Give it this file and say "follow
 the verification plan". Check items off as they pass; on any failure, capture
@@ -63,10 +65,11 @@ release tarball, behind the email sign-up at
 <https://www.crankuptheamps.com/evaluate/>. Get a current 5.3.x server, matching
 the 5.3.5.3 Java client this repo builds against:
 
-- [ ] Download the Linux release tarball from
+- [x] Download the Linux release tarball from
       <https://www.crankuptheamps.com/evaluate/>.
-- [ ] Drop it in `server/vendor/` (git-ignored).
-- [ ] Build, using the exact filename you downloaded:
+- [x] Drop it in `server/vendor/` (git-ignored — note that 5.3.5.135 arrives as
+      a plain `.tar`, not `.tar.gz`; both are ignored and both build).
+- [x] Build, using the exact filename you downloaded:
 
 ```bash
 podman build --platform linux/amd64 -f server/Containerfile -t amps-demo:5.3 \
