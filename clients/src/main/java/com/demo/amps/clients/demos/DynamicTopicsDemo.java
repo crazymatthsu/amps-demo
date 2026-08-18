@@ -91,13 +91,15 @@ public final class DynamicTopicsDemo implements Demo {
                     + "No configuration was changed and the server was not restarted.");
 
             Console.step("Dynamic SOW topics");
-            Console.note("Regex topics can also be declared in the <SOW> section, which gives "
-                    + "each matching topic its own keyed store on first use. The demo config "
-                    + "declares ^desk\\.[A-Za-z0-9_-]+$, so publishing to desk.equities "
-                    + "creates a SOW for it. This is the one part of the shipped config whose "
-                    + "spelling varies by AMPS version -- if the query below returns nothing, "
-                    + "run './server/scripts/amps.sh validate' and check the note in "
-                    + "server/config/amps-config.xml.");
+            Console.note("A <SOW> topic can also carry a <Pattern>, which captures every topic "
+                    + "matching that regex into one physical store. The demo config declares "
+                    + "<Name>desk</Name> with <Pattern>^desk\\.[A-Za-z0-9_-]+$</Pattern>, so "
+                    + "publishing to desk.equities starts keeping state for it with no config "
+                    + "edit and no restart. The three desks share a single desk.json.sow -- "
+                    + "one physical topic, three logical ones -- and each is still queried "
+                    + "under its own name, as below. Note that the regex belongs in <Pattern>: "
+                    + "put it in <Name> and AMPS takes it literally, creating one SOW that "
+                    + "nothing routes into and every query below returns zero.");
 
             for (String desk : Fixtures.DESKS) {
                 String topic = Topics.desk(desk);
@@ -124,8 +126,10 @@ public final class DynamicTopicsDemo implements Demo {
                     Console.kv(topic + " SOW query", "failed: " + e.getMessage());
                 }
             }
-            Console.note("A non-zero count means the dynamic SOW pattern took effect: each "
-                    + "desk got its own keyed store with no configuration change.");
+            Console.note("A non-zero count means the <Pattern> took effect: each desk is "
+                    + "keeping queryable state, and no configuration changed to make that "
+                    + "happen. Zero would mean the pattern never matched -- check that the "
+                    + "regex is in <Pattern> and not in <Name>.");
         }
     }
 }

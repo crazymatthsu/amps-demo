@@ -93,16 +93,33 @@ public final class JournalLabDemo implements Demo {
             Console.info("");
             Console.kv("payload reduction", String.format(Locale.ROOT, "%.1fx",
                     (double) full.bytesPublished() / delta.bytesPublished()));
-            if (DataDirs.visible() && delta.journalGrowth() > 0) {
-                Console.kv("on-disk reduction", String.format(Locale.ROOT, "%.1fx",
-                        (double) full.journalGrowth() / delta.journalGrowth()));
+            // Only a ratio of two real measurements means anything. Journal
+            // growth is quantised to whole preallocated files, so whenever a
+            // phase happens to fit inside space that already existed its growth
+            // reads as zero -- and dividing by that produces "0.0x", which looks
+            // like deltas cost more when it only means the ruler is too coarse.
+            if (DataDirs.visible()) {
+                if (full.journalGrowth() > 0 && delta.journalGrowth() > 0) {
+                    Console.kv("on-disk reduction", String.format(Locale.ROOT, "%.1fx",
+                            (double) full.journalGrowth() / delta.journalGrowth()));
+                } else {
+                    Console.kv("on-disk reduction", "not measurable in this run");
+                    Console.note("One phase grew the journal by zero bytes: it fit inside "
+                            + "already-preallocated space. Growth here moves in whole "
+                            + "MinJournalSize files, so it is too coarse to compare two "
+                            + "phases of this size -- 'bytes sent' above is the exact "
+                            + "figure, and it is what the journal has to record. Raise "
+                            + "--updates until both phases cross a file boundary if you "
+                            + "want the on-disk ratio too.");
+                }
             }
         }
 
         Console.step("Reading the numbers");
         Console.note("Bytes sent is exact and is what the journal has to record. On-disk "
                 + "growth lags it in steps because AMPS preallocates journal files at "
-                + "MinJournalSize (4MB in the demo config); if the delta phase fits inside "
+                + "MinJournalSize (10MB in the demo config -- AMPS's minimum); if the delta "
+                + "phase fits inside "
                 + "an already-allocated file, its on-disk growth can read as zero. That is "
                 + "the point rather than a measurement error -- the delta workload did not "
                 + "need another file.");

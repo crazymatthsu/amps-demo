@@ -170,7 +170,7 @@ journal traffic rather than removing it.
 
 | setting | effect | demo default | production shape |
 | --- | --- | --- | --- |
-| `<MinJournalSize>` | size of each preallocated journal file | `4MB` — small so files roll during a short demo | 100MB–1GB; fewer rollovers |
+| `<MinJournalSize>` | size of each preallocated journal file | `10MB` — AMPS's minimum, so files roll during a short demo | 100MB–1GB; fewer rollovers |
 | `<PreallocatedJournalFiles>` | files created up front | `2` | enough to absorb a burst without allocating on the hot path |
 | `<Expiration>` (SOW topic) | default record TTL | `60s` on `quote-cache` | match the business lifetime of a key |
 | `<Durability>` (SOW topic) | `persistent` or `transient` | `transient` for the cache | `transient` for anything reconstructible |

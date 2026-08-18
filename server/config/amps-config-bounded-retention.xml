@@ -52,6 +52,10 @@
 
     <Admin>
         <InetAddr>8085</InetAddr>
+        <!-- SQL console in the admin UI, over the websocket transport below.
+             Same as amps-config.xml, so switching configs does not silently
+             take the feature away. -->
+        <SQLTransport>amps-websocket</SQLTransport>
         <FileName>./stats/stats.db</FileName>
         <Interval>10s</Interval>
     </Admin>
@@ -132,7 +136,9 @@
         <!-- Preallocate the minimum. Each preallocated file is disk you are
              paying for before a single message arrives. -->
         <PreallocatedJournalFiles>1</PreallocatedJournalFiles>
-        <MinJournalSize>4MB</MinJournalSize>
+        <!-- 10MB is the smallest AMPS accepts; anything less is silently
+             reset to it with a startup warning. -->
+        <MinJournalSize>10MB</MinJournalSize>
 
         <!-- Only topics whose loss would be unrecoverable. -->
         <Topic>
@@ -171,7 +177,7 @@
                 </Options>
             </On>
             <Do>
-                <Module>amps-action-do-delete-old-journal-files</Module>
+                <Module>amps-action-do-remove-journal</Module>
                 <Options>
                     <!-- Keep one day of replay. Anything older is served from
                          the SOW instead. -->

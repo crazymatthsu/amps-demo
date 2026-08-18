@@ -21,6 +21,18 @@
          instance, topic, subscription and queue statistics. -->
     <Admin>
         <InetAddr>8085</InetAddr>
+
+        <!-- Turns on the SQL console in the admin UI (Galvanometer): the
+             browser gets to run SELECTs against SOW topics, which is the
+             fastest way to look at state without writing a client.
+
+             The value names a <Transport> below, not a port. The admin UI is
+             served over HTTP on 8085, but its queries and subscriptions go out
+             over this WebSocket transport - so the browser needs to reach 9008
+             as well as 8085. Any websocket transport that accepts the message
+             types you want to query will do; amps-websocket already does. -->
+        <SQLTransport>amps-websocket</SQLTransport>
+
         <FileName>./stats/stats.db</FileName>
         <Interval>10s</Interval>
     </Admin>
@@ -218,23 +230,34 @@
         </Topic>
 
         <!-- ===============================================================
-             Dynamic SOW topics (regex-matched).
+             Dynamic SOW topics (pattern-matched).
 
-             VERIFY THIS AGAINST YOUR AMPS VERSION before relying on it: the
-             exact spelling of a regex topic name has varied across releases.
-             The validate command in server/README.md runs the server's own
-             config parser and will tell you in one second whether your build
-             accepts this form. If it does,
-             `desk.equities` and `desk.rates` each get their own SOW at first
-             use - no config edit, no restart. %n in FileName is what keeps
-             their files apart.
+             <Pattern> is the element that does this, and the split between it
+             and <Name> is the thing to understand:
+
+               <Name>     the PHYSICAL topic - one SOW, one file. %n in
+                          FileName expands to this, not to the logical topic.
+               <Pattern>  a regex deciding which published topics are captured
+                          into that physical store.
+
+             So desk.equities, desk.rates and desk.credit are created by
+             publishing to them - no config edit, no restart - and all three
+             live in one desk.json.sow, each still queryable under its own
+             logical topic name.
+
+             Do NOT put the regex in <Name> instead. AMPS accepts it, warns
+             about "regular expression characters", and then treats it as a
+             literal topic name: you get one SOW file called
+             '^desk\.[A-Za-z0-9_-]+$.json.sow' that nothing ever routes into,
+             and every desk query returns zero. Verified against 5.3.5.135.
 
              The `dynamic-topics` demo does not depend on this block: dynamic
              *pub/sub* topics need no configuration at all and are exercised
              separately.
              =============================================================== -->
         <Topic>
-            <Name>^desk\.[A-Za-z0-9_-]+$</Name>
+            <Name>desk</Name>
+            <Pattern>^desk\.[A-Za-z0-9_-]+$</Pattern>
             <MessageType>json</MessageType>
             <Key>/orderId</Key>
             <FileName>./sow/%n.sow</FileName>
@@ -266,9 +289,11 @@
            between ~1.3 KB and ~134 B per update: roughly a 10x smaller journal
            for the same number of updates.
 
-      MinJournalSize is set small here so journal files roll over during a short
-      demo and the growth is visible in `ls`. Production instances use much
-      larger files (hundreds of MB) to reduce rollover overhead.
+      MinJournalSize is set as small as AMPS allows here, so journal files roll
+      over during a short demo and the growth is visible in `ls`. 10MB is the
+      floor: ask for less and the server resets it to 10MB with a warning at
+      startup (verified against 5.3.5.135). Production instances use much larger
+      files (hundreds of MB) to reduce rollover overhead.
 
       For bounding total journal size over time, see
       server/config/amps-config-bounded-retention.xml and
@@ -277,7 +302,7 @@
     <TransactionLog>
         <JournalDirectory>./journal</JournalDirectory>
         <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
-        <MinJournalSize>4MB</MinJournalSize>
+        <MinJournalSize>10MB</MinJournalSize>
 
         <Topic>
             <Name>orders</Name>
