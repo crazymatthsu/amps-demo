@@ -21,6 +21,18 @@
          instance, topic, subscription and queue statistics. -->
     <Admin>
         <InetAddr>8085</InetAddr>
+
+        <!-- Turns on the SQL console in the admin UI (Galvanometer): the
+             browser gets to run SELECTs against SOW topics, which is the
+             fastest way to look at state without writing a client.
+
+             The value names a <Transport> below, not a port. The admin UI is
+             served over HTTP on 8085, but its queries and subscriptions go out
+             over this WebSocket transport - so the browser needs to reach 9008
+             as well as 8085. Any websocket transport that accepts the message
+             types you want to query will do; amps-websocket already does. -->
+        <SQLTransport>amps-websocket</SQLTransport>
+
         <FileName>./stats/stats.db</FileName>
         <Interval>10s</Interval>
     </Admin>

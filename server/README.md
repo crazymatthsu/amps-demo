@@ -30,6 +30,34 @@ server/
 | AMPS clients (JSON) | `tcp://127.0.0.1:9007/amps/json` |
 | WebSocket | `ws://127.0.0.1:9008/amps/json` |
 | Admin / monitoring UI | <http://127.0.0.1:8085/> |
+| SQL console | in the admin UI — see below |
+
+## Querying from the admin UI
+
+The admin UI (Galvanometer) can run queries and subscriptions against the SOW
+topics from the browser — the quickest way to look at state without writing a
+client. It is off until `<Admin>` names a transport for it to use, which all
+three configs now do:
+
+```xml
+<SQLTransport>amps-websocket</SQLTransport>
+```
+
+The value names a `<Transport>`, not a port. The UI itself is served over HTTP
+on 8085, but the queries it submits travel over that WebSocket transport, **so
+the browser has to reach 9008 as well as 8085** — worth knowing if you publish
+the admin port through a tunnel and wonder why the query page does nothing.
+
+Remove the line and the UI still loads, just without those capabilities: the
+page reports `__sql=false` instead of `__sql=true`, which is a quick way to
+check the setting took effect:
+
+```bash
+curl -s http://127.0.0.1:8085/ | grep -o "__sql=[a-z]*"
+```
+
+Filters use the same `/field` paths as everything else in this repo — the
+expressions in `clients/` transfer to the query page unchanged.
 
 ## Which image?
 
