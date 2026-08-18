@@ -18,13 +18,26 @@
 #
 # Environment overrides:
 #   CONTAINER_ENGINE   podman | docker            (default: podman, else docker)
-#   AMPS_IMAGE         image reference            (default: docker.io/amps/ce:latest)
+#   AMPS_IMAGE         image reference            (REQUIRED - see below)
+#   AMPS_PLATFORM      image platform             (default: linux/amd64; set
+#                                                  empty to let the engine pick)
 #   AMPS_BIN           server binary in the image (default: /opt/amps/bin/ampServer)
 #   AMPS_CONFIG        config file name under server/config/
 #   AMPS_PORT          host port for the amps protocol      (default: 9007)
 #   AMPS_WS_PORT       host port for websocket              (default: 9008)
 #   AMPS_ADMIN_PORT    host port for the admin interface    (default: 8085)
 #   AMPS_CONTAINER     container name             (default: amps-demo)
+#
+# There is no public AMPS server image. 60East distributes the server as a
+# release tarball behind the evaluation sign-up at crankuptheamps.com; build an
+# image from it with server/Containerfile and point AMPS_IMAGE at the result:
+#
+#   podman build --platform linux/amd64 -f server/Containerfile -t amps-demo:5.3 \
+#       --build-arg AMPS_TARBALL=<exact-filename>.tar.gz server
+#   export AMPS_IMAGE=amps-demo:5.3
+#
+# (docker.io/amps/ce is NOT this AMPS. It is an unrelated Apache/MySQL/PHP
+# product that shares the acronym - it contains no ampServer binary.)
 
 set -euo pipefail
 
@@ -33,7 +46,11 @@ SERVER_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_DIR="${SERVER_DIR}/config"
 DATA_DIR="${SERVER_DIR}/data"
 
-AMPS_IMAGE="${AMPS_IMAGE:-docker.io/amps/ce:latest}"
+AMPS_IMAGE="${AMPS_IMAGE:-}"
+# The AMPS server distribution is Linux x86_64 only, so the image is always
+# amd64 - on Apple Silicon that means emulation, which podman's machine provides.
+# Harmless on an x86_64 host. Set AMPS_PLATFORM= (empty) to let the engine pick.
+AMPS_PLATFORM="${AMPS_PLATFORM-linux/amd64}"
 AMPS_BIN="${AMPS_BIN:-/opt/amps/bin/ampServer}"
 AMPS_CONFIG="${AMPS_CONFIG:-amps-config.xml}"
 AMPS_PORT="${AMPS_PORT:-9007}"
@@ -67,6 +84,39 @@ engine() {
 
 ENGINE="$(engine)"
 
+# macOS ships bash 3.2, where "${arr[@]}" on an empty array trips `set -u`;
+# ${arr[@]+"${arr[@]}"} is the portable way to expand "zero or more args".
+PLATFORM_ARGS=()
+if [[ -n "${AMPS_PLATFORM}" ]]; then
+    PLATFORM_ARGS=(--platform "${AMPS_PLATFORM}")
+fi
+
+# Every command that runs a container needs a real AMPS image, and there is no
+# public one to fall back to. Checked in one place so the guidance is identical
+# wherever you hit it.
+require_image() {
+    [[ -n "${AMPS_IMAGE}" ]] || die "AMPS_IMAGE is not set, and there is no public AMPS server image to default to.
+
+60East distributes the server as a release tarball behind the evaluation
+sign-up at https://www.crankuptheamps.com/evaluate/. Once you have it:
+
+  cp AMPS-<version>-Release-Linux.tar.gz server/vendor/
+  podman build --platform linux/amd64 -f server/Containerfile -t amps-demo:5.3 \\
+      --build-arg AMPS_TARBALL=AMPS-<version>-Release-Linux.tar.gz server
+  export AMPS_IMAGE=amps-demo:5.3"
+
+    case "${AMPS_IMAGE}" in
+        amps/ce*|amps/pro*|docker.io/amps/ce*|docker.io/amps/pro*)
+            die "${AMPS_IMAGE} is not 60East AMPS.
+
+The 'amps' account on Docker Hub publishes an unrelated Apache/MySQL/PHP
+product that shares the acronym; the image contains no ampServer binary, so
+every command here would fail in a confusing way. Build an image from an
+official release tarball instead - see server/Containerfile."
+            ;;
+    esac
+}
+
 # SELinux hosts need :z on bind mounts or the container cannot read them. Harmless
 # elsewhere, but only podman and docker on Linux understand it.
 mount_suffix() {
@@ -82,6 +132,7 @@ container_running() {
 }
 
 cmd_start() {
+    require_image
     [[ -f "${CONFIG_DIR}/${AMPS_CONFIG}" ]] \
         || die "no such config: ${CONFIG_DIR}/${AMPS_CONFIG}"
 
@@ -110,6 +161,7 @@ cmd_start() {
     echo "  data:   ${DATA_DIR}"
 
     "${ENGINE}" run -d \
+        ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} \
         --name "${AMPS_CONTAINER}" \
         -p "${AMPS_PORT}:9007" \
         -p "${AMPS_WS_PORT}:9008" \
@@ -168,16 +220,35 @@ cmd_logs() {
     "${ENGINE}" logs "$@" "${AMPS_CONTAINER}"
 }
 
-# Blocks until the amps port accepts a TCP connection, or times out.
+# Blocks until AMPS is actually ready to serve clients, or times out.
+#
+# "The port accepts a connection" is NOT ready. AMPS binds its transports early
+# and finishes initialising afterwards - recovering the SOW and reconciling the
+# journal, which on a restart with real data takes seconds. A client that
+# connects in that window gets "Socket error while sending message", which is
+# what made the recovery demo fail intermittently. So wait for the port AND for
+# the server to say it has finished starting up.
 cmd_wait() {
-    local timeout="${1:-30}"
-    local waited=0
+    local timeout="${1:-60}"
+    local port_open=0
+    local deadline=$(( SECONDS + timeout ))
+    local log
     echo -n "waiting for AMPS on port ${AMPS_PORT} "
-    while (( waited < timeout )); do
+    # Deadline is wall-clock, not an iteration count: each pass shells out to the
+    # container engine and is nowhere near a fixed 1s.
+    while (( SECONDS < deadline )); do
         if (exec 3<>"/dev/tcp/127.0.0.1/${AMPS_PORT}") 2>/dev/null; then
             exec 3<&- 2>/dev/null || true
-            echo " ready"
-            return 0
+            port_open=1
+            # Capture, then match with a glob. Piping into `grep -q` under
+            # `set -o pipefail` reports failure even on a match: grep exits at
+            # the first hit and the engine dies of SIGPIPE, so the pipeline
+            # status is 141 and the check never passes.
+            log="$("${ENGINE}" logs --tail 400 "${AMPS_CONTAINER}" 2>&1 || true)"
+            if [[ "${log}" == *"initialization completed"* ]]; then
+                echo " ready"
+                return 0
+            fi
         fi
         if container_exists && ! container_running; then
             echo " container exited"
@@ -186,8 +257,16 @@ cmd_wait() {
         fi
         echo -n "."
         sleep 1
-        waited=$(( waited + 1 ))
     done
+
+    # Never saw the marker. If the port is open the instance is probably fine
+    # and this build just words its startup line differently - say so rather
+    # than fail, but do not claim it is ready.
+    if (( port_open )); then
+        echo " port is open but no startup-complete line appeared in ${timeout}s"
+        echo "  (continuing; if clients fail to connect, check 'amps.sh logs')"
+        return 0
+    fi
     echo " timed out after ${timeout}s"
     return 1
 }
@@ -202,6 +281,7 @@ cmd_reset() {
 # The public amps/ce image dates from 2017 and other builds lay the distribution
 # out differently, so rather than guess, look.
 cmd_probe() {
+    require_image
     echo "image: ${AMPS_IMAGE}"
     echo
     echo "--- declared entrypoint / cmd ---"
@@ -209,35 +289,62 @@ cmd_probe() {
         "${AMPS_IMAGE}" 2>/dev/null || echo "(image not pulled yet: ${ENGINE} pull ${AMPS_IMAGE})"
     echo
     echo "--- searching for the server binary ---"
-    "${ENGINE}" run --rm --entrypoint sh "${AMPS_IMAGE}" -c \
+    "${ENGINE}" run --rm ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} \
+        --entrypoint sh "${AMPS_IMAGE}" -c \
         'find / -maxdepth 5 -type f \( -name "ampServer" -o -name "amps_server" \) 2>/dev/null; echo "--- /opt ---"; ls -1 /opt 2>/dev/null' \
         || echo "(could not run a shell in this image)"
     echo
     echo "set AMPS_BIN to whichever path this printed."
 }
 
-# Ask the server to parse a config without starting the instance. The flag name
-# has varied; try the ones AMPS has used and report whichever answers.
+# Which flag makes this build parse a config and exit?
+#
+# Do NOT guess by trying flags in turn. ampServer ignores an option it does not
+# recognise and falls through to "start the instance with this config", so a
+# wrong guess does not fail - it launches a server that runs until something
+# kills it. Read the advertised options instead and use what is actually there.
+# (5.3.x: --verify-config. Older builds documented --test-config.)
+validate_flag() {
+    # 2>&1: ampServer prints its usage on stderr.
+    local help
+    help="$("${ENGINE}" run --rm ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} \
+        --entrypoint "${AMPS_BIN}" "${AMPS_IMAGE}" --help 2>&1 || true)"
+
+    local candidate
+    for candidate in --verify-config --test-config; do
+        if echo "${help}" | grep -q -- "${candidate}"; then
+            echo "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Ask the server to parse a config without starting the instance.
 cmd_validate() {
+    require_image
     local config="${1:-${AMPS_CONFIG}}"
     [[ -f "${CONFIG_DIR}/${config}" ]] || die "no such config: ${CONFIG_DIR}/${config}"
 
     local suffix
     suffix="$(mount_suffix)"
 
-    for flag in --test-config -t; do
-        echo "--- ${AMPS_BIN} ${flag} ${config} ---"
-        if "${ENGINE}" run --rm \
-                -v "${CONFIG_DIR}:${CONTAINER_CONFIG_DIR}${suffix}" \
-                -w "${CONTAINER_DATA_DIR}" \
-                --entrypoint "${AMPS_BIN}" \
-                "${AMPS_IMAGE}" "${flag}" "${CONTAINER_CONFIG_DIR}/${config}"; then
-            echo "config accepted"
-            return 0
-        fi
-        echo
-    done
-    echo "neither flag was accepted; check 'ampServer --help' in your AMPS version" >&2
+    local flag
+    flag="$(validate_flag)" || die "this ampServer advertises no config-verify flag.
+Run '${AMPS_BIN} --help' in the image and check what it offers:
+  ${ENGINE} run --rm --entrypoint ${AMPS_BIN} ${AMPS_IMAGE} --help"
+
+    echo "--- ${AMPS_BIN} ${flag} ${config} ---"
+    if "${ENGINE}" run --rm \
+            ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} \
+            -v "${CONFIG_DIR}:${CONTAINER_CONFIG_DIR}${suffix}" \
+            -w "${CONTAINER_DATA_DIR}" \
+            --entrypoint "${AMPS_BIN}" \
+            "${AMPS_IMAGE}" "${flag}" "${CONTAINER_CONFIG_DIR}/${config}"; then
+        echo "config accepted"
+        return 0
+    fi
+    echo "config REJECTED (see the error above)" >&2
     return 1
 }
 

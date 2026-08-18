@@ -33,20 +33,37 @@ server/
 
 ## Which image?
 
-The default is `docker.io/amps/ce:latest` — 60East's published AMPS Community
-Edition image. It is the fastest way to get an instance up, but it is an old
-build, and the container's internal layout may not match the default
-`AMPS_BIN=/opt/amps/bin/ampServer`. If the container exits at once:
+There is no default, because there is no public AMPS server image to default to.
+60East distributes the server as a release tarball behind the [evaluation
+sign-up](https://www.crankuptheamps.com/evaluate/); build your own image from it:
+
+```bash
+cp AMPS-5.3.5.3-Release-Linux.tar.gz server/vendor/
+podman build --platform linux/amd64 -f server/Containerfile -t amps-demo:5.3 \
+    --build-arg AMPS_TARBALL=AMPS-5.3.5.3-Release-Linux.tar.gz server
+export AMPS_IMAGE=amps-demo:5.3
+```
+
+`amps.sh` refuses to run without `AMPS_IMAGE` set.
+
+> **Not `docker.io/amps/ce`.** Despite being described as "AMPS Community
+> Edition", that Docker Hub account publishes an unrelated Apache/MySQL/PHP
+> product that shares the acronym — the image contains no `ampServer` binary at
+> any path. `amps.sh` rejects it by name so you do not spend an afternoon
+> probing for a binary that was never there.
+
+The AMPS distribution is Linux x86_64 only, so `amps.sh` passes
+`--platform linux/amd64` on every container it runs; on Apple Silicon that means
+emulation, which the podman machine provides. Override with `AMPS_PLATFORM`, or
+set it empty to let the engine choose.
+
+If the container exits at once, the binary is not at the default
+`AMPS_BIN=/opt/amps/bin/ampServer`:
 
 ```bash
 ./server/scripts/amps.sh probe          # find the server binary in the image
 AMPS_BIN=/whatever/it/said ./server/scripts/amps.sh start
 ```
-
-To run a current AMPS instead, download the release tarball from 60East, drop it
-in `server/vendor/`, and build the image from `Containerfile` — the instructions
-are in that file's header. That is also the route to take on a network that
-cannot reach Docker Hub.
 
 ## Check the config before trusting it
 
@@ -89,6 +106,6 @@ measurement — the `journal-lab` demo in `clients/` relies on that.
 | `orders` | `/orderId` | yes | the main SOW: query, delta, replay, recovery |
 | `instruments` | `/symbol` | yes | large records, small changes — delta demos |
 | `quote-cache` | `/symbol` | **no** | transient SOW with a 60s TTL |
-| `desk.*` | `/orderId` | no | dynamic SOW topics (regex-matched) |
+| `desk.*` | `/orderId` | no | dynamic SOW topics — one physical `desk` topic with a `<Pattern>`, many logical ones |
 | `bench.full` / `bench.delta` | `/symbol` | yes | journal-size laboratory |
 | `events.*` | — | no | undeclared dynamic pub/sub topics |

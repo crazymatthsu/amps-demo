@@ -19,13 +19,20 @@ amps-demo/
 ## Quick start
 
 ```bash
+# one-time: build an image from an AMPS release tarball in server/vendor/
+podman build --platform linux/amd64 -f server/Containerfile -t amps-demo:5.3 \
+    --build-arg AMPS_TARBALL=AMPS-5.3.5.3-Release-Linux.tar.gz server
+export AMPS_IMAGE=amps-demo:5.3
+
 ./server/scripts/amps.sh start                # AMPS in a container
 ./gradlew build                               # compile + 49 unit tests
 ./gradlew :clients:run --args="sow-load"      # populate the SOW
 ./gradlew :clients:run --args="tour"          # the guided sequence
 ```
 
-`podman` is used when present, `docker` otherwise.
+`podman` is used when present, `docker` otherwise. The AMPS distribution is
+Linux x86_64 only, so on Apple Silicon the image runs emulated — `amps.sh`
+passes `--platform linux/amd64` for you.
 
 ## What it demonstrates
 
@@ -97,21 +104,28 @@ the wrapper and `protoc` is fetched as a Maven artifact.
 
 Two things to know:
 
-1. **The demo defaults to `docker.io/amps/ce:latest`**, 60East's published AMPS
-   Community Edition image. It is the fastest way to get an instance up but is an
-   old build. To run a current AMPS, drop a release tarball in `server/vendor/`
-   and build the image from [`server/Containerfile`](server/Containerfile).
+1. **You have to supply the AMPS server yourself.** There is no public AMPS
+   server image: 60East distributes it as a release tarball behind the
+   [evaluation sign-up](https://www.crankuptheamps.com/evaluate/). Drop the
+   tarball in `server/vendor/`, build the image from
+   [`server/Containerfile`](server/Containerfile), and point `AMPS_IMAGE` at it.
+   (`docker.io/amps/ce` is *not* this AMPS — it is an unrelated Apache/MySQL/PHP
+   product sharing the acronym, with no `ampServer` binary in it. `amps.sh`
+   rejects it by name rather than let you find out the slow way.)
 
-2. **Two config elements are version-sensitive and are flagged in place**: the
-   regex SOW topic that gives dynamic SOW topics, and the `<Actions>` block that
-   ages out journal files. Check them against your build before depending on
-   them:
+2. **Verified against AMPS 5.3.5.135.** Every config in `server/config/`
+   validates with no warnings, and all sixteen demos run green against a live
+   instance — see [VERIFICATION.md](VERIFICATION.md) for that run and the six
+   defects it turned up. The two elements previously flagged as
+   version-sensitive are now settled: a dynamic SOW topic needs its regex in
+   `<Pattern>` (in `<Name>` it is taken literally and silently matches nothing),
+   and the journal-ageing module is `amps-action-do-remove-journal`.
+
+   Both take a second to re-check on your own build:
 
    ```bash
    ./server/scripts/amps.sh validate
    ./server/scripts/amps.sh validate amps-config-bounded-retention.xml
    ```
-
-   Both are additive — delete either and the instance still starts.
 
 Everything else in the configuration is exercised by the demos.

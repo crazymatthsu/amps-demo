@@ -1,4 +1,6 @@
 # The AMPS distribution tarball is third-party and large; keep it out of git.
+# Some releases ship as a plain .tar, others gzipped - ignore every form.
+*.tar
 *.tar.gz
 *.tgz
 !.gitignore
