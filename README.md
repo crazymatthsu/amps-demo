@@ -113,6 +113,7 @@ The combination imposes rules that are easy to get wrong and silent when you do 
 | [protobuf-json-and-amps.md](docs/src/protobuf-json-and-amps.md) | schema and encoding design |
 | [fix-order-state.md](docs/src/fix-order-state.md) | FIX 4.2 order state: the AMPS/gateway split |
 | [native-fix-and-nvfix.md](docs/src/native-fix-and-nvfix.md) | raw FIX/NVFIX message types, natively parsed |
+| [deploying-utils-to-linux.md](docs/src/deploying-utils-to-linux.md) | packaging the utils tools for deployment |
 
 ## Requirements
 

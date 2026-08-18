@@ -109,6 +109,15 @@ Subcommands are `file-to-amps`, `sow-to-file`, `txlog-to-file` and `truncate`.
 Run from the repository root — relative `--file` / `--out` paths resolve against
 it.
 
+## Deploying to a Linux box
+
+The tools do not need the repository or Gradle at runtime: `installDist`
+already produces a relocatable `bin/` + `lib/` tree, and `distTar` wraps it as
+a versioned tarball that runs anywhere with a Java 21 JRE. The analysis of the
+options — tarball, fat jar, jpackage, container, rpm/deb — and the recommended
+path are in
+[docs/src/deploying-utils-to-linux.md](../docs/src/deploying-utils-to-linux.md).
+
 ## Notes
 
 - Undeclared topics keep no state, so `ampsToFileSOW.sh` correctly reports zero
