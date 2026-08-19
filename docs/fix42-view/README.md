@@ -19,18 +19,22 @@ The state-machine semantics referenced throughout are the binding contract in
    the five `algo/*` topics are straightforward to declare, journal, and
    subscribe to — details and the one ordering subtlety in
    [01-ingress-fix42-into-amps.md](01-ingress-fix42-into-amps.md).
-2. **A view alone: no.** Every construction that tries to derive the required
-   order state inside AMPS — SOW keying, aggregated views, joined views — fails
-   on at least one required behaviour, and four of the failures are structural,
-   not syntactic: chain identity across replaces, latest-*valid* (not
-   latest-arrived) report selection, pending-request correlation, and
-   sequence-dependent status. The field-by-field analysis is
-   [02-amps-view-feasibility.md](02-amps-view-feasibility.md).
+2. **Pure AMPS: further than first thought, but not the full contract.** The
+   optional **chaining key generator** module solves chain identity across
+   cancel/replaces server-side — its documented example is literally FIX tags
+   11/41 — which upgrades the zero-code option to a legitimate
+   monitoring-grade blotter (latest venue truth per chain). Three blockers
+   remain structural and unmoved: latest-*valid* (not latest-arrived) report
+   selection, pending-request correlation (including staged amend terms —
+   exactly the "pending qty/price change" fields), and sequence-dependent
+   status. The field-by-field analysis, the near-miss constructions, and the
+   module deep-dive are [02-amps-view-feasibility.md](02-amps-view-feasibility.md).
 3. **So: a thin state machine outside AMPS**, with AMPS as the journalled
    system of record on the way in and the queryable/subscribable state store on
-   the way out — and views still earn their keep *above* the machine's output,
-   for aggregations like exposure by account. The proposed architecture,
-   recovery story, and the mapping onto the docs/fix42 contract are in
+   the way out — the chaining module earning a place *beside* the machine as a
+   raw chained blotter and consistency check, and views *above* it, for
+   aggregations like exposure by account. The proposed architecture, recovery
+   story, and the mapping onto the docs/fix42 contract are in
    [03-proposed-architecture.md](03-proposed-architecture.md).
 
 This is the same conclusion this repository already reached for a smaller

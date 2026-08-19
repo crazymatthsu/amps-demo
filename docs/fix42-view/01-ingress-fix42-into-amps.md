@@ -45,7 +45,7 @@ state machine's output is derivable from it by replay, its ExecID-dedupe set is
 rebuilt from it, and a rules change is deployed by replaying it through a new
 machine. Add every `algo/*` topic to `<TransactionLog>`. (This is the same
 reasoning as `fix.events` in
-[amps-config.xml](../../server/config/amps-config.xml) and
+[the default flow's amps-config.xml](../../server/config/flows/default/amps-config.xml) and
 [transaction-log-sizing.md](../src/transaction-log-sizing.md): journal the
 stream you replay, not the state you derive.)
 
@@ -103,6 +103,17 @@ Illustrative declarations (not applied anywhere yet):
 </TransactionLog>
 ```
 
+**An optional seventh topic: the chained blotter.** AMPS's optional chaining
+key generator module can key a SOW topic on the transitive 41→11 chain — one
+record per order chain, computed server-side. If adopted (the full analysis,
+including why it must not replace the journalled ingress topics, is
+[02-amps-view-feasibility.md](02-amps-view-feasibility.md) §4), it is an
+*additional* topic the gateway delta-publishes every message into, e.g.
+`algo/chain` with `<KeyGenerator><Module>key-chaining</Module>` and keys
+`/11`, `/41` (candidates `/37`, `/17` — verify). It cannot be one of the six
+per-type topics: the generator chains only within a single topic, so D and G
+split across topics never meet.
+
 A `<Pattern>^algo/(D|G|F|8|9|Q)$</Pattern>` dynamic-SOW family would be more
 compact, but a pattern topic shares **one** `<Key>` across everything it
 captures — and no single tag serves: `/11` is right for requests but wrong for
@@ -144,6 +155,13 @@ layout supports everything in
 [03-proposed-architecture.md](03-proposed-architecture.md); the analysis
 proceeds with the five-plus-one topics as asked.
 
+The chaining key generator tilts this trade further toward one topic: chain
+collapse works only among messages of a single topic, so if the chained
+blotter is wanted, single-topic ingress gets it by adding one `<KeyGenerator>`
+element, while the per-type layout needs a seventh, everything-again topic
+(§2). Ordering plus chaining is two arguments for `algo/fix` against the
+split's naming convenience.
+
 ## 4. Verify on your build
 
 House rule ([README](../../README.md)): claims about config behaviour get
@@ -164,3 +182,9 @@ re-checked against a live instance. One-second checks, in order:
    `algo/D` is expected to work (AMPS topic names are strings and the docs use
    slashes in examples), but nothing here has run it. If it surprises,
    `algo.D` changes nothing else in this analysis.
+5. If the chained blotter is adopted: that
+   `libamps_id_chaining_key_generator.so` ships in your AMPS tarball and loads
+   via `<Module>`, that `validate` accepts the `<KeyGenerator>` element, and
+   the module's behaviour on a message missing the primary key field (35=Q has
+   no tag 11) — undocumented, so test it — plus the two-chains error path
+   ([02-amps-view-feasibility.md](02-amps-view-feasibility.md) §4.3).

@@ -14,7 +14,7 @@ the aggregation layer above the derived state.
 | --- | --- | --- |
 | CumQty, AvgPx, LeavesQty, OrdStatus-on-reports, acked terms | the venue's 35=8 | FIX 4.2 reports are cumulative snapshots — nothing to compute |
 | ordered durable ingress, replay from any point | AMPS transaction log | one journal, total order across the `algo/*` family |
-| chain identity, pending correlation, dedupe/stale arbitration, bust/correct filing, status sequencing | **the state machine (this proposal)** | the four behaviours no view expresses |
+| chain identity, pending correlation, dedupe/stale arbitration, bust/correct filing, status sequencing | **the state machine (this proposal)** | the behaviours no view expresses — chain identity alone is optionally delegable to the chaining key generator module (§5) |
 | latest-per-order queryable state, snapshot+live, deltas, OOF, TTL | AMPS SOW (`algo/orders` etc.) | that is what a SOW is |
 | exposure/count aggregations, blotter filters | AMPS views + filtered subscriptions **over the derived topics** | keys stable, no sequence logic left |
 
@@ -47,7 +47,12 @@ the aggregation layer above the derived state.
                     │
         consumers: sow / sow_and_subscribe (+ content filters, OOF),
         delta_subscribe, admin SQL console; views for aggregation
-        (exposure by account/symbol, counts by status — see 02 §5)
+        (exposure by account/symbol, counts by status — see 02 §6)
+
+  optional, beside the machine (§5):
+  gateway also delta-publishes every message into
+  algo/chain — SOW, KeyGenerator key-chaining (/11, /41):
+  the raw chained blotter: latest venue truth per chain, zero code
 ```
 
 The same split as this repo's shipped `fix.events`/`fix.orders` pattern
@@ -134,7 +139,7 @@ The machine is in-memory and deterministic; the journal makes that a feature.
   simplest, provably convergent, and it doubles as the deployment path for
   rule changes: stand up a machine with the new rules, replay, cut over.
 - **Journal retention bounds replay depth.** Ageing out `algo/*` journal files
-  ([amps-config-bounded-retention.xml](../../server/config/amps-config-bounded-retention.xml)
+  ([the bounded-retention flow](../../server/config/flows/bounded-retention/amps-config.xml)
   pattern) trades replay horizon for disk; if the feed is session-scoped
   (daily), retention past a few sessions buys little. Decide retention and the
   recovery mode together.
@@ -155,7 +160,7 @@ false`) with **OOF** notifying when an order leaves the filter (an order going
 terminal literally falls out of an open-orders blotter); `delta_subscribe` for
 changed-fields-only updates (an OrderState row is wide; a fill touches ~6
 fields); optional `<Expiration>` on terminal rows if the SOW should stay
-bounded intraday; the admin SQL console for eyeballing state; and the §5
+bounded intraday; the admin SQL console for eyeballing state; and the §6
 aggregation views from
 [02-amps-view-feasibility.md](02-amps-view-feasibility.md) — the one place a
 view belongs in this design.
@@ -164,7 +169,39 @@ view belongs in this design.
 (less wire, and delta-subscribers then receive exactly the changed fields),
 with the usual trap list in [delta-updates.md](../src/delta-updates.md).
 
-## 5. Relationship to what this repo already ships
+## 5. Where the chaining key generator fits
+
+The optional `key-chaining` module — analysed in depth in
+[02-amps-view-feasibility.md](02-amps-view-feasibility.md) §4 — can play three
+roles in this architecture, in increasing order of commitment:
+
+**(a) The raw chained blotter, beside the machine — recommended.** A seventh
+topic (`algo/chain`, keys `/11` + `/41`) that the gateway delta-publishes every
+message into. Zero code, and it earns its config twice: as a
+monitoring/debugging surface ("show me the raw venue truth for this chain,
+unfiltered by our rules"), and as a **bring-up consistency check** — the
+machine's `algo/orders` venue-sourced fields (39/14/151/6) must agree with the
+chained record for every quiet chain, and a diff between the two topics is a
+cheap continuous audit of both the machine and the feed.
+
+**(b) Identity delegation to the module.** In principle the machine could
+subscribe to the chained topic and adopt the server-assigned SowKey as its
+`OrderKey`, dropping the `key_by_order_id`/`key_by_clordid` maps of contract
+§3. Declined as the default, for three reasons: the machine must consume from
+the plain journalled topics anyway (the module *drops* a message that resolves
+to two chains — acceptable for a blotter, not for the system of record);
+SowKey visibility on live deliveries and especially on bookmark **replay** is
+unverified, and replay is the recovery path; and the maps are a few dozen
+fully unit-tested lines whose ownership keeps the machine deterministic and
+self-contained. Revisit only if id-map memory ever becomes a measured cost.
+
+**(c) The module instead of the machine.** Legitimate when monitoring-grade
+state is enough — no pending windows, no staged-terms correctness, trust the
+feed order. That option, its exact field-by-field quality, and its
+disqualifiers for this contract are
+[02-amps-view-feasibility.md](02-amps-view-feasibility.md) §§4.1–4.2 and §7.
+
+## 6. Relationship to what this repo already ships
 
 The shipped
 [FixOrderStateMachine](../../common/src/main/java/com/demo/amps/common/fix/FixOrderStateMachine.java)
@@ -191,12 +228,14 @@ Deliberate non-goals inherited from both the contract and
 allocations, GTC day boundaries, 35=H reconciliation, venues that rotate
 tag 37 across replaces.
 
-## 6. Verify on your build
+## 7. Verify on your build
 
 The checklist from
 [01-ingress-fix42-into-amps.md](01-ingress-fix42-into-amps.md) §4 (fix-type
 key syntax, regex bookmark subscriptions, text-valued fix fields, slashes in
-topic names), plus, for this document: view/aggregation syntax for the §4
-aggregations if you adopt them, and delta semantics on wide JSON rows against
+topic names, and — if `algo/chain` is adopted — the chaining module's
+presence, load, missing-primary and two-chains behaviour), plus, for this
+document: view/aggregation syntax for the §4 aggregations if you adopt them,
+and delta semantics on wide JSON rows against
 [delta-updates.md](../src/delta-updates.md)'s trap list. `./server/scripts/amps.sh validate`
 remains the one-second first check for any config change.

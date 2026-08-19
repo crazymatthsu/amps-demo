@@ -70,12 +70,21 @@ math:
 
 **1. Chain identity across cancel/replace.** A 35=G moves the order to a new
 ClOrdID (11), linked backwards by OrigClOrdID (41). A SOW keyed on `/clOrdId`
-fragments one order across records as it is replaced; there is no way to tell a
-SOW key to follow a moving identifier, and no view computes the transitive
-closure of 41→11 chains. Something must remember "B1 continues A1" and keep the
-record under one stable key. (Keying on OrderID (37) helps only if your venue
-keeps 37 stable across replaces and you never need pre-ack state — and you still
-cannot key the events that precede the first ack.)
+fragments one order across records as it is replaced, and no view computes the
+transitive closure of 41→11 chains. Something must remember "B1 continues A1"
+and keep the record under one stable key. (Keying on OrderID (37) helps only if
+your venue keeps 37 stable across replaces and you never need pre-ack state —
+and you still cannot key the events that precede the first ack.)
+
+One correction since this document was first written: AMPS's optional
+**chaining key generator** module *can* make a SOW key follow the 41→11 chain —
+its documented example is exactly this case — so this item, alone of the three,
+has an off-the-shelf server-side answer, with real caveats (single topic only,
+merge semantics unchanged, messages that resolve ambiguously are dropped). The
+analysis is in
+[docs/fix42-view/02-amps-view-feasibility.md](../fix42-view/02-amps-view-feasibility.md) §4;
+items 2 and 3 below stand unchanged, so the conclusion of this document does
+too.
 
 **2. Pending-request bookkeeping.** "Acknowledged at 500, replace to 800 in
 flight" requires correlating an outstanding request (35=G/F — different message
