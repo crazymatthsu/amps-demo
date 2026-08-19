@@ -300,61 +300,34 @@ than by an event or by record age. "Clear the day's working orders after the
 close" is not something a TTL expresses — 20:30 is not an age — and wiring a cron
 job to a client to do it is more moving parts than the job deserves.
 
-AMPS runs it itself, through `<Actions>`. Each action pairs a condition (`<On>`)
-with something to do (`<Do>`):
+AMPS runs it itself, through `<Actions>`, which pair a condition (`<On>`) with
+something to do (`<Do>`):
 
 ```xml
-<Actions>
-  <Action>
-    <On>
-      <Module>amps-action-on-schedule</Module>
-      <Options><Crontab>30 20 * * *</Crontab></Options>
-    </On>
-    <Do>
-      <Module>amps-action-do-delete-sow</Module>
-      <Options>
-        <Topic>orders</Topic>
-        <MessageType>json</MessageType>
-        <Filter>/status = 'ORDER_STATUS_FILLED' OR /status = 'ORDER_STATUS_CANCELLED' OR /status = 'ORDER_STATUS_REJECTED'</Filter>
-      </Options>
-    </Do>
-  </Action>
-</Actions>
+<Action>
+  <On>
+    <Module>amps-action-on-schedule</Module>
+    <Options><Crontab>30 20 * * *</Crontab></Options>
+  </On>
+  <Do>
+    <Module>amps-action-do-delete-sow</Module>
+    <Options>
+      <Topic>orders</Topic>
+      <MessageType>json</MessageType>
+      <Filter>/status = 'ORDER_STATUS_FILLED'</Filter>
+    </Options>
+  </Do>
+</Action>
 ```
 
+Everything in point 2 above still applies, on a timer: on a journalled topic
+tonight's sweep *adds* one delete record per key. The filter is the entire safety
+mechanism, the schedule fires on the server's clock (UTC in the container), and
+one of the two module names above is not yet verified against a running build.
+All three are worth reading about before scheduling one.
+→ [scheduled-maintenance.md](scheduled-maintenance.md), and
 [`amps-config-maintenance.xml`](../../server/config/amps-config-maintenance.xml)
-is the full instance: an unfiltered nightly wipe of `quote-cache`, the filtered
-sweep of `orders` above, and journal ageing five minutes later. Run it with
-`AMPS_CONFIG=amps-config-maintenance.xml ./server/scripts/amps.sh start`.
-
-Four things this shifts rather than solves:
-
-- **The filter is the whole safety mechanism.** Omit it and the action deletes
-  everything in the topic at 20:30, including the orders that are still working.
-  A scheduled delete has no chance to change its mind, so express "finished" in
-  the filter, not in a comment.
-- **It is still a write.** Everything in point 2 above applies, on a timer: on a
-  journalled topic, tonight's sweep *adds* one delete record per key to the
-  transaction log. The disk it reclaims is SOW memory and query time, not
-  journal. That is why the free wipe in that config targets an unjournalled
-  transient topic, and why the journal-ageing action runs afterwards.
-- **The clock is the server's.** The container is UTC unless `TZ` says otherwise,
-  so `30 20 * * *` means 20:30 UTC, not 8:30pm where you are. `amps.sh` passes
-  `AMPS_TZ` through and `amps.sh status` prints the server's clock.
-- **Module names are version-sensitive.** They have moved between releases, and
-  this repository shipped a journal-ageing module that exists in no build until a
-  real server rejected it (see [VERIFICATION.md](../../VERIFICATION.md)). Read
-  the list out of your own binary rather than trusting the example:
-
-  ```bash
-  ./server/scripts/amps.sh modules
-  ./server/scripts/amps.sh validate amps-config-maintenance.xml
-  ```
-
-  `amps-action-on-schedule` and `amps-action-do-remove-journal` are confirmed on
-  5.3.5.135; `amps-action-do-delete-sow` and the `<Crontab>` option in the
-  example above are **not yet confirmed on any build** and are exactly what those
-  two commands are for.
+for the full instance.
 
 ## How expiration works
 

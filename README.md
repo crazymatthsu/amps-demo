@@ -114,6 +114,7 @@ The combination imposes rules that are easy to get wrong and silent when you do 
 | [fix-order-state.md](docs/src/fix-order-state.md) | FIX 4.2 order state: the AMPS/gateway split |
 | [native-fix-and-nvfix.md](docs/src/native-fix-and-nvfix.md) | raw FIX/NVFIX message types, natively parsed |
 | [deploying-utils-to-linux.md](docs/src/deploying-utils-to-linux.md) | packaging the utils tools for deployment |
+| [scheduled-maintenance.md](docs/src/scheduled-maintenance.md) | nightly SOW cleanup on a schedule, with `<Actions>` |
 
 ## Requirements
 

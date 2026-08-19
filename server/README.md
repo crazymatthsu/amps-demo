@@ -145,7 +145,7 @@ Two things worth knowing before scheduling a wipe of a real topic: deleting SOW
 records is a *write*, so on a journalled topic it grows the transaction log
 before anything shrinks; and if the rule you want is really about record age,
 `<Expiration>` does it continuously for free.
-→ [docs/src/sow-and-recovery.md](../docs/src/sow-and-recovery.md)
+→ [docs/src/scheduled-maintenance.md](../docs/src/scheduled-maintenance.md)
 
 ## The data directory is the point
 
