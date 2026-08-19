@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AMPS instance with a nightly SOW maintenance window.
+
+  This variant exists to answer one question: how do you make the server clear
+  SOW records on a schedule, without an external cron job and without a client
+  connecting to do it? The answer is the <Actions> block at the bottom - AMPS
+  pairs a condition (<On>) with an action (<Do>), and one of the shipped
+  conditions is a schedule.
+
+  The window here runs at 20:30 every night:
+
+      20:30  delete every record in quote-cache
+      20:30  delete FINISHED orders from `orders`, leaving live ones alone
+      20:35  remove journal files older than a day
+
+  Start it with:
+
+      AMPS_CONFIG=amps-config-maintenance.xml ./server/scripts/amps.sh start
+
+  ===========================================================================
+  READ THIS BEFORE YOU DEPEND ON THE SCHEDULE
+  ===========================================================================
+
+  1. TIMEZONE. The action fires on the SERVER's clock, and the container runs
+     UTC unless you tell it otherwise, so "20:30" means 20:30 UTC by default -
+     not 8:30pm where you are. amps.sh passes AMPS_TZ through as TZ:
+
+         AMPS_TZ=America/New_York AMPS_CONFIG=amps-config-maintenance.xml \
+             ./server/scripts/amps.sh start
+
+     Check what the server thinks the time is with 'amps.sh status'.
+
+  2. TWO NAMES IN THE <Actions> BLOCK ARE UNVERIFIED. This repository's
+     verification run (see VERIFICATION.md) settled the journal action -
+     amps-action-do-remove-journal with <Age> is real, and the module name that
+     was in here before it was not. The SOW-deleting module and the fixed
+     time-of-day schedule option have NOT been through that check. Settle both
+     against your own build in two commands:
+
+         ./server/scripts/amps.sh modules     list what this server actually has
+         ./server/scripts/amps.sh validate amps-config-maintenance.xml
+
+     'modules' reads the registered module names out of the server binary, so
+     it answers half the question outright; for OPTION names, 'validate' names
+     the one it rejected. The enclosing
+     structure (<Actions><Action><On>/<Do>, <Module>, <Options>) is stable
+     across releases; only the identifiers move.
+
+  3. DELETING SOW RECORDS IS A WRITE. A scheduled SOW delete is not a way to
+     reclaim disk on a journalled topic: each deleted record produces a delete
+     record in the transaction log, so a nightly wipe of a busy journalled
+     topic makes the journal BIGGER tonight and smaller only once the journal
+     ages out. That is why the cheap action here targets quote-cache, which is
+     transient and unjournalled, and why the `orders` action is filtered rather
+     than a wipe. See docs/src/transaction-log-sizing.md.
+
+  4. IF ALL YOU WANT IS BOUNDED SOW GROWTH, use <Expiration> on the topic
+     instead. It is continuous, needs no schedule, and costs nothing to get
+     right. A scheduled delete earns its place when the rule is about business
+     time ("clear the day's working orders after the close") rather than about
+     record age.
+  ===========================================================================
+-->
+<AMPSConfig>
+
+    <Name>amps-demo-maintenance</Name>
+
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <SQLTransport>amps-websocket</SQLTransport>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <!-- Actions log when they fire. At info level you get one line per
+                 run, which is how you confirm the schedule works without
+                 waiting until 20:30: grep the log for the module name. -->
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <SOW>
+        <!-- The topic the filtered nightly delete targets. Same shape as the
+             main config, so the demo publishers work against this instance. -->
+        <Topic>
+            <Name>orders</Name>
+            <MessageType>json</MessageType>
+            <Key>/orderId</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <Topic>
+            <Name>instruments</Name>
+            <MessageType>json</MessageType>
+            <Key>/symbol</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- Deliberately WITHOUT the <Expiration>60s</Expiration> the main
+             config gives this topic: here the nightly action is what clears it,
+             so the two mechanisms can be compared rather than confused. In
+             production, pick one. -->
+        <Topic>
+            <Name>quote-cache</Name>
+            <MessageType>json</MessageType>
+            <Key>/symbol</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>transient</Durability>
+        </Topic>
+    </SOW>
+
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
+        <!-- 10MB is the floor; smaller values are reset with a warning. -->
+        <MinJournalSize>10MB</MinJournalSize>
+
+        <Topic>
+            <Name>orders</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>instruments</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <!-- quote-cache is absent on purpose: it is the topic the nightly wipe
+             clears, and a wipe of a journalled topic writes one delete record
+             per key. Not journalling it makes the maintenance free. -->
+    </TransactionLog>
+
+    <!--
+      ===================================================================
+      Actions: the maintenance window
+      ===================================================================
+      Each <Action> is one <On> condition and one <Do>. Nothing correlates them
+      beyond sitting in the same <Action>, so three actions at the same time are
+      three independent schedules that happen to agree.
+
+      On the schedule option: <Every> takes an interval, which is what the
+      journal-ageing example in amps-config-bounded-retention.xml uses. An
+      interval cannot express "at 20:30" - <Every>1d</Every> fires 24 hours
+      after the server started, so the maintenance window drifts to whenever
+      you last restarted. A wall-clock schedule needs the crontab-style option
+      used below.
+
+      If your build rejects <Crontab>, run 'amps.sh modules' and use the option
+      name it reports for this module; the usual alternative spelling is to put
+      the same crontab expression in <Every>:
+
+          <Options><Every>30 20 * * *</Every></Options>
+
+      Crontab fields are: minute hour day-of-month month day-of-week. So
+      '30 20 * * *' is 20:30 every day, and '35 20 * * 1-5' would be weeknights
+      only.
+      ===================================================================
+    -->
+    <Actions>
+
+        <!-- 1. The whole-topic delete, on the topic where it is free.
+
+               No <Filter>, so every record in quote-cache goes. This is the
+               literal "delete the SOW every night" schedule; it is safe here
+               because the topic is transient (memory only) and unjournalled,
+               so the delete costs neither disk nor journal. -->
+        <Action>
+            <On>
+                <Module>amps-action-on-schedule</Module>
+                <Options>
+                    <Crontab>30 20 * * *</Crontab>
+                </Options>
+            </On>
+            <Do>
+                <Module>amps-action-do-delete-sow</Module>
+                <Options>
+                    <Topic>quote-cache</Topic>
+                    <MessageType>json</MessageType>
+                </Options>
+            </Do>
+        </Action>
+
+        <!-- 2. The version you actually want on a real topic.
+
+               Same schedule, but a <Filter> so only finished orders are
+               removed: an end-of-day sweep must not delete an order that is
+               still working. The filter is ordinary AMPS filter syntax and the
+               values are this project's OrderStatus enum names, so it matches
+               records the demo publishers actually write.
+
+               Without the <Filter> this action empties the topic. On a topic
+               anyone depends on, the filter is the entire safety mechanism -
+               a scheduled delete gets no chance to reconsider at 20:30.
+
+               Note what this does NOT do: the orders are still in the
+               transaction log, so a bookmark replay from before 20:30 still
+               produces them. Deleting from the SOW forgets current state, not
+               history. -->
+        <Action>
+            <On>
+                <Module>amps-action-on-schedule</Module>
+                <Options>
+                    <Crontab>30 20 * * *</Crontab>
+                </Options>
+            </On>
+            <Do>
+                <Module>amps-action-do-delete-sow</Module>
+                <Options>
+                    <Topic>orders</Topic>
+                    <MessageType>json</MessageType>
+                    <Filter>/status = 'ORDER_STATUS_FILLED' OR /status = 'ORDER_STATUS_CANCELLED' OR /status = 'ORDER_STATUS_REJECTED'</Filter>
+                </Options>
+            </Do>
+        </Action>
+
+        <!-- 3. Journal ageing, five minutes after the SOW sweep.
+
+               This is the action that actually reclaims disk, and it is the
+               one whose module name is verified (5.3.5.135). Running it after
+               the deletes is deliberate: tonight's delete records are minutes
+               old and stay, while yesterday's traffic goes.
+
+               Same block as amps-config-bounded-retention.xml, which explains
+               how to size <Age> against your slowest consumer. -->
+        <Action>
+            <On>
+                <Module>amps-action-on-schedule</Module>
+                <Options>
+                    <Crontab>35 20 * * *</Crontab>
+                </Options>
+            </On>
+            <Do>
+                <Module>amps-action-do-remove-journal</Module>
+                <Options>
+                    <Age>1d</Age>
+                </Options>
+            </Do>
+        </Action>
+
+    </Actions>
+
+</AMPSConfig>

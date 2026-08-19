@@ -15,6 +15,7 @@
 #   ./server/scripts/amps.sh probe      inspect the image: where is ampServer?
 #   ./server/scripts/amps.sh validate [config.xml]
 #                                       run the server's own config check
+#   ./server/scripts/amps.sh modules    list the action modules this build has
 #
 # Environment overrides:
 #   CONTAINER_ENGINE   podman | docker            (default: podman, else docker)
@@ -27,6 +28,11 @@
 #   AMPS_WS_PORT       host port for websocket              (default: 9008)
 #   AMPS_ADMIN_PORT    host port for the admin interface    (default: 8085)
 #   AMPS_CONTAINER     container name             (default: amps-demo)
+#   AMPS_TZ            server timezone            (default: the image's, UTC)
+#                                                  scheduled <Actions> fire on
+#                                                  the server clock, so set this
+#                                                  if a schedule must mean local
+#                                                  time
 #
 # There is no public AMPS server image. 60East distributes the server as a
 # release tarball behind the evaluation sign-up at crankuptheamps.com; build an
@@ -57,6 +63,11 @@ AMPS_PORT="${AMPS_PORT:-9007}"
 AMPS_WS_PORT="${AMPS_WS_PORT:-9008}"
 AMPS_ADMIN_PORT="${AMPS_ADMIN_PORT:-8085}"
 AMPS_CONTAINER="${AMPS_CONTAINER:-amps-demo}"
+# Scheduled actions (see amps-config-maintenance.xml) fire on the server's
+# clock, and the container's clock is UTC unless TZ says otherwise - so
+# "every night at 20:30" means 20:30 UTC by default. Empty leaves the image
+# as it is.
+AMPS_TZ="${AMPS_TZ:-}"
 
 # Container paths.
 CONTAINER_CONFIG_DIR=/amps/config
@@ -89,6 +100,11 @@ ENGINE="$(engine)"
 PLATFORM_ARGS=()
 if [[ -n "${AMPS_PLATFORM}" ]]; then
     PLATFORM_ARGS=(--platform "${AMPS_PLATFORM}")
+fi
+
+TZ_ARGS=()
+if [[ -n "${AMPS_TZ}" ]]; then
+    TZ_ARGS=(-e "TZ=${AMPS_TZ}")
 fi
 
 # Every command that runs a container needs a real AMPS image, and there is no
@@ -159,9 +175,11 @@ cmd_start() {
     echo "  image:  ${AMPS_IMAGE}"
     echo "  config: ${AMPS_CONFIG}"
     echo "  data:   ${DATA_DIR}"
+    [[ -n "${AMPS_TZ}" ]] && echo "  tz:     ${AMPS_TZ}"
 
     "${ENGINE}" run -d \
         ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} \
+        ${TZ_ARGS[@]+"${TZ_ARGS[@]}"} \
         --name "${AMPS_CONTAINER}" \
         -p "${AMPS_PORT}:9007" \
         -p "${AMPS_WS_PORT}:9008" \
@@ -205,6 +223,11 @@ cmd_status() {
         echo "  websocket   ws://127.0.0.1:${AMPS_WS_PORT}/amps/json"
         echo "  admin UI    http://127.0.0.1:${AMPS_ADMIN_PORT}/"
         echo "  data        ${DATA_DIR}"
+        # The clock a scheduled <Action> fires on. Worth printing: it is the
+        # server's, not yours, and by default it is UTC.
+        local server_now
+        server_now="$("${ENGINE}" exec "${AMPS_CONTAINER}" date 2>/dev/null || true)"
+        [[ -n "${server_now}" ]] && echo "  clock       ${server_now} (server)"
     else
         echo "AMPS is not running"
         if container_exists; then
@@ -348,6 +371,34 @@ Run '${AMPS_BIN} --help' in the image and check what it offers:
     return 1
 }
 
+# Which action modules does this build actually have?
+#
+# Module names have moved between AMPS releases, and a wrong one is rejected at
+# startup with no hint as to the right one - this repository already shipped a
+# journal-ageing module that does not exist. The names are registered inside the
+# server, so read them out of the binary rather than guessing again.
+#
+# Option names (<Age>, <Every>, <Filter> ...) are too generic to extract this
+# way; for those, put your config in front of 'amps.sh validate' and let the
+# server's rejection message name the one it did not like.
+cmd_modules() {
+    require_image
+    local pattern='amps-action-(on|do)-[a-z0-9-]+'
+    echo "--- action modules found in ${AMPS_IMAGE} ---"
+    "${ENGINE}" run --rm ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} \
+        --entrypoint sh "${AMPS_IMAGE}" -c "
+            bin='${AMPS_BIN}'
+            root=\$(dirname \$(dirname \"\$bin\"))
+            {
+                grep -haoE '${pattern}' \"\$bin\" 2>/dev/null
+                find \"\$root\" -name '*.so' -exec grep -haoE '${pattern}' {} + 2>/dev/null
+            } | sort -u
+        " || die "could not run a shell in this image (try 'amps.sh probe')"
+    echo
+    echo "empty output does not prove the build has no actions - it can also mean"
+    echo "AMPS_BIN points somewhere else. Check with 'amps.sh probe'."
+}
+
 usage() {
     # Print the header comment block: every line from the second until the first
     # line that is not a comment.
@@ -364,6 +415,7 @@ case "${1:-}" in
     reset)    shift; cmd_reset "$@" ;;
     probe)    shift; cmd_probe "$@" ;;
     validate) shift; cmd_validate "$@" ;;
+    modules)  shift; cmd_modules "$@" ;;
     ""|-h|--help|help) usage ;;
     *)        die "unknown command '$1' (try --help)" ;;
 esac

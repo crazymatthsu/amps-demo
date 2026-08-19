@@ -137,7 +137,7 @@ journalled and age files out on a schedule.
       <Options><Every>5m</Every></Options>
     </On>
     <Do>
-      <Module>amps-action-do-delete-old-journal-files</Module>
+      <Module>amps-action-do-remove-journal</Module>
       <Options>
         <!-- Sized for PEAK rate, not average: 10 GB is ~10 minutes at 3x. -->
         <Age>10m</Age>
@@ -147,14 +147,15 @@ journalled and age files out on a schedule.
 </Actions>
 ```
 
-> **Verify the action module and its options against your AMPS version.** Module
-> names and option names have moved between releases, and this repository was
-> written without a running server to check them against. The
-> `<Actions><Action><On>`/`<Do>` structure is stable. Run
-> `./server/scripts/amps.sh validate amps-config-market-data.xml`, and if a name
-> is rejected, look up "Actions" in the AMPS User Guide for your build. In
-> particular, **check whether your version's journal-ageing action takes a size
-> or total-bytes option as well as an age** — a size threshold is a better fit for
+> **The module name above is verified against AMPS 5.3.5.135**; the name this
+> document originally carried was not, and does not exist in any build (see
+> [VERIFICATION.md](../../VERIFICATION.md)). Names move between releases while
+> the `<Actions><Action><On>`/`<Do>` structure stays stable, so on another build
+> run `./server/scripts/amps.sh modules` for the list this server actually has,
+> then `./server/scripts/amps.sh validate amps-config-market-data.xml`. The
+> option names are the part still worth checking yourself here: in particular,
+> **whether your version's journal-ageing action takes a size or total-bytes
+> option as well as an age** — a size threshold is a better fit for
 > "keep it under 10 GB" than a time window, because it tracks the thing you
 > actually care about and does not need re-tuning when volumes change.
 

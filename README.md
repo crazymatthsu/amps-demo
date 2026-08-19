@@ -148,4 +148,11 @@ Two things to know:
    ./server/scripts/amps.sh validate amps-config-bounded-retention.xml
    ```
 
+   The one config that has *not* been through that run is
+   [`amps-config-maintenance.xml`](server/config/amps-config-maintenance.xml),
+   which schedules a nightly SOW cleanup with `<Actions>`; its SOW-deleting
+   module and wall-clock schedule option are flagged in the file itself.
+   `./server/scripts/amps.sh modules` lists the action modules your build
+   actually registers, which is the cheap way to settle any of this.
+
 Everything else in the configuration is exercised by the demos.
