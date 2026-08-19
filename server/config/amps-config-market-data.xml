@@ -181,15 +181,17 @@
           Smaller files track the cap more tightly at the cost of more
           frequent rollover.
 
-      VERIFY THE MODULE NAMES against your AMPS version before relying on
-      this. Action module and option names have moved between releases, and
-      this file was written without a running server to check them. The
-      surrounding <Actions><Action><On>/<Do> structure is stable. Check with:
+      The two module names below are verified against AMPS 5.3.5.135. The name
+      this block originally carried was not, and exists in no build - which is
+      the argument for checking rather than trusting, since names move between
+      releases while the surrounding <Actions><Action><On>/<Do> structure does
+      not. On another build:
 
+          ./server/scripts/amps.sh modules
           ./server/scripts/amps.sh validate amps-config-market-data.xml
 
-      and look up "Actions" in the AMPS User Guide for your build if a name is
-      rejected. In particular, check whether your version's journal-ageing
+      The options are the part still worth checking here: in particular, whether
+      your version's journal-ageing
       action accepts a SIZE or total-bytes option as well as an age - a size
       threshold is a better fit for "keep it under 10 GB" than a time window,
       because it tracks the thing you care about and needs no re-tuning when
@@ -208,7 +210,7 @@
                 </Options>
             </On>
             <Do>
-                <Module>amps-action-do-delete-old-journal-files</Module>
+                <Module>amps-action-do-remove-journal</Module>
                 <Options>
                     <Age>10m</Age>
                 </Options>

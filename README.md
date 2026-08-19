@@ -113,6 +113,8 @@ The combination imposes rules that are easy to get wrong and silent when you do 
 | [protobuf-json-and-amps.md](docs/src/protobuf-json-and-amps.md) | schema and encoding design |
 | [fix-order-state.md](docs/src/fix-order-state.md) | FIX 4.2 order state: the AMPS/gateway split |
 | [native-fix-and-nvfix.md](docs/src/native-fix-and-nvfix.md) | raw FIX/NVFIX message types, natively parsed |
+| [deploying-utils-to-linux.md](docs/src/deploying-utils-to-linux.md) | packaging the utils tools for deployment |
+| [scheduled-maintenance.md](docs/src/scheduled-maintenance.md) | nightly SOW cleanup on a schedule, with `<Actions>` |
 
 ## Requirements
 
@@ -146,5 +148,12 @@ Two things to know:
    ./server/scripts/amps.sh validate
    ./server/scripts/amps.sh validate amps-config-bounded-retention.xml
    ```
+
+   The one config that has *not* been through that run is
+   [`amps-config-maintenance.xml`](server/config/amps-config-maintenance.xml),
+   which schedules a nightly SOW cleanup with `<Actions>`; its SOW-deleting
+   module and wall-clock schedule option are flagged in the file itself.
+   `./server/scripts/amps.sh modules` lists the action modules your build
+   actually registers, which is the cheap way to settle any of this.
 
 Everything else in the configuration is exercised by the demos.

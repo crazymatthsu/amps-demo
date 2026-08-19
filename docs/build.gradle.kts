@@ -21,6 +21,8 @@ val requiredDocuments = listOf(
     "protobuf-json-and-amps.md",
     "fix-order-state.md",
     "native-fix-and-nvfix.md",
+    "scheduled-maintenance.md",
+    "deploying-utils-to-linux.md",
     "runbook.md"
 )
 

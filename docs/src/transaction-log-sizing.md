@@ -116,25 +116,28 @@ carries a worked example:
       <Options><Every>1h</Every></Options>
     </On>
     <Do>
-      <Module>amps-action-do-delete-old-journal-files</Module>
+      <Module>amps-action-do-remove-journal</Module>
       <Options><Age>1d</Age></Options>
     </Do>
   </Action>
 </Actions>
 ```
 
-> **Verify this block against your AMPS version before relying on it.** Action
-> module names and their options have moved between releases, and this repository
-> was authored without a running server to check them against. The surrounding
-> structure (`<Actions><Action><On>`/`<Do>`) is stable. Check yours with:
+> **This block is verified against AMPS 5.3.5.135**, which is worth saying
+> because the module name it originally carried
+> (`amps-action-do-delete-old-journal-files`) does not exist in any build and was
+> rejected outright — see [VERIFICATION.md](../../VERIFICATION.md). Module names
+> move between releases while the surrounding structure
+> (`<Actions><Action><On>`/`<Do>`) stays stable, so on a different build, check
+> before depending on it:
 >
 > ```bash
+> ./server/scripts/amps.sh modules                                  # what this build has
 > ./server/scripts/amps.sh validate amps-config-bounded-retention.xml
 > ```
 >
-> and look up "Actions" in the AMPS User Guide for your build if a module name is
-> rejected. Delete the block and the instance still starts — you just lose
-> automatic ageing, and can prune with an external cron job in the meantime.
+> Delete the block and the instance still starts — you just lose automatic
+> ageing, and can prune with an external cron job in the meantime.
 
 ## Lever 4 — bound the SOW with expiration
 

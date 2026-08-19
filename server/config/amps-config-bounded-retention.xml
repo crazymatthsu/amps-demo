@@ -14,16 +14,20 @@
   READ THIS FIRST
   ===========================================================================
   The <Actions> block at the bottom uses AMPS action modules to age out journal
-  files on a schedule. Module and option names in that block have changed across
-  AMPS releases, and this file was written without a running server to check
-  against. Validate before depending on it:
+  files on a schedule. It is verified against AMPS 5.3.5.135 - which is worth
+  stating, because the module name this file originally carried
+  (amps-action-do-delete-old-journal-files) exists in no build and was rejected
+  outright. See VERIFICATION.md.
 
+  Module names move between releases while the surrounding structure
+  (<Actions><Action><On>/<Do>) does not, so on a different build, check:
+
+      ./server/scripts/amps.sh modules      what this server actually registers
       ./server/scripts/amps.sh validate amps-config-bounded-retention.xml
 
-  which runs the server's own config check inside the container. If your build
-  rejects a module name, look it up under "Actions" in the AMPS User Guide for
-  your version - the surrounding structure (<Actions><Action><On>/<Do>) is
-  stable, only the module identifiers move.
+  For a schedule that fires at a wall-clock time rather than on an interval,
+  and for deleting SOW records rather than journal files, see
+  amps-config-maintenance.xml.
 
   Everything above the <Actions> block uses only elements this demo relies on
   elsewhere, so the instance still starts cleanly if you delete that block.

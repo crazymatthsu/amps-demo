@@ -7,6 +7,8 @@ server/
   config/
     amps-config.xml                    the demo instance
     amps-config-bounded-retention.xml  minimum-persistent-footprint variant
+    amps-config-market-data.xml        worked case: 500 GB/day on a 100 GB disk
+    amps-config-maintenance.xml        nightly scheduled SOW cleanup <Actions>
   scripts/amps.sh                      start / stop / restart / reset / probe
   Containerfile                        build an image from an AMPS release tarball
   vendor/                              drop the tarball here (git-ignored)
@@ -101,16 +103,49 @@ AMPS_BIN=/whatever/it/said ./server/scripts/amps.sh start
 ```
 
 This runs the server's own config parser inside the container and starts nothing.
-Two parts of the shipped config are flagged in comments as version-sensitive and
-should be validated on your build before you depend on them:
 
-- the **regex SOW topic** (`^desk\.[A-Za-z0-9_-]+$`) in `amps-config.xml`, which
-  gives dynamic SOW topics;
-- the **`<Actions>` block** in `amps-config-bounded-retention.xml`, which ages out
-  journal files on a schedule.
+The version-sensitive part of any config is the `<Actions>` block: module names
+have moved between AMPS releases, and a wrong one is rejected at startup without
+suggesting the right one. This repo shipped a nonexistent journal-ageing module
+until a real server said otherwise. So rather than guess, ask the binary:
 
-Both are additive: delete either block and the instance still starts, you just
-lose that feature. Everything else in both configs is used by the demos.
+```bash
+./server/scripts/amps.sh modules
+```
+
+which reads the registered `amps-action-*` names out of the server itself.
+Option names (`<Age>`, `<Every>`, `<Filter>`) are too generic to extract that
+way — for those, `validate` names the one it rejected.
+
+Every `<Actions>` block is additive: delete it and the instance still starts,
+you just lose the automation.
+
+## Scheduled maintenance
+
+`amps-config-maintenance.xml` is the worked example of the `<On>`/`<Do>` pair:
+a nightly window that clears SOW records on a wall-clock schedule, with no cron
+job and no client involved.
+
+| when | what |
+| --- | --- |
+| 20:30 | delete every record in `quote-cache` |
+| 20:30 | delete `orders` whose `/status` is filled, cancelled or rejected |
+| 20:35 | remove journal files older than a day |
+
+```bash
+AMPS_TZ=America/New_York AMPS_CONFIG=amps-config-maintenance.xml \
+    ./server/scripts/amps.sh start
+```
+
+**`AMPS_TZ` is not decoration.** Actions fire on the server's clock, and the
+container is UTC unless told otherwise, so "20:30" means 20:30 UTC by default —
+`amps.sh status` prints the server clock so you can see which one you got.
+
+Two things worth knowing before scheduling a wipe of a real topic: deleting SOW
+records is a *write*, so on a journalled topic it grows the transaction log
+before anything shrinks; and if the rule you want is really about record age,
+`<Expiration>` does it continuously for free.
+→ [docs/src/scheduled-maintenance.md](../docs/src/scheduled-maintenance.md)
 
 ## The data directory is the point
 

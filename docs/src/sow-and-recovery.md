@@ -293,6 +293,42 @@ demo runs all three and reports what each cost.
    removal is event-driven — an order is cancelled, a session ends — and for
    expiry when it is time-driven.
 
+### Doing it on a schedule, from the config
+
+There is a third mode, between the two: removal driven by *business* time rather
+than by an event or by record age. "Clear the day's working orders after the
+close" is not something a TTL expresses — 20:30 is not an age — and wiring a cron
+job to a client to do it is more moving parts than the job deserves.
+
+AMPS runs it itself, through `<Actions>`, which pair a condition (`<On>`) with
+something to do (`<Do>`):
+
+```xml
+<Action>
+  <On>
+    <Module>amps-action-on-schedule</Module>
+    <Options><Crontab>30 20 * * *</Crontab></Options>
+  </On>
+  <Do>
+    <Module>amps-action-do-delete-sow</Module>
+    <Options>
+      <Topic>orders</Topic>
+      <MessageType>json</MessageType>
+      <Filter>/status = 'ORDER_STATUS_FILLED'</Filter>
+    </Options>
+  </Do>
+</Action>
+```
+
+Everything in point 2 above still applies, on a timer: on a journalled topic
+tonight's sweep *adds* one delete record per key. The filter is the entire safety
+mechanism, the schedule fires on the server's clock (UTC in the container), and
+one of the two module names above is not yet verified against a running build.
+All three are worth reading about before scheduling one.
+→ [scheduled-maintenance.md](scheduled-maintenance.md), and
+[`amps-config-maintenance.xml`](../../server/config/amps-config-maintenance.xml)
+for the full instance.
+
 ## How expiration works
 
 Expiration is a **time-to-live on SOW records**. It is a property of the stored
