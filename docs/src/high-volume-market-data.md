@@ -152,7 +152,7 @@ journalled and age files out on a schedule.
 > [VERIFICATION.md](../../VERIFICATION.md)). Names move between releases while
 > the `<Actions><Action><On>`/`<Do>` structure stays stable, so on another build
 > run `./server/scripts/amps.sh modules` for the list this server actually has,
-> then `./server/scripts/amps.sh validate amps-config-market-data.xml`. The
+> then `./server/scripts/amps.sh validate market-data`. The
 > option names are the part still worth checking yourself here: in particular,
 > **whether your version's journal-ageing action takes a size or total-bytes
 > option as well as an age** — a size threshold is a better fit for
@@ -241,4 +241,4 @@ never the problem — and it is why the journal can be cut back this far without
 losing anything a market data consumer would notice.
 
 A worked configuration for this scenario is in
-[`server/config/amps-config-market-data.xml`](../../server/config/amps-config-market-data.xml).
+[`server/config/flows/market-data/amps-config.xml`](../../server/config/flows/market-data/amps-config.xml).

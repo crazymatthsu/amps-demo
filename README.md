@@ -11,7 +11,7 @@ their own demos. Java and Gradle throughout.
 ```
 amps-demo/
 ├── common/    protobuf schemas, JSON codec, delta computation, client factories
-├── server/    AMPS config, Containerfile, podman lifecycle scripts
+├── server/    AMPS config (per environment/flow), Containerfile, compose + lifecycle scripts
 ├── clients/   sixteen runnable feature demos behind one CLI
 ├── utils/     operator tools: load a file, dump the SOW or journal, clear down
 └── docs/      the written half, link-checked by the build
@@ -115,6 +115,7 @@ The combination imposes rules that are easy to get wrong and silent when you do 
 | [native-fix-and-nvfix.md](docs/src/native-fix-and-nvfix.md) | raw FIX/NVFIX message types, natively parsed |
 | [deploying-utils-to-linux.md](docs/src/deploying-utils-to-linux.md) | packaging the utils tools for deployment |
 | [scheduled-maintenance.md](docs/src/scheduled-maintenance.md) | nightly SOW cleanup on a schedule, with `<Actions>` |
+| [server-env-layering.md](docs/src/server-env-layering.md) | compose, environments and business flows, and how the `.env` layers stack |
 
 ## Requirements
 
@@ -146,11 +147,16 @@ Two things to know:
 
    ```bash
    ./server/scripts/amps.sh validate
-   ./server/scripts/amps.sh validate amps-config-bounded-retention.xml
+   ./server/scripts/amps.sh validate bounded-retention
    ```
 
-   The one config that has *not* been through that run is
-   [`amps-config-maintenance.xml`](server/config/amps-config-maintenance.xml),
+   (`validate` takes a *flow name* — a folder under `server/config/flows/` —
+   not a filename; run `./server/scripts/amps.sh flows` to list them. See
+   [server-env-layering.md](docs/src/server-env-layering.md) if that folder
+   structure is new to you.)
+
+   The one flow that has *not* been through that run is `maintenance`
+   ([`server/config/flows/maintenance/amps-config.xml`](server/config/flows/maintenance/amps-config.xml)),
    which schedules a nightly SOW cleanup with `<Actions>`; its SOW-deleting
    module and wall-clock schedule option are flagged in the file itself.
    `./server/scripts/amps.sh modules` lists the action modules your build

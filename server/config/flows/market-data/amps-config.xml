@@ -11,7 +11,7 @@
       target: keep total usage near 10 GB
 
   Run it with:
-      AMPS_CONFIG=amps-config-market-data.xml ./server/scripts/amps.sh start
+      AMPS_FLOW=market-data ./server/scripts/amps.sh start
 
   ===========================================================================
   THE KEY POINT
@@ -49,8 +49,8 @@
     <Admin>
         <InetAddr>8085</InetAddr>
         <!-- SQL console in the admin UI, over the websocket transport below.
-             Same as amps-config.xml, so switching configs does not silently
-             take the feature away. -->
+             Same as the default flow's amps-config.xml, so switching flows does
+             not silently take the feature away. -->
         <SQLTransport>amps-websocket</SQLTransport>
         <FileName>./stats/stats.db</FileName>
         <Interval>10s</Interval>
@@ -188,7 +188,7 @@
       not. On another build:
 
           ./server/scripts/amps.sh modules
-          ./server/scripts/amps.sh validate amps-config-market-data.xml
+          ./server/scripts/amps.sh validate market-data
 
       The options are the part still worth checking here: in particular, whether
       your version's journal-ageing

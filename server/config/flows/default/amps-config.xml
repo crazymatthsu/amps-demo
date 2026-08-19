@@ -295,9 +295,8 @@
       startup (verified against 5.3.5.135). Production instances use much larger
       files (hundreds of MB) to reduce rollover overhead.
 
-      For bounding total journal size over time, see
-      server/config/amps-config-bounded-retention.xml and
-      docs/transaction-log-sizing.md.
+      For bounding total journal size over time, see the `bounded-retention`
+      flow's amps-config.xml and docs/transaction-log-sizing.md.
     -->
     <TransactionLog>
         <JournalDirectory>./journal</JournalDirectory>

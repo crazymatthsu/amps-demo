@@ -1,0 +1,46 @@
+# AMPS instance, declaratively -- an alternative to the raw `podman run` in
+# amps.sh, for the case where env/flow layering picks the ports, image,
+# timezone and bind mounts before compose ever sees them.
+#
+# NOT meant to be invoked directly with `podman compose up`: every ${VAR}
+# below is resolved from the calling shell's environment, and populating that
+# environment correctly -- default.env, then the environment layer, then the
+# flow layer, then an optional local override -- is what
+# server/scripts/amps-compose.sh does before it calls compose. Run that
+# script; treat this file as its target, not a second entry point.
+#
+# See docs/src/server-env-layering.md for the layering rules, and
+# server/scripts/amps.sh for the original single-container script, which
+# this does not replace -- both read the same server/config tree, and
+# amps.sh remains the quicker path for probe/modules/validate and any
+# one-off run that does not need the env/flow machinery.
+
+services:
+  amps:
+    # AMPS_IMAGE has no default anywhere in this repo, on purpose: there is no
+    # public AMPS server image. ${VAR:?msg} fails fast with a clear reason
+    # instead of "no such image" from the container engine.
+    image: ${AMPS_IMAGE:?AMPS_IMAGE is not set -- see server/scripts/amps.sh or docs/src/server-env-layering.md}
+    platform: ${AMPS_PLATFORM:-linux/amd64}
+    container_name: ${AMPS_CONTAINER_NAME:-amps-demo}
+    entrypoint: ["${AMPS_BIN:-/opt/amps/bin/ampServer}"]
+    # Every flow folder holds exactly one file, always named amps-config.xml,
+    # so the in-container path is the same regardless of which flow's folder
+    # got bind-mounted below.
+    command: ["/amps/config/amps-config.xml"]
+    working_dir: /amps/data
+    ports:
+      - "${AMPS_PORT:-9007}:9007"
+      - "${AMPS_WS_PORT:-9008}:9008"
+      - "${AMPS_ADMIN_PORT:-8085}:8085"
+    environment:
+      # Scheduled <Actions> (see amps-config-maintenance.xml) fire on this
+      # clock. Empty means "whatever the image defaults to", which is UTC.
+      - TZ=${AMPS_TZ:-}
+    volumes:
+      # Full "host:container[:z]" strings, built by the wrapper script so the
+      # SELinux :z suffix can be Linux-only, exactly as amps.sh's own
+      # mount_suffix does for the raw `podman run` path.
+      - ${AMPS_CONFIG_VOLUME}
+      - ${AMPS_DATA_VOLUME}
+    restart: "no"

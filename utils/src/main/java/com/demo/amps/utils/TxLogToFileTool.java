@@ -131,7 +131,8 @@ public final class TxLogToFileTool implements Tool {
         if (records == 0) {
             Console.note("No history. Either nothing was ever published to this topic, or "
                     + "-- much more likely -- the topic is not listed in <TransactionLog>, "
-                    + "so AMPS keeps no journal for it. Check server/config/amps-config.xml.");
+                    + "so AMPS keeps no journal for it. Check "
+                    + "server/config/flows/<flow>/amps-config.xml.");
         }
         if (embeddedNewlines > 0) {
             Console.kv("payloads containing a newline", embeddedNewlines);

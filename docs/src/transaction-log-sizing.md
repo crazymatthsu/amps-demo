@@ -47,7 +47,7 @@ Ask of each topic: *if the instance restarted and this topic's history were gone
 what would break?* If the answer is "nothing, the SOW has current state and
 upstream can refresh it", leave it out.
 
-In [`amps-config.xml`](../../server/config/amps-config.xml), `quote-cache` is a
+In [`amps-config.xml`](../../server/config/flows/default/amps-config.xml), `quote-cache` is a
 SOW topic that is deliberately **not** journalled:
 
 ```xml
@@ -105,7 +105,7 @@ Size the window off consumer behaviour, not disk capacity:
 | DR replica that can be offline for a weekend | 3–4 days |
 
 AMPS ages journal files with a scheduled action.
-[`amps-config-bounded-retention.xml`](../../server/config/amps-config-bounded-retention.xml)
+[`amps-config.xml`](../../server/config/flows/bounded-retention/amps-config.xml) in the `bounded-retention` flow
 carries a worked example:
 
 ```xml
@@ -133,7 +133,7 @@ carries a worked example:
 >
 > ```bash
 > ./server/scripts/amps.sh modules                                  # what this build has
-> ./server/scripts/amps.sh validate amps-config-bounded-retention.xml
+> ./server/scripts/amps.sh validate bounded-retention
 > ```
 >
 > Delete the block and the instance still starts — you just lose automatic
@@ -214,7 +214,7 @@ A defensible floor for this demo's workload:
 - Publishers: persistent publish store. Subscribers that must not miss anything:
   durable bookmark store.
 
-Everything above is what [`amps-config.xml`](../../server/config/amps-config.xml)
+Everything above is what [`amps-config.xml`](../../server/config/flows/default/amps-config.xml)
 and its bounded-retention sibling implement, and what
 [`sow-and-recovery.md`](sow-and-recovery.md) walks through end to end.
 
@@ -263,7 +263,7 @@ need re-tuning when volumes change. An age-based policy is a proxy that assumes 
 stable message rate, which market data is not. Check with:
 
 ```bash
-./server/scripts/amps.sh validate amps-config-bounded-retention.xml
+./server/scripts/amps.sh validate bounded-retention
 ```
 
 ### What will not bound it

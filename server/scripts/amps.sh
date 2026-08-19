@@ -13,9 +13,10 @@
 #   ./server/scripts/amps.sh wait       block until the instance accepts clients
 #   ./server/scripts/amps.sh reset      stop and DELETE all SOW/journal data
 #   ./server/scripts/amps.sh probe      inspect the image: where is ampServer?
-#   ./server/scripts/amps.sh validate [config.xml]
+#   ./server/scripts/amps.sh validate [flow]
 #                                       run the server's own config check
 #   ./server/scripts/amps.sh modules    list the action modules this build has
+#   ./server/scripts/amps.sh flows      list the business flows under server/config/flows/
 #
 # Environment overrides:
 #   CONTAINER_ENGINE   podman | docker            (default: podman, else docker)
@@ -23,7 +24,10 @@
 #   AMPS_PLATFORM      image platform             (default: linux/amd64; set
 #                                                  empty to let the engine pick)
 #   AMPS_BIN           server binary in the image (default: /opt/amps/bin/ampServer)
-#   AMPS_CONFIG        config file name under server/config/
+#   AMPS_FLOW          business flow: a folder under server/config/flows/
+#                                                  (default: default). Each flow folder holds
+#                                                  exactly one amps-config.xml. 'amps.sh flows'
+#                                                  lists what is available.
 #   AMPS_PORT          host port for the amps protocol      (default: 9007)
 #   AMPS_WS_PORT       host port for websocket              (default: 9008)
 #   AMPS_ADMIN_PORT    host port for the admin interface    (default: 8085)
@@ -58,7 +62,8 @@ AMPS_IMAGE="${AMPS_IMAGE:-}"
 # Harmless on an x86_64 host. Set AMPS_PLATFORM= (empty) to let the engine pick.
 AMPS_PLATFORM="${AMPS_PLATFORM-linux/amd64}"
 AMPS_BIN="${AMPS_BIN:-/opt/amps/bin/ampServer}"
-AMPS_CONFIG="${AMPS_CONFIG:-amps-config.xml}"
+AMPS_FLOW="${AMPS_FLOW:-default}"
+FLOWS_DIR="${CONFIG_DIR}/flows"
 AMPS_PORT="${AMPS_PORT:-9007}"
 AMPS_WS_PORT="${AMPS_WS_PORT:-9008}"
 AMPS_ADMIN_PORT="${AMPS_ADMIN_PORT:-8085}"
@@ -149,8 +154,10 @@ container_running() {
 
 cmd_start() {
     require_image
-    [[ -f "${CONFIG_DIR}/${AMPS_CONFIG}" ]] \
-        || die "no such config: ${CONFIG_DIR}/${AMPS_CONFIG}"
+    local flow_dir="${FLOWS_DIR}/${AMPS_FLOW}"
+    [[ -f "${flow_dir}/amps-config.xml" ]] \
+        || die "no such flow '${AMPS_FLOW}': expected ${flow_dir}/amps-config.xml
+available flows: $(ls "${FLOWS_DIR}" 2>/dev/null | tr '\n' ' ')"
 
     if container_running; then
         echo "already running: ${AMPS_CONTAINER}"
@@ -173,7 +180,7 @@ cmd_start() {
     echo "starting ${AMPS_CONTAINER}"
     echo "  engine: ${ENGINE}"
     echo "  image:  ${AMPS_IMAGE}"
-    echo "  config: ${AMPS_CONFIG}"
+    echo "  flow:   ${AMPS_FLOW}  (${flow_dir}/amps-config.xml)"
     echo "  data:   ${DATA_DIR}"
     [[ -n "${AMPS_TZ}" ]] && echo "  tz:     ${AMPS_TZ}"
 
@@ -184,12 +191,12 @@ cmd_start() {
         -p "${AMPS_PORT}:9007" \
         -p "${AMPS_WS_PORT}:9008" \
         -p "${AMPS_ADMIN_PORT}:8085" \
-        -v "${CONFIG_DIR}:${CONTAINER_CONFIG_DIR}${suffix}" \
+        -v "${flow_dir}:${CONTAINER_CONFIG_DIR}${suffix}" \
         -v "${DATA_DIR}:${CONTAINER_DATA_DIR}${suffix}" \
         -w "${CONTAINER_DATA_DIR}" \
         --entrypoint "${AMPS_BIN}" \
         "${AMPS_IMAGE}" \
-        "${CONTAINER_CONFIG_DIR}/${AMPS_CONFIG}" >/dev/null
+        "${CONTAINER_CONFIG_DIR}/amps-config.xml" >/dev/null
 
     echo
     echo "if the container exits immediately, the server binary is somewhere else"
@@ -346,8 +353,11 @@ validate_flag() {
 # Ask the server to parse a config without starting the instance.
 cmd_validate() {
     require_image
-    local config="${1:-${AMPS_CONFIG}}"
-    [[ -f "${CONFIG_DIR}/${config}" ]] || die "no such config: ${CONFIG_DIR}/${config}"
+    local flow="${1:-${AMPS_FLOW}}"
+    local flow_dir="${FLOWS_DIR}/${flow}"
+    [[ -f "${flow_dir}/amps-config.xml" ]] \
+        || die "no such flow '${flow}': expected ${flow_dir}/amps-config.xml
+available flows: $(ls "${FLOWS_DIR}" 2>/dev/null | tr '\n' ' ')"
 
     local suffix
     suffix="$(mount_suffix)"
@@ -357,18 +367,31 @@ cmd_validate() {
 Run '${AMPS_BIN} --help' in the image and check what it offers:
   ${ENGINE} run --rm --entrypoint ${AMPS_BIN} ${AMPS_IMAGE} --help"
 
-    echo "--- ${AMPS_BIN} ${flag} ${config} ---"
+    echo "--- ${AMPS_BIN} ${flag} ${flow}/amps-config.xml ---"
     if "${ENGINE}" run --rm \
             ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} \
-            -v "${CONFIG_DIR}:${CONTAINER_CONFIG_DIR}${suffix}" \
+            -v "${flow_dir}:${CONTAINER_CONFIG_DIR}${suffix}" \
             -w "${CONTAINER_DATA_DIR}" \
             --entrypoint "${AMPS_BIN}" \
-            "${AMPS_IMAGE}" "${flag}" "${CONTAINER_CONFIG_DIR}/${config}"; then
+            "${AMPS_IMAGE}" "${flag}" "${CONTAINER_CONFIG_DIR}/amps-config.xml"; then
         echo "config accepted"
         return 0
     fi
     echo "config REJECTED (see the error above)" >&2
     return 1
+}
+
+cmd_flows() {
+    echo "business flows under ${FLOWS_DIR}:"
+    local flow
+    for flow in "${FLOWS_DIR}"/*/; do
+        flow="$(basename "${flow}")"
+        if [[ "${flow}" == "${AMPS_FLOW}" ]]; then
+            echo "  ${flow}  (default)"
+        else
+            echo "  ${flow}"
+        fi
+    done
 }
 
 # Which action modules does this build actually have?
@@ -416,6 +439,7 @@ case "${1:-}" in
     probe)    shift; cmd_probe "$@" ;;
     validate) shift; cmd_validate "$@" ;;
     modules)  shift; cmd_modules "$@" ;;
+    flows)    shift; cmd_flows "$@" ;;
     ""|-h|--help|help) usage ;;
     *)        die "unknown command '$1' (try --help)" ;;
 esac

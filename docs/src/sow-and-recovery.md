@@ -326,7 +326,7 @@ mechanism, the schedule fires on the server's clock (UTC in the container), and
 one of the two module names above is not yet verified against a running build.
 All three are worth reading about before scheduling one.
 → [scheduled-maintenance.md](scheduled-maintenance.md), and
-[`amps-config-maintenance.xml`](../../server/config/amps-config-maintenance.xml)
+[`amps-config.xml`](../../server/config/flows/maintenance/amps-config.xml) in the `maintenance` flow
 for the full instance.
 
 ## How expiration works

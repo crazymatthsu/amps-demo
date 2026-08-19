@@ -56,6 +56,7 @@ val checkConfigXml = tasks.register("checkConfigXml") {
     description = "Verify every AMPS config file is well-formed XML."
 
     val configDir = layout.projectDirectory.dir("config").asFile
+    val flowsDir = layout.projectDirectory.dir("config/flows").asFile
     inputs.dir(configDir)
     outputs.upToDateWhen { false }
 
@@ -66,8 +67,15 @@ val checkConfigXml = tasks.register("checkConfigXml") {
         val builder = factory.newDocumentBuilder()
 
         val failures = mutableListOf<String>()
-        val configs = configDir.listFiles { file -> file.extension == "xml" }?.sorted().orEmpty()
-        require(configs.isNotEmpty()) { "no config files found in $configDir" }
+        // One amps-config.xml per flow folder (config/flows/<flow>/amps-config.xml),
+        // not the flat config/*.xml this task originally scanned - the reorg that
+        // introduced envs/ and flows/ moved every config one level deeper.
+        val configs = flowsDir.listFiles { file -> file.isDirectory }
+            ?.sorted()
+            ?.map { File(it, "amps-config.xml") }
+            ?.filter { it.isFile }
+            .orEmpty()
+        require(configs.isNotEmpty()) { "no config files found under $flowsDir/*/amps-config.xml" }
 
         configs.forEach { config ->
             try {

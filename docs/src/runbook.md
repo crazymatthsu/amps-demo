@@ -84,11 +84,16 @@ podman kill amps-demo && ./server/scripts/amps.sh start
 ./server/scripts/amps.sh reset      # stop AND delete all SOW/journal data
 ./server/scripts/amps.sh probe      # find ampServer inside the image
 ./server/scripts/amps.sh validate   # parse the config without starting
+./server/scripts/amps.sh flows      # list the business flows under server/config/flows/
 ```
 
 Also available as Gradle tasks — `./gradlew :server:serverStart`, `serverStop`,
 `serverRestart`, `serverStatus`, `serverReset`, `serverLogs`, `serverProbe`,
 `serverValidateConfig`.
+
+Every command above runs one flow at a time (`AMPS_FLOW=market-data`, default
+`default`). For more than one flow or environment at once, there is a compose
+alternative: → [server-env-layering.md](server-env-layering.md).
 
 | endpoint | address |
 | --- | --- |
@@ -128,7 +133,7 @@ turning a numeric comparison into a lexical one. Same document, rule 1.
 **The `desk.*` dynamic SOW query returns zero.**
 The regex SOW topic syntax is the one part of the config that varies by AMPS
 version. `./server/scripts/amps.sh validate` will say whether your build accepts
-it; the comment in `server/config/amps-config.xml` explains the alternative.
+it; the comment in `server/config/flows/default/amps-config.xml` explains the alternative.
 
 **`journal-lab` reports zero on-disk growth for the delta phase.**
 Expected. AMPS preallocates journal files at `MinJournalSize`, so a small workload
