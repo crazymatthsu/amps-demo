@@ -4,9 +4,15 @@ build/
 !gradle/wrapper/gradle-wrapper.jar
 
 # AMPS runtime state: SOW files, transaction log, admin stats. Created by
-# server/scripts/amps.sh, deleted by `amps.sh reset`. Never committed -- the
-# whole point is that it is the instance's own state.
+# server/scripts/amps.sh and amps-compose.sh (which nests it one level deeper,
+# server/data/<env>/<flow>/), deleted by `amps.sh reset`. Never committed --
+# the whole point is that it is the instance's own state.
 server/data/
+
+# Instance-specific env overrides: secrets or one-off box quirks for a single
+# (environment, business flow) pair. Never committed -- see
+# docs/src/server-env-layering.md.
+server/config/envs/*/*.local.env
 
 # Client-side bookmark and publish stores.
 build/client-state/

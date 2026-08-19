@@ -16,7 +16,12 @@
 
   Start it with:
 
-      AMPS_CONFIG=amps-config-maintenance.xml ./server/scripts/amps.sh start
+      AMPS_FLOW=maintenance ./server/scripts/amps.sh start
+
+  or, via compose (see docs/src/server-env-layering.md), which also picks
+  up AMPS_ENV for ports and platform:
+
+      AMPS_FLOW=maintenance ./server/scripts/amps-compose.sh start
 
   ===========================================================================
   READ THIS BEFORE YOU DEPEND ON THE SCHEDULE
@@ -26,8 +31,14 @@
      UTC unless you tell it otherwise, so "20:30" means 20:30 UTC by default -
      not 8:30pm where you are. amps.sh passes AMPS_TZ through as TZ:
 
-         AMPS_TZ=America/New_York AMPS_CONFIG=amps-config-maintenance.xml \
+         AMPS_TZ=America/New_York AMPS_FLOW=maintenance \
              ./server/scripts/amps.sh start
+
+     amps-compose.sh needs no such reminder for this specific flow: this
+     folder's flow.env already pins AMPS_TZ=America/New_York, because "every
+     night at 20:30" is a statement about a business's closing time, not
+     about whichever environment happens to run it - see flow.env and
+     docs/src/server-env-layering.md.
 
      Check what the server thinks the time is with 'amps.sh status'.
 
@@ -39,7 +50,7 @@
      against your own build in two commands:
 
          ./server/scripts/amps.sh modules     list what this server actually has
-         ./server/scripts/amps.sh validate amps-config-maintenance.xml
+         ./server/scripts/amps.sh validate maintenance
 
      'modules' reads the registered module names out of the server binary, so
      it answers half the question outright; for OPTION names, 'validate' names
@@ -160,7 +171,8 @@
       three independent schedules that happen to agree.
 
       On the schedule option: <Every> takes an interval, which is what the
-      journal-ageing example in amps-config-bounded-retention.xml uses. An
+      journal-ageing example in the bounded-retention flow's amps-config.xml uses.
+      An
       interval cannot express "at 20:30" - <Every>1d</Every> fires 24 hours
       after the server started, so the maintenance window drifts to whenever
       you last restarted. A wall-clock schedule needs the crontab-style option
@@ -241,7 +253,8 @@
                the deletes is deliberate: tonight's delete records are minutes
                old and stay, while yesterday's traffic goes.
 
-               Same block as amps-config-bounded-retention.xml, which explains
+               Same block as the bounded-retention flow's amps-config.xml, which
+               explains
                how to size <Age> against your slowest consumer. -->
         <Action>
             <On>

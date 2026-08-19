@@ -59,8 +59,8 @@ SOW makes the journal *larger*.
 `truncateAMPS.sh --journal` prints the two things that do work:
 
 1. **Age journal files out on a schedule** — the `amps-action-do-remove-journal`
-   action, in place in
-   [`server/config/amps-config-bounded-retention.xml`](../server/config/amps-config-bounded-retention.xml).
+   action, in place in the `bounded-retention` flow's
+   [`amps-config.xml`](../server/config/flows/bounded-retention/amps-config.xml).
    This is the supported way to bound the journal of a running instance.
 2. **Stop the instance and delete its data directory** —
    `./server/scripts/amps.sh reset`. The only route that returns the disk to the

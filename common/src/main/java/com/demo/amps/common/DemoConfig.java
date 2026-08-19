@@ -21,7 +21,7 @@ public final class DemoConfig {
         return get("amps.host", "AMPS_HOST", "127.0.0.1");
     }
 
-    /** The `amps` protocol TCP port (see server/config/amps-config.xml). */
+    /** The `amps` protocol TCP port (see server/config/flows/&lt;flow&gt;/amps-config.xml). */
     public static int port() {
         return Integer.parseInt(get("amps.port", "AMPS_PORT", "9007"));
     }

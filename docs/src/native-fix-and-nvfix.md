@@ -36,7 +36,7 @@ transaction log and bookmark replay. The message type changes how fields are
 
 ## The topics
 
-Declared in [`amps-config.xml`](../../server/config/amps-config.xml), one pair
+Declared in [`amps-config.xml`](../../server/config/flows/default/amps-config.xml), one pair
 per encoding, mirroring the JSON `fix.*` pattern:
 
 ```xml

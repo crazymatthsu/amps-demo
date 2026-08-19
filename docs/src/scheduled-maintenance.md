@@ -5,13 +5,18 @@ The question this document answers:
 > Delete the SOW every night at 8:30pm. Can the server do that itself?
 
 Yes — through `<Actions>`, and the worked example is
-[`amps-config-maintenance.xml`](../../server/config/amps-config-maintenance.xml).
+[`amps-config.xml`](../../server/config/flows/maintenance/amps-config.xml) in the
+`maintenance` flow (one of several; see
+[server-env-layering.md](server-env-layering.md) for how flows and environments
+are organised).
 The mechanism takes about ten lines of XML. Most of this document is about the
 things that are easy to get wrong once it works: what a scheduled delete costs,
 which clock it fires on, and which of the names involved are actually real.
 
 ```bash
-AMPS_CONFIG=amps-config-maintenance.xml ./server/scripts/amps.sh start
+AMPS_FLOW=maintenance ./server/scripts/amps.sh start
+# or, to also get the environment axis (ports, TZ) via compose:
+AMPS_FLOW=maintenance ./server/scripts/amps-compose.sh start
 ```
 
 ## The mechanism
@@ -121,7 +126,7 @@ otherwise — so `30 20 * * *` means 20:30 **UTC**, not 8:30pm where you are.
 `amps.sh` passes `AMPS_TZ` through as `TZ`:
 
 ```bash
-AMPS_TZ=America/New_York AMPS_CONFIG=amps-config-maintenance.xml \
+AMPS_TZ=America/New_York AMPS_FLOW=maintenance \
     ./server/scripts/amps.sh start
 
 ./server/scripts/amps.sh status      # prints the server's clock
@@ -161,7 +166,7 @@ registered inside the server, so they can be read out of it:
 
 ```bash
 ./server/scripts/amps.sh modules                            # what this build registers
-./server/scripts/amps.sh validate amps-config-maintenance.xml
+./server/scripts/amps.sh validate maintenance
 ```
 
 `modules` settles module names outright. Option names (`<Age>`, `<Crontab>`,

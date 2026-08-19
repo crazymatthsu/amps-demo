@@ -43,6 +43,14 @@ stays the single record of the working state.
 > (`bench.full`, `fix.events`) "have regular expression characters", and under
 > emulation logs `transaction log aio init failed … Function not implemented`
 > before falling back. Neither affects any result below.
+>
+> **Note added after this run:** the config layout below has since been
+> reorganised — `server/config/amps-config*.xml` became
+> `server/config/flows/<flow>/amps-config.xml`, and `amps.sh validate
+> amps-config-bounded-retention.xml` became `amps.sh validate
+> bounded-retention`. This record describes what actually ran and is left as
+> written; see [server-env-layering.md](docs/src/server-env-layering.md) for
+> the current layout and command forms.
 
 ---
 
@@ -95,8 +103,13 @@ This answers, in one command each, every element the repo flags as
 version-sensitive:
 
 - [x] `./server/scripts/amps.sh validate`
-- [x] `./server/scripts/amps.sh validate amps-config-bounded-retention.xml`
-- [x] `./server/scripts/amps.sh validate amps-config-market-data.xml`
+- [x] `./server/scripts/amps.sh validate bounded-retention`
+- [x] `./server/scripts/amps.sh validate market-data`
+
+(Commands as run at the time — `validate amps-config-bounded-retention.xml`
+and `validate amps-config-market-data.xml`; the config layout has since moved
+to `server/config/flows/<flow>/amps-config.xml`, so `validate` now takes the
+flow name instead of a filename. `./server/scripts/amps.sh flows` lists them.)
 
 *All three accepted with zero warnings on 5.3.5.135, after the fixes in the
 table at the top of this file. Note that `validate` itself was broken — it used
@@ -108,8 +121,8 @@ The three elements most likely to be rejected, and what actually happened:
 | element | where | outcome on 5.3.5.135 |
 | --- | --- | --- |
 | `<Actions>` journal-ageing block | bounded-retention (in market-data it is inside a comment, so it is never parsed) | **rejected** — no such module as `amps-action-do-delete-old-journal-files`; the real one is `amps-action-do-remove-journal`, which accepts `<Age>` |
-| regex SOW topic `^desk\.[A-Za-z0-9_-]+$` | amps-config.xml | **accepted but inert** in `<Name>` — AMPS treats it as a literal topic name and warns about "regular expression characters". Belongs in `<Pattern>`, with `<Name>` naming the physical topic |
-| fix/nvfix key syntax `/9001`, `/37`, `/EventId`, `/OrderID` | amps-config.xml | **accepted as written**, and demos 13/14 confirm it works end to end |
+| regex SOW topic `^desk\.[A-Za-z0-9_-]+$` | flows/default/amps-config.xml | **accepted but inert** in `<Name>` — AMPS treats it as a literal topic name and warns about "regular expression characters". Belongs in `<Pattern>`, with `<Name>` naming the physical topic |
+| fix/nvfix key syntax `/9001`, `/37`, `/EventId`, `/OrderID` | flows/default/amps-config.xml | **accepted as written**, and demos 13/14 confirm it works end to end |
 
 ## Step 3 — start and smoke-test
 

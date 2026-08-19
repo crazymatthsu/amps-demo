@@ -147,9 +147,9 @@ public final class TruncateTool implements Tool {
         Console.info("            <Options><Age>1d</Age></Options></Do>");
         Console.info("      </Action>");
         Console.info("");
-        Console.note("See server/config/amps-config-bounded-retention.xml for that in "
-                + "place, and docs/src/transaction-log-sizing.md for how to size the "
-                + "window.");
+        Console.note("See server/config/flows/bounded-retention/amps-config.xml for "
+                + "that in place, and docs/src/transaction-log-sizing.md for how to size "
+                + "the window.");
         Console.bullet("Stop the instance and delete its data directory, which is the only "
                 + "route that returns the disk to the filesystem:");
         Console.info("");

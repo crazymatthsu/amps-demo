@@ -22,6 +22,7 @@ val requiredDocuments = listOf(
     "fix-order-state.md",
     "native-fix-and-nvfix.md",
     "scheduled-maintenance.md",
+    "server-env-layering.md",
     "deploying-utils-to-linux.md",
     "runbook.md"
 )

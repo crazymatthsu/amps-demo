@@ -5,16 +5,29 @@ The AMPS instance: configuration, container recipe, lifecycle.
 ```
 server/
   config/
-    amps-config.xml                    the demo instance
-    amps-config-bounded-retention.xml  minimum-persistent-footprint variant
-    amps-config-market-data.xml        worked case: 500 GB/day on a 100 GB disk
-    amps-config-maintenance.xml        nightly scheduled SOW cleanup <Actions>
-  scripts/amps.sh                      start / stop / restart / reset / probe
+    default.env                        env layer 1 -- repo defaults, every env/flow
+    envs/{local,dev,staging,prod}/      env layer 2 -- ports, TZ, image platform
+    flows/
+      default/            {amps-config.xml, flow.env}   the demo instance
+      bounded-retention/  {amps-config.xml, flow.env}   minimum-persistent-footprint
+      market-data/        {amps-config.xml, flow.env}   500 GB/day on a 100 GB disk
+      maintenance/        {amps-config.xml, flow.env}   nightly scheduled SOW cleanup
+  docker-compose.yml                   the compose alternative to a raw `podman run`
+  scripts/
+    amps.sh                            start / stop / restart / reset / probe / validate
+    amps-compose.sh                    same, via compose, layering env + flow
   Containerfile                        build an image from an AMPS release tarball
   vendor/                              drop the tarball here (git-ignored)
   data/                                created at run time; bind-mounted into the
                                        container, so you can watch it grow
 ```
+
+Two selectors, not one: `AMPS_FLOW` picks *what* runs (a folder under
+`config/flows/` — the business logic, the config XML), `AMPS_ENV` picks
+*where* (a folder under `config/envs/` — ports, timezone, platform).
+`amps.sh` only ever knew about the first; `amps-compose.sh` adds the second
+and the `.env` layering. Full explanation:
+→ [docs/src/server-env-layering.md](../docs/src/server-env-layering.md)
 
 ## Running it
 
@@ -25,7 +38,18 @@ server/
 ```
 
 `podman` is used when present, `docker` otherwise; force one with
-`CONTAINER_ENGINE=docker`.
+`CONTAINER_ENGINE=docker`. This runs one flow at a time
+(`AMPS_FLOW=market-data ./server/scripts/amps.sh start`, default `default`)
+against the flat `server/data/` directory, same as it always has.
+
+For more than one flow or environment at once, `amps-compose.sh` is the
+alternative — same commands, plus the environment axis, via
+`docker-compose.yml`:
+
+```bash
+AMPS_ENV=dev AMPS_FLOW=market-data ./server/scripts/amps-compose.sh start
+./server/scripts/amps-compose.sh printenv    # check the env layering resolved as expected
+```
 
 | endpoint | address |
 | --- | --- |
@@ -38,8 +62,8 @@ server/
 
 The admin UI (Galvanometer) can run queries and subscriptions against the SOW
 topics from the browser — the quickest way to look at state without writing a
-client. It is off until `<Admin>` names a transport for it to use, which all
-three configs now do:
+client. It is off until `<Admin>` names a transport for it to use, which every
+flow's config now does:
 
 ```xml
 <SQLTransport>amps-websocket</SQLTransport>
@@ -99,10 +123,14 @@ AMPS_BIN=/whatever/it/said ./server/scripts/amps.sh start
 
 ```bash
 ./server/scripts/amps.sh validate
-./server/scripts/amps.sh validate amps-config-bounded-retention.xml
+./server/scripts/amps.sh validate bounded-retention
+./server/scripts/amps.sh flows              # list what's available
 ```
 
-This runs the server's own config parser inside the container and starts nothing.
+This runs the server's own config parser inside the container and starts
+nothing. `validate` takes a *flow name*, not a filename — the reorganisation
+that added `envs/`/`flows/` moved every config one level deeper; see
+[server-env-layering.md](../docs/src/server-env-layering.md) if this is new.
 
 The version-sensitive part of any config is the `<Actions>` block: module names
 have moved between AMPS releases, and a wrong one is rejected at startup without
@@ -122,7 +150,7 @@ you just lose the automation.
 
 ## Scheduled maintenance
 
-`amps-config-maintenance.xml` is the worked example of the `<On>`/`<Do>` pair:
+The `maintenance` flow ([`flows/maintenance/amps-config.xml`](config/flows/maintenance/amps-config.xml)) is the worked example of the `<On>`/`<Do>` pair:
 a nightly window that clears SOW records on a wall-clock schedule, with no cron
 job and no client involved.
 
@@ -133,8 +161,11 @@ job and no client involved.
 | 20:35 | remove journal files older than a day |
 
 ```bash
-AMPS_TZ=America/New_York AMPS_CONFIG=amps-config-maintenance.xml \
-    ./server/scripts/amps.sh start
+AMPS_TZ=America/New_York AMPS_FLOW=maintenance ./server/scripts/amps.sh start
+
+# or, via compose, where the maintenance flow already pins this TZ for you
+# regardless of environment (see flows/maintenance/flow.env):
+AMPS_FLOW=maintenance ./server/scripts/amps-compose.sh start
 ```
 
 **`AMPS_TZ` is not decoration.** Actions fire on the server's clock, and the
@@ -161,6 +192,11 @@ runs with that as its working directory, so:
 
 Because it is a host directory, `du -sh server/data/journal` is a real
 measurement — the `journal-lab` demo in `clients/` relies on that.
+
+(`amps-compose.sh` nests this one level deeper, `server/data/<env>/<flow>/`,
+because it is designed to run more than one flow or environment at once and
+a shared directory would let them silently overwrite each other's SOW files.
+`amps.sh` stays flat and single-instance, as above.)
 
 ## Topics
 

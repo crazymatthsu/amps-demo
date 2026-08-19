@@ -17,6 +17,7 @@ exist.
 | [native-fix-and-nvfix.md](src/native-fix-and-nvfix.md) | raw FIX/NVFIX message types: native keys, filters, journal |
 | [deploying-utils-to-linux.md](src/deploying-utils-to-linux.md) | packaging the utils tools for a Linux box: dist vs container |
 | [scheduled-maintenance.md](src/scheduled-maintenance.md) | nightly SOW cleanup with `<Actions>`: what it costs, which clock |
+| [server-env-layering.md](src/server-env-layering.md) | running via compose: environments, business flows, and how the `.env` layers stack |
 
 Suggested order for someone new to AMPS: **runbook** to get an instance up, then
 **amps-vs-kafka** for the mental model, then **sow-and-recovery**. The rest are

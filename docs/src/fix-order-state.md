@@ -128,7 +128,7 @@ This split is implemented in this repo:
 | the state machine (~150 lines of logic) | [`FixOrderStateMachine`](../../common/src/main/java/com/demo/amps/common/fix/FixOrderStateMachine.java) |
 | the lifecycle, event by event, as tests | [`FixOrderStateMachineTest`](../../common/src/test/java/com/demo/amps/common/fix/FixOrderStateMachineTest.java) |
 | end-to-end against the server | `fix-lifecycle` demo ([`FixLifecycleDemo`](../../clients/src/main/java/com/demo/amps/clients/demos/FixLifecycleDemo.java)) |
-| topic declarations | [`amps-config.xml`](../../server/config/amps-config.xml) |
+| topic declarations | [`amps-config.xml`](../../server/config/flows/default/amps-config.xml) |
 
 The machine's whole rulebook: **D** opens a chain as pending-new. **G/F** record
 a pending request and alias the new ClOrdID into the chain. **8** is arbitrated
