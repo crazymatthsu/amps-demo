@@ -1,6 +1,6 @@
 # FIX 4.2 order state on AMPS: topics `algo/*`, views, and the state machine
 
-Analysis only — nothing here is implemented yet. The question under analysis:
+The question under analysis (the chaining half of the answer is now built — see [Built, not just argued](#built-not-just-argued) below):
 
 > Can I publish FIX 4.2 messages (35=D, G, F, 8, 9) into AMPS topics
 > (`algo/D`, `algo/G`, `algo/F`, `algo/8`, `algo/9`) and build an **AMPS view**
@@ -45,6 +45,29 @@ the analysis here extends it to the fuller docs/fix42 contract (35=Q, busts and
 corrects, per-request pending snapshots, the `executions` / `order_events`
 output rows) and to the `algo/*` per-message-type topic layout.
 
+## Built, not just argued
+
+The chaining half of this analysis is implemented and running in this
+repository, which is what turned §4's open questions into the verified
+findings in [02, §4.3](02-amps-view-feasibility.md):
+
+| piece | where |
+| --- | --- |
+| the module + seven SOW topics | [`server/config/flows/fix42-chaining/amps-config.xml`](../../server/config/flows/fix42-chaining/amps-config.xml) |
+| the FIX 4.2 delta publisher (Spring Boot) | [`fix42-publisher/`](../../fix42-publisher/README.md) |
+| the rulebook: which tags leave, per message type | [`application.yml`](../../fix42-publisher/src/main/resources/application.yml) |
+| end-to-end proof against a real container | `./gradlew :fix42-publisher:integrationTest` |
+
+Headline result: nine parent ClOrdIDs across five cancel/replace chains store
+as **five records**, each carrying the newest amend merged onto the original
+order's untouched terms — with no chain state anywhere in the publisher.
+
+The blotter also answers "working at what, asked to change to what?" in one
+record, which a single tag 38 never can — see
+[04](04-pending-state-without-a-state-machine.md). That closes the
+pending-correlation blocker for the common cases; latest-*valid* arbitration
+is what still keeps a state machine outside AMPS.
+
 ## Documents
 
 | document | answers |
@@ -52,3 +75,4 @@ output rows) and to the `algo/*` per-message-type topic layout.
 | [01-ingress-fix42-into-amps.md](01-ingress-fix42-into-amps.md) | can 35=D/G/F/8/9 be published into `algo/D`…`algo/9`, and how should those topics be declared? |
 | [02-amps-view-feasibility.md](02-amps-view-feasibility.md) | can an AMPS view maintain the live order state? (field-by-field, with the constructions that almost work) |
 | [03-proposed-architecture.md](03-proposed-architecture.md) | the architecture with the state machine outside AMPS, mapped rule-by-rule to the docs/fix42 contract |
+| [04-pending-state-without-a-state-machine.md](04-pending-state-without-a-state-machine.md) | how far a chained blotter gets toward acked-vs-pending terms, measured — and the chaining constraint that cost a rewrite |
