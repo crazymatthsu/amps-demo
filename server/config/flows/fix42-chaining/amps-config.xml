@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Business flow "fix42-chaining": FIX 4.2 order state built with AMPS doing the
+  chain identity, not the client.
+
+  This is the flow that backs the fix42-publisher module and
+  docs/fix42-view/. The idea it exercises, in one sentence: the optional
+  chaining key generator resolves the FIX cancel/replace chain
+  (11 ClOrdID -> 41 OrigClOrdID) inside the server, so every message of one
+  order chain lands on ONE SOW record without any client-side identity map.
+
+  Two topic shapes, deliberately paired for every stream:
+
+    <name>          KeyGenerator key-chaining, keys /11 + /41.
+                    One record per order CHAIN. delta_publish merges each
+                    D/G/F into it, so the record is the live blotter.
+
+    <name>_audit    plain SOW keyed /11 (or /17 for executions).
+                    One record per MESSAGE id - the audit trail, and the
+                    system of record. Journalled below; the chained topics
+                    are not, because they are derivable from it.
+
+  The audit pairing is not decoration. Per the AMPS user guide the chaining
+  module DROPS a message that resolves to two different chains ("the module
+  will not generate a SOW key, and the message is not processed by AMPS"),
+  which is acceptable for a derived blotter and unacceptable for an audit
+  trail. So nothing is only ever published to a chained topic.
+-->
+<AMPSConfig>
+
+    <Name>amps-fix42-chaining</Name>
+
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <SQLTransport>amps-websocket</SQLTransport>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <!-- One transport, every message type. The publisher selects `fix` in
+             its connection URI: tcp://host:9007/amps/fix. -->
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <!--
+      ===================================================================
+      Modules
+      ===================================================================
+      The chaining key generator is an OPTIONAL module: it ships in the
+      release tarball as a shared library and does nothing until a topic asks
+      for it by the <Name> given here.
+
+      Verified present in this repo's image (AMPS 5.3.5.135) by listing
+      /opt/amps/lib inside the image and grepping for "chaining"; if the
+      library is missing from your build, the server refuses to start and
+      says so by name.
+
+      (An XML comment may not contain a double hyphen, which is why that
+      check is described rather than pasted: every shell flag would end the
+      comment. AMPS rejects the whole config for it - see the same warning in
+      the default flow, and server/build.gradle.kts checkConfigXml, which
+      catches it without needing a container.)
+    -->
+    <Modules>
+        <Module>
+            <Name>key-chaining</Name>
+            <Library>libamps_id_chaining_key_generator.so</Library>
+        </Module>
+    </Modules>
+
+    <!--
+      ===================================================================
+      SOW
+      ===================================================================
+      Topic names carry slashes (sow/parent/orders). That is a naming
+      convention only - AMPS topic names are opaque strings, and the slash
+      has no filesystem meaning. It DOES mean %n cannot be used in
+      <FileName>: %n expands to the topic name, so ./sow/%n.sow would ask for
+      ./sow/sow/parent/orders.sow, in directories nothing creates. Every
+      topic below therefore names its SOW file explicitly.
+
+      How the KeyGenerator block reads:
+
+        <Key>/11</Key>   FIRST key = the PRIMARY: the id of THIS message. A
+                         value never seen before opens a new chain.
+        <Key>/41</Key>   secondary = a reference to a PREDECESSOR. When a
+                         message carries one, the module looks up that
+                         predecessor's chain and reuses its SOW key.
+        <FileName>       the chain map, persisted. AMPS reloads it at startup,
+                         so chains survive a restart - without this the SOW
+                         would survive but the identity that built it would
+                         not.
+        <Validation>     records extra data to detect chains that WOULD have
+                         merged had messages arrived in a different order.
+                         On here because an out-of-order feed failing loudly
+                         beats a silently split order.
+    -->
+    <SOW>
+
+        <!-- ===== parent orders: D / G / F for parent chains ===== -->
+        <Topic>
+            <Name>sow/parent/orders</Name>
+            <MessageType>fix</MessageType>
+            <KeyGenerator>
+                <Module>key-chaining</Module>
+                <Options>
+                    <Key>/11</Key>
+                    <Key>/41</Key>
+                    <FileName>./sow/parent-orders.chain</FileName>
+                    <Validation>true</Validation>
+                </Options>
+            </KeyGenerator>
+            <FileName>./sow/parent-orders.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <Topic>
+            <Name>sow/parent/orders_audit</Name>
+            <MessageType>fix</MessageType>
+            <Key>/11</Key>
+            <FileName>./sow/parent-orders-audit.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- ===== child orders: D carrying tag 9000 (ParentOrderID) =====
+             Same two shapes. A child order is a distinct FIX chain with its
+             own 11/41 lineage; tag 9000 links it to the parent, and is
+             carried as an ordinary field so filters can walk the hierarchy
+             (/9000 = '<parent ClOrdID>'). -->
+        <Topic>
+            <Name>sow/child/orders</Name>
+            <MessageType>fix</MessageType>
+            <KeyGenerator>
+                <Module>key-chaining</Module>
+                <Options>
+                    <Key>/11</Key>
+                    <Key>/41</Key>
+                    <FileName>./sow/child-orders.chain</FileName>
+                    <Validation>true</Validation>
+                </Options>
+            </KeyGenerator>
+            <FileName>./sow/child-orders.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <Topic>
+            <Name>sow/child/orders_audit</Name>
+            <MessageType>fix</MessageType>
+            <Key>/11</Key>
+            <FileName>./sow/child-orders-audit.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- ===== executions (35=8) =====
+             Two different keys, two different questions:
+
+               execs        /37 OrderID  -> "latest execution state of this
+                                            order", one record per order.
+               execs_audit  /17 ExecID   -> "every execution report", one
+                                            record each. ExecID is unique per
+                                            8, so this is the fills history.
+
+             Both keys are REQUIRED fields on anything published here: a SOW
+             publish that lacks its key field is rejected. That is why the
+             publisher's field selection for 35=8 always includes 37 and 17
+             even though the TODO's field list names neither - see
+             Fix42PublisherProperties for the check that enforces it. -->
+        <Topic>
+            <Name>sow/parent/execs</Name>
+            <MessageType>fix</MessageType>
+            <Key>/37</Key>
+            <FileName>./sow/parent-execs.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <Topic>
+            <Name>sow/parent/execs_audit</Name>
+            <MessageType>fix</MessageType>
+            <Key>/17</Key>
+            <FileName>./sow/parent-execs-audit.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- ===== cancel/replace rejects (35=9) =====
+             Keyed /11: a 9 names the rejected REQUEST's ClOrdID, so one
+             record per rejected request. Note that a 4.2 cancel-reject may
+             carry 37=NONE when the target was never acked, which is exactly
+             why this topic is not keyed on OrderID. -->
+        <Topic>
+            <Name>sow/parent/rejects</Name>
+            <MessageType>fix</MessageType>
+            <Key>/11</Key>
+            <FileName>./sow/parent-rejects.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+    </SOW>
+
+    <!--
+      ===================================================================
+      TransactionLog
+      ===================================================================
+      The audit topics are the system of record and get the journal. The
+      chained blotters (sow/parent/orders, sow/child/orders) and the
+      latest-per-order execs topic are derivable by replaying the audit
+      streams, so journalling them would record the same information twice -
+      the reasoning in docs/src/transaction-log-sizing.md.
+    -->
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
+        <MinJournalSize>10MB</MinJournalSize>
+
+        <Topic>
+            <Name>sow/parent/orders_audit</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>sow/child/orders_audit</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>sow/parent/execs_audit</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>sow/parent/rejects</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+    </TransactionLog>
+
+</AMPSConfig>

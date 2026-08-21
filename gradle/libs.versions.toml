@@ -9,6 +9,11 @@ junit = "5.13.4"
 # parses JSON envelopes directly, so it declares what it uses rather than
 # compiling against someone else's transitive dependency.
 gson = "2.11.0"
+# The FIX 4.2 delta publisher (fix42-publisher) is a Spring Boot application:
+# YAML-bound configuration is the feature it is actually there to use, since
+# every field-selection rule in it is config rather than code.
+springBoot = "3.5.9"
+awaitility = "4.3.0"
 
 [libraries]
 amps-client = { module = "com.crankuptheamps:amps-client", version.ref = "amps" }
@@ -21,6 +26,12 @@ slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+spring-boot-bom = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "springBoot" }
+spring-boot-starter = { module = "org.springframework.boot:spring-boot-starter" }
+spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
+spring-boot-configuration-processor = { module = "org.springframework.boot:spring-boot-configuration-processor" }
+awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
 
 [plugins]
 protobuf = { id = "com.google.protobuf", version.ref = "protobufPlugin" }
+spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }

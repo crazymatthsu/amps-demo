@@ -177,7 +177,11 @@ roles in this architecture, in increasing order of commitment:
 
 **(a) The raw chained blotter, beside the machine — recommended.** A seventh
 topic (`algo/chain`, keys `/11` + `/41`) that the gateway delta-publishes every
-message into. Zero code, and it earns its config twice: as a
+message into. This is the shape now implemented in
+[`fix42-publisher/`](../../fix42-publisher/README.md) against the
+[`fix42-chaining`](../../server/config/flows/fix42-chaining/amps-config.xml)
+flow, if you want to read working code rather than a sketch. Zero code, and it
+earns its config twice: as a
 monitoring/debugging surface ("show me the raw venue truth for this chain,
 unfiltered by our rules"), and as a **bring-up consistency check** — the
 machine's `algo/orders` venue-sourced fields (39/14/151/6) must agree with the

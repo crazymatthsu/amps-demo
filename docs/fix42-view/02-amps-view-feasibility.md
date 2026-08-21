@@ -242,7 +242,34 @@ Each of these maps to a contract rule that remains homeless:
    would have merged had messages arrived in a different order — worth
    enabling; it converts silent mis-chaining into a visible error.)
 
-### 4.3 Composition constraints and open items to verify
+### 4.3 Verified on AMPS 5.3.5.135
+
+The items below were open questions when this analysis was written. They have
+since been settled by building the thing — `fix42-publisher/` and the
+`fix42-chaining` server flow, with an integration test that starts a real
+container and reads the SOW back:
+
+- **The module ships and loads.** `libamps_id_chaining_key_generator.so` is
+  present in the 5.3.5.135 image; the `<Modules>` / `<KeyGenerator>` /
+  `<Options>` config below validates with `amps.sh validate`.
+- **Chain collapse works as documented.** Nine parent ClOrdIDs across five
+  chains produce five records on the chained topic and nine on its audit twin.
+  An amend chain C1 -> C2 -> C3 resolves to one record.
+- **Delta merge preserves untouched fields.** After a `35=G` carrying seven
+  tags, the record still holds the symbol, side, account, ord type, currency
+  and destination from the original `35=D` — nothing re-sent them.
+- **§4.2 item 1 is real, and is the binding limit.** A rejected amend leaves
+  its *proposed* terms on the chained record: the merge applied them when the
+  request was published and the `35=9` does not retract them. The integration
+  test asserts this rather than hiding it.
+- **`%n` is unusable in `<FileName>`** when topic names contain slashes
+  (`sow/parent/orders` would ask for `./sow/sow/parent/orders.sow`). Name the
+  SOW file explicitly.
+- **XML comments may not contain a double hyphen**, which rejects the whole
+  config — so a pasted shell flag (`--rm`) in an explanatory comment is enough
+  to stop the server booting.
+
+### 4.4 Composition constraints and remaining open items
 
 - **One topic, not five.** A key generator is configured per SOW topic and
   chains only among that topic's messages. The `algo/D`…`algo/9` split defeats
@@ -250,7 +277,8 @@ Each of these maps to a contract rule that remains homeless:
   needs all types in one topic — either adopt the single-`algo/fix` ingress
   layout ([01-ingress-fix42-into-amps.md](01-ingress-fix42-into-amps.md) §3)
   or add a dedicated chained topic the gateway also publishes everything into.
-- **Key roster beyond 11/41.** The contract binds 37, 11, 41, 17 (§3),
+- **Key roster beyond 11/41.** Not exercised by the implementation, which
+  configures only `/11` + `/41`. The contract binds 37, 11, 41, 17 (§3),
   preferring 37 because ClOrdID chains break if an intermediate replace is
   missed. Configuring `/37` and `/17` as additional secondary keys should
   reproduce that healing — the guide documents multiple secondaries, but this

@@ -14,6 +14,7 @@ amps-demo/
 ├── server/    AMPS config (per environment/flow), Containerfile, compose + lifecycle scripts
 ├── clients/   sixteen runnable feature demos behind one CLI
 ├── utils/     operator tools: load a file, dump the SOW or journal, clear down
+├── fix42-publisher/  Spring Boot: FIX 4.2 delta publishing onto chained SOW keys
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -52,8 +53,26 @@ passes `--platform linux/amd64` for you.
 | **FIX order state** | `fix-lifecycle` | derive 35=D/G/F/8/9 into a queryable order-state SOW; the thin state machine AMPS cannot replace |
 | **Native FIX / NVFIX** | `fix-native`, `nvfix-native` | raw SOH-separated payloads on MessageType `fix`/`nvfix` topics; keys and filters on tags and names |
 | **Journal sizing** | `journal-lab` | measures full-publish vs delta cost in the transaction log, on disk |
+| **Chained SOW keys** | `fix42-publisher` | a whole FIX cancel/replace chain collapses to ONE record, keyed by the server rather than the client |
 
 `./gradlew :clients:run --args="list"` for the catalogue.
+
+The last row is a module rather than a demo, because it needs its own server
+flow and a Spring Boot application:
+
+```bash
+AMPS_FLOW=fix42-chaining ./server/scripts/amps.sh start
+./gradlew :fix42-publisher:bootRun
+```
+
+It publishes FIX 4.2 order flow -- parent and child orders, amends, cancels,
+fills, rejects -- as field-level deltas onto SOW topics keyed by AMPS's
+optional **chaining key generator**, which resolves the 11/41 ClOrdID chain
+server-side. Nine ClOrdIDs across five chains store as five records, each
+carrying the newest amend merged onto the original order's untouched terms,
+with no chain state in the publisher at all.
+-> [fix42-publisher/README.md](fix42-publisher/README.md), and
+[docs/fix42-view/](docs/fix42-view/README.md) for where that stops being enough.
 
 ## Operator tools
 
@@ -113,6 +132,7 @@ The combination imposes rules that are easy to get wrong and silent when you do 
 | [protobuf-json-and-amps.md](docs/src/protobuf-json-and-amps.md) | schema and encoding design |
 | [fix-order-state.md](docs/src/fix-order-state.md) | FIX 4.2 order state: the AMPS/gateway split |
 | [native-fix-and-nvfix.md](docs/src/native-fix-and-nvfix.md) | raw FIX/NVFIX message types, natively parsed |
+| [fix42-view/](docs/fix42-view/README.md) | can an AMPS *view* hold live FIX 4.2 order state? -- analysis, and what got built |
 | [deploying-utils-to-linux.md](docs/src/deploying-utils-to-linux.md) | packaging the utils tools for deployment |
 | [scheduled-maintenance.md](docs/src/scheduled-maintenance.md) | nightly SOW cleanup on a schedule, with `<Actions>` |
 | [server-env-layering.md](docs/src/server-env-layering.md) | compose, environments and business flows, and how the `.env` layers stack |

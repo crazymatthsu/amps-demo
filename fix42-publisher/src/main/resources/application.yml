@@ -1,0 +1,283 @@
+# FIX 4.2 delta publisher -- the rulebook.
+#
+# Everything about WHICH tags leave this process lives here. A route says
+# "for this message type, extract these fields and send them to these topics",
+# and the publisher does no more than that: it never accumulates chain state,
+# because the AMPS chaining key generator resolves 11/41 server-side.
+#
+# Two things are checked at startup and refuse to boot (Fix42Properties.validate):
+#   - a DELTA route whose tag list omits its destination topic's SOW key. AMPS
+#     rejects a SOW publish that lacks its key field, and a message the server
+#     will not store is a miserable thing to diagnose from the outside.
+#   - a topic named by a route with no entry under topic-keys, so the check
+#     above cannot be made at all.
+
+spring:
+  main:
+    banner-mode: off
+
+logging:
+  level:
+    com.demo.amps.fix42: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level %-28logger{0} %msg%n"
+
+fix42:
+
+  amps:
+    # The trailing path selects the MESSAGE TYPE, not just the protocol. Every
+    # topic below is <MessageType>fix</MessageType>, so this must end /amps/fix.
+    uri: tcp://127.0.0.1:9007/amps/fix
+    client-name: fix42-delta-publisher
+    timeout-ms: 10000
+
+  # The SOW key of every topic, mirroring <Key> in
+  # server/config/flows/fix42-chaining/amps-config.xml. Duplicated here on
+  # purpose: the publisher cannot read the server's config, and validating
+  # against a stale copy still catches the common mistake (a field list that
+  # forgot the key) while a mismatch shows up immediately as a rejected publish.
+  #
+  # sow/parent/orders and sow/child/orders are keyed by the CHAINING MODULE
+  # from /11 + /41. Tag 11 is the module's primary and is required on every
+  # message; 41 is the optional back-reference, absent on the first message of
+  # a chain, so only 11 is listed as required.
+  topic-keys:
+    "[sow/parent/orders]": [11]
+    "[sow/parent/orders_audit]": [11]
+    "[sow/child/orders]": [11]
+    "[sow/child/orders_audit]": [11]
+    "[sow/parent/execs]": [37]
+    "[sow/parent/execs_audit]": [17]
+    "[sow/parent/rejects]": [11]
+
+  # Matched in order; first match wins. {scope} becomes 'parent' or 'child'
+  # from tag 9000 (ParentOrderID) on the message.
+  #
+  # Two destinations per route, and the difference is the point:
+  #
+  #   topics            get the payload as selected -- what was actually sent.
+  #                     The audit topics, which should record the message, not
+  #                     a rewrite of it.
+  #   projected-topics  get the payload reshaped by the `projection` block.
+  #                     The chained blotter, where a PROPOSAL must never
+  #                     overwrite an ACKED value.
+  #
+  # The pending-state family (9010 PendingOrderQty, 9011 PendingPrice,
+  # 9012 PendingClOrdID, 9013 PendingAction) exists because FIX 4.2 stages an
+  # amend's terms until the venue confirms, and a delta merge has no notion of
+  # staging. Publishing a 35=G's tag 38 straight onto the blotter overwrites
+  # the quantity the venue acked -- and if the amend is rejected there is no
+  # way back, because a merge can overwrite but never remove. Keeping the
+  # proposal in its own tags means the conflict never arises, and the record
+  # answers both questions at once.
+  #
+  # Clearing is a WRITE of NONE/0, not a removal, for the same reason.
+  routes:
+
+    # ---- 35=D NewOrderSingle -------------------------------------------------
+    # The whole message: this is what CREATES the record, and every later delta
+    # relies on the terms it carries still being there. The blotter copy also
+    # seeds the pending family, so 9013 is never absent on a record.
+    - name: new-order
+      msg-types: ["D"]
+      mode: FULL
+      topics:
+        - "sow/{scope}/orders_audit"
+      projected-topics:
+        - "sow/{scope}/orders"
+      projection:
+        copy-tags:
+          "11": 9014           # the opening ClOrdID is the working one
+        set-tags:
+          "9013": "NEW"        # a 35=D is itself a request awaiting an ack
+          "9010": "0"
+          "9011": "0"
+          "9012": "NONE"
+
+    # ---- 35=G OrderCancelReplaceRequest --------------------------------------
+    # The audit topic gets the amend as sent, tags 38/44 and all.
+    # The blotter gets the SAME VALUES under 9010/9011 and never sees 38/44,
+    # so the acked terms in the record survive untouched.
+    #
+    # changeable-tags is still the knob a desk turns; adding 110 (MinQty) here
+    # means adding a 110 -> 90xx entry to copy-tags as well.
+    - name: amend
+      msg-types: ["G"]
+      mode: DELTA
+      tags: [35, 11, 41, 60]
+      changeable-tags: [38, 44, 59]
+      topics:
+        - "sow/{scope}/orders_audit"
+      projected-topics:
+        - "sow/{scope}/orders"
+      projection:
+        # 11 and 41 go through UNCHANGED. They are the chaining key
+        # generator's own inputs: it binds this new ClOrdID into the existing
+        # chain by seeing 11=<new> next to 41=<known>. Rewrite either one and
+        # the module opens a second chain instead -- the order splits in two.
+        tags: [35, 11, 41, 60]
+        copy-tags:
+          "38": 9010           # proposed OrderQty -> PendingOrderQty
+          "44": 9011           # proposed Price    -> PendingPrice
+          "11": 9012           # the request's own id -> PendingClOrdID
+        set-tags:
+          "9013": "REPLACE"
+        # 9014 is deliberately absent: a delta leaves it alone, so the working
+        # id stays what the venue last confirmed while this amend is in flight.
+
+    # ---- 35=F OrderCancelRequest ---------------------------------------------
+    # Same shape, no proposed terms: a cancel changes nothing but intent.
+    - name: cancel-request
+      msg-types: ["F"]
+      mode: DELTA
+      tags: [35, 11, 41, 60]
+      topics:
+        - "sow/{scope}/orders_audit"
+      projected-topics:
+        - "sow/{scope}/orders"
+      projection:
+        tags: [35, 11, 41, 60]
+        copy-tags:
+          "11": 9012
+        set-tags:
+          "9013": "CANCEL"
+
+    # ---- 35=8 ExecutionReport ------------------------------------------------
+    # Split by ExecType (150). Every variant includes 37 and 17: they key
+    # sow/parent/execs and sow/parent/execs_audit, and a SOW publish without
+    # its key is rejected.
+    #
+    # The variants that RESOLVE a pending request also project onto the order
+    # blotter to clear it. Fills do not -- a fill changes quantities, not
+    # intent, and the execs topics are where quantities live.
+
+    # New ack: the order is working. Clears the NEW pending flag.
+    - name: exec-new-ack
+      msg-types: ["8"]
+      exec-types: ["0"]
+      mode: DELTA
+      tags: [35, 11, 41, 37, 17, 39, 150, 60]
+      topics:
+        - "sow/parent/execs"
+        - "sow/parent/execs_audit"
+      projected-topics:
+        - "sow/{scope}/orders"
+      projection:
+        tags: [11, 41, 39, 60]   # venue status onto the blotter
+        copy-tags:
+          "11": 9014             # the venue has acknowledged this id
+        set-tags:
+          "9013": "NONE"
+          "9012": "NONE"
+
+    # Replace confirmed: the amend is accepted. The venue's own 38/44 become
+    # the acked terms -- we adopt what it says it accepted rather than what we
+    # asked for -- and the pending family is cleared in the same message.
+    - name: exec-replace-confirm
+      msg-types: ["8"]
+      exec-types: ["5"]
+      mode: DELTA
+      tags: [35, 11, 41, 37, 17, 39, 150, 60]
+      changeable-tags: [38, 44, 14, 151, 6]
+      topics:
+        - "sow/parent/execs"
+        - "sow/parent/execs_audit"
+      projected-topics:
+        - "sow/{scope}/orders"
+      projection:
+        tags: [11, 41, 39, 60, 38, 44]
+        copy-tags:
+          "11": 9014             # the amended id is now the working one
+        set-tags:
+          "9013": "NONE"
+          "9010": "0"
+          "9011": "0"
+          "9012": "NONE"
+
+    # Partial and full fills: economics only, no pending change, no blotter
+    # projection.
+    - name: exec-partial-fill
+      msg-types: ["8"]
+      exec-types: ["1"]
+      mode: DELTA
+      tags: [35, 11, 41, 37, 17, 39, 150, 60]
+      changeable-tags: [31, 32, 14, 151, 6, 30]
+      topics:
+        - "sow/parent/execs"
+        - "sow/parent/execs_audit"
+
+    - name: exec-fill
+      msg-types: ["8"]
+      exec-types: ["2"]
+      mode: DELTA
+      tags: [35, 11, 41, 37, 17, 39, 150, 60]
+      changeable-tags: [31, 32, 14, 151, 6, 30]
+      topics:
+        - "sow/parent/execs"
+        - "sow/parent/execs_audit"
+
+    # Cancel confirmed (150=4) and done for day (150=3): terminal, LeavesQty
+    # goes to zero, and any pending request is resolved.
+    - name: exec-cancel-or-done
+      msg-types: ["8"]
+      exec-types: ["4", "3"]
+      mode: DELTA
+      tags: [35, 11, 41, 37, 17, 39, 150, 60]
+      changeable-tags: [151]
+      topics:
+        - "sow/parent/execs"
+        - "sow/parent/execs_audit"
+      projected-topics:
+        - "sow/{scope}/orders"
+      projection:
+        tags: [11, 41, 39, 60]
+        set-tags:
+          "9013": "NONE"
+          "9010": "0"
+          "9011": "0"
+          "9012": "NONE"
+
+    # Everything else on a 35=8: pending new (A), pending cancel (6), pending
+    # replace (E), rejected (8), restated (D), expired (C). A catch-all rather
+    # than a gap -- an unrouted message raises at plan time, because a silent
+    # drop looks exactly like an AMPS bug from the far side.
+    #
+    # No blotter projection: 150=6 and 150=E ACKNOWLEDGE a pending request
+    # rather than resolving it, so the pending family must stay as it is.
+    - name: exec-other
+      msg-types: ["8"]
+      mode: DELTA
+      tags: [35, 11, 41, 37, 17, 39, 150, 60]
+      changeable-tags: [14, 151, 6, 38, 44, 103, 58]
+      topics:
+        - "sow/parent/execs"
+        - "sow/parent/execs_audit"
+
+    # ---- 35=9 OrderCancelReject ----------------------------------------------
+    # Keyed on tag 11, the REJECTED request's id -- one record per rejected
+    # request. Not keyed on OrderID: a 4.2 reject may carry 37=NONE when the
+    # target was never acked.
+    #
+    # On the blotter this is the case the whole pending family exists for.
+    # There is nothing to revert, because 38/44 were never overwritten: the
+    # projection just clears the proposal and copies tag 41 back into tag 11,
+    # since after a rejected request the working id is the one it referenced.
+    - name: cancel-reject
+      msg-types: ["9"]
+      mode: DELTA
+      tags: [35, 11, 41, 37, 39, 434, 60]
+      changeable-tags: [102, 58]
+      topics:
+        - "sow/parent/rejects"
+      projected-topics:
+        - "sow/{scope}/orders"
+      projection:
+        # 11/41 unchanged so the module still resolves the chain. 9014 is not
+        # published, so the working id stays what it was before the rejected
+        # request -- no revert needed, because nothing overwrote it.
+        tags: [11, 41, 39, 60]
+        set-tags:
+          "9013": "NONE"
+          "9010": "0"
+          "9011": "0"
+          "9012": "NONE"
