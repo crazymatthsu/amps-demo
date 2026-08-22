@@ -6,6 +6,9 @@ the **chaining key generator** — so a cancel/replace chain collapses to one
 record without the publisher tracking any chain state.
 
 ```bash
+# 0. local image 
+export AMPS_IMAGE=localhost/amps-demo:5.3.5.135
+
 # 1. AMPS on the flow that declares the topics and loads the module
 AMPS_FLOW=fix42-chaining ./server/scripts/amps.sh start
 
