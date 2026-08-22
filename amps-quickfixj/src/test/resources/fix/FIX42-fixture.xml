@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Trimmed QuickFIX/J-shaped FIX 4.2 data dictionary for unit tests.
+  Layout matches QuickFIX/J DataDictionary XML (fields, values, messages,
+  components, groups). Not a complete FIX 4.2 spec.
+-->
+<fix type="FIX" major="4" minor="2" servicepack="0">
+  <header>
+    <field name="BeginString" required="Y"/>
+    <field name="BodyLength" required="Y"/>
+    <field name="MsgType" required="Y"/>
+  </header>
+  <trailer>
+    <field name="CheckSum" required="Y"/>
+  </trailer>
+  <messages>
+    <message name="NewOrderSingle" msgtype="D" msgcat="app">
+      <field name="ClOrdID" required="Y"/>
+      <field name="HandlInst" required="Y"/>
+      <field name="Symbol" required="Y"/>
+      <field name="Side" required="Y"/>
+      <field name="OrderQty" required="N"/>
+      <field name="OrdType" required="Y"/>
+      <field name="Price" required="N"/>
+      <component name="Parties" required="N"/>
+      <group name="NoAllocs" required="N">
+        <field name="AllocAccount" required="N"/>
+        <field name="AllocShares" required="N"/>
+      </group>
+    </message>
+    <message name="ExecutionReport" msgtype="8" msgcat="app">
+      <field name="OrderID" required="Y"/>
+      <field name="ClOrdID" required="N"/>
+      <field name="ExecID" required="Y"/>
+      <field name="ExecTransType" required="Y"/>
+      <field name="ExecType" required="Y"/>
+      <field name="OrdStatus" required="Y"/>
+      <field name="Symbol" required="Y"/>
+      <field name="Side" required="Y"/>
+      <field name="OrderQty" required="N"/>
+      <field name="LeavesQty" required="Y"/>
+      <field name="CumQty" required="Y"/>
+      <field name="AvgPx" required="Y"/>
+      <group name="NoAllocs" required="N">
+        <field name="AllocAccount" required="N"/>
+        <field name="AllocShares" required="N"/>
+      </group>
+    </message>
+  </messages>
+  <components>
+    <component name="Parties">
+      <group name="NoPartyIDs" required="N">
+        <field name="PartyID" required="N"/>
+        <field name="PartyIDSource" required="N"/>
+        <field name="PartyRole" required="N"/>
+      </group>
+    </component>
+  </components>
+  <fields>
+    <field number="8" name="BeginString" type="STRING"/>
+    <field number="9" name="BodyLength" type="INT"/>
+    <field number="10" name="CheckSum" type="STRING"/>
+    <field number="11" name="ClOrdID" type="STRING"/>
+    <field number="14" name="CumQty" type="QTY"/>
+    <field number="17" name="ExecID" type="STRING"/>
+    <field number="20" name="ExecTransType" type="CHAR">
+      <value enum="0" description="New"/>
+      <value enum="1" description="Cancel"/>
+      <value enum="2" description="Correct"/>
+      <value enum="3" description="Status"/>
+    </field>
+    <field number="21" name="HandlInst" type="CHAR">
+      <value enum="1" description="Automated execution order private no Broker intervention"/>
+      <value enum="2" description="Automated execution order public Broker intervention OK"/>
+      <value enum="3" description="Manual order best execution"/>
+    </field>
+    <field number="31" name="LastPx" type="PRICE"/>
+    <field number="32" name="LastShares" type="QTY"/>
+    <field number="35" name="MsgType" type="STRING">
+      <value enum="8" description="ExecutionReport"/>
+      <value enum="D" description="NewOrderSingle"/>
+    </field>
+    <field number="37" name="OrderID" type="STRING"/>
+    <field number="38" name="OrderQty" type="QTY"/>
+    <field number="39" name="OrdStatus" type="CHAR">
+      <value enum="0" description="New"/>
+      <value enum="1" description="Partially filled"/>
+      <value enum="2" description="Filled"/>
+      <value enum="4" description="Canceled"/>
+      <value enum="8" description="Rejected"/>
+    </field>
+    <field number="40" name="OrdType" type="CHAR">
+      <value enum="1" description="Market"/>
+      <value enum="2" description="Limit"/>
+    </field>
+    <field number="44" name="Price" type="PRICE"/>
+    <field number="54" name="Side" type="CHAR">
+      <value enum="1" description="Buy"/>
+      <value enum="2" description="Sell"/>
+    </field>
+    <field number="55" name="Symbol" type="STRING"/>
+    <field number="78" name="NoAllocs" type="NUMINGROUP"/>
+    <field number="79" name="AllocAccount" type="STRING"/>
+    <field number="80" name="AllocShares" type="QTY"/>
+    <field number="150" name="ExecType" type="CHAR">
+      <value enum="0" description="New"/>
+      <value enum="1" description="Partial fill"/>
+      <value enum="2" description="Fill"/>
+    </field>
+    <field number="151" name="LeavesQty" type="QTY"/>
+    <field number="6" name="AvgPx" type="PRICE"/>
+    <field number="447" name="PartyIDSource" type="CHAR">
+      <value enum="D" description="Proprietary custom code"/>
+    </field>
+    <field number="448" name="PartyID" type="STRING"/>
+    <field number="452" name="PartyRole" type="INT">
+      <value enum="3" description="Client ID"/>
+    </field>
+    <field number="453" name="NoPartyIDs" type="NUMINGROUP"/>
+  </fields>
+</fix>
