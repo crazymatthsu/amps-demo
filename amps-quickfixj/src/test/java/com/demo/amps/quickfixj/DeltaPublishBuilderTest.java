@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.InputStream;
+import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -154,6 +156,86 @@ class DeltaPublishBuilderTest {
                 .buildNvfix();
         assertEquals(soh("OrdStatus=Filled"), nvfix);
         assertEquals(conv, new DeltaPublishBuilder(dictionary, conv).converter());
+    }
+
+    @Test
+    @DisplayName("get by tag or name after set, either FIX or NVFIX key")
+    void getByTagOrNameAfterSet() {
+        DeltaPublishBuilder byTag = new DeltaPublishBuilder(dictionary).set(39, "2");
+        assertEquals(Optional.of("2"), byTag.get(39));
+        assertEquals(Optional.of("2"), byTag.get("39"));
+        assertEquals(Optional.of("2"), byTag.get("OrdStatus"));
+        assertEquals(Optional.empty(), byTag.get(11));
+        assertEquals(Optional.empty(), byTag.get("ClOrdID"));
+        assertEquals(Optional.empty(), byTag.get("NoSuchField"));
+
+        DeltaPublishBuilder byName = new DeltaPublishBuilder(dictionary).set("OrdStatus", "Filled");
+        assertEquals(Optional.of("Filled"), byName.get("OrdStatus"));
+        assertEquals(Optional.of("Filled"), byName.get(39));
+        assertEquals(Optional.of("Filled"), byName.get("39"));
+
+        DeltaPublishBuilder mixed = new DeltaPublishBuilder(dictionary)
+                .set(11, "PARENT-AAPL-2")
+                .set("OrdStatus", "Filled");
+        assertEquals(Optional.of("PARENT-AAPL-2"), mixed.get("ClOrdID"));
+        assertEquals(Optional.of("PARENT-AAPL-2"), mixed.get(11));
+        assertEquals(Optional.of("Filled"), mixed.get(39));
+        assertEquals(Optional.of("Filled"), mixed.get("OrdStatus"));
+    }
+
+    @Test
+    @DisplayName("fromFix / fromNvfix: get works by tag or name on either payload")
+    void getOnParsedFixAndNvfix() {
+        String fix = soh("11=PARENT-AAPL-2", "39=2", "151=0");
+        DeltaPublishBuilder fromFix = DeltaPublishBuilder.fromFix(dictionary, fix);
+        assertEquals(Optional.of("PARENT-AAPL-2"), fromFix.get(11));
+        assertEquals(Optional.of("PARENT-AAPL-2"), fromFix.get("ClOrdID"));
+        assertEquals(Optional.of("2"), fromFix.get(39));
+        assertEquals(Optional.of("2"), fromFix.get("OrdStatus"));
+        assertEquals(Optional.of("0"), fromFix.get("LeavesQty"));
+        assertEquals(Optional.empty(), fromFix.get(55));
+        assertEquals(soh("11=PARENT-AAPL-2", "39=2", "151=0"), fromFix.buildFix());
+        assertEquals(soh("ClOrdID=PARENT-AAPL-2", "OrdStatus=Filled", "LeavesQty=0"), fromFix.buildNvfix());
+
+        String nvfix = soh("ClOrdID=PARENT-AAPL-2", "OrdStatus=Filled", "LeavesQty=0");
+        DeltaPublishBuilder fromNvfix = DeltaPublishBuilder.fromNvfix(dictionary, nvfix);
+        assertEquals(Optional.of("PARENT-AAPL-2"), fromNvfix.get(11));
+        assertEquals(Optional.of("PARENT-AAPL-2"), fromNvfix.get("ClOrdID"));
+        assertEquals(Optional.of("Filled"), fromNvfix.get(39));
+        assertEquals(Optional.of("Filled"), fromNvfix.get("OrdStatus"));
+        assertEquals(Optional.of("0"), fromNvfix.get(151));
+        assertEquals(soh("11=PARENT-AAPL-2", "39=2", "151=0"), fromNvfix.buildFix());
+        assertEquals(nvfix, fromNvfix.buildNvfix());
+    }
+
+    @Test
+    @DisplayName("getAll returns repeating-group occurrences; get is last")
+    void getAllRepeatingGroup() {
+        DeltaPublishBuilder builder = new DeltaPublishBuilder(dictionary)
+                .group(78, 2)
+                .set("AllocAccount", "ACC-1")
+                .set(80, "400")
+                .end()
+                .set(79, "ACC-2")
+                .set("AllocShares", "600");
+        assertEquals(Optional.of("2"), builder.get("NoAllocs"));
+        assertEquals(Optional.of("ACC-2"), builder.get(79));
+        assertEquals(Optional.of("ACC-2"), builder.get("AllocAccount"));
+        assertEquals(List.of("ACC-1", "ACC-2"), builder.getAll(79));
+        assertEquals(List.of("ACC-1", "ACC-2"), builder.getAll("AllocAccount"));
+        assertEquals(List.of("400", "600"), builder.getAll("AllocShares"));
+    }
+
+    @Test
+    @DisplayName("get unknown tags by the same numeric or custom name")
+    void getUnknownTags() {
+        DeltaPublishBuilder builder = new DeltaPublishBuilder(dictionary)
+                .set(9001, "EVT-003")
+                .set("CustomVenueTag", "keep-me");
+        assertEquals(Optional.of("EVT-003"), builder.get(9001));
+        assertEquals(Optional.of("EVT-003"), builder.get("9001"));
+        assertEquals(Optional.of("keep-me"), builder.get("CustomVenueTag"));
+        assertEquals(Optional.empty(), builder.get(9002));
     }
 
     private static String soh(String... fields) {
