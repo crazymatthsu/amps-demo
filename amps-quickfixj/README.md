@@ -68,6 +68,32 @@ String back = conv.partialNvfixToFix(deltaNvfix);
 only). Use the `partial*` methods at call sites that publish deltas so the
 intent is obvious.
 
+## Build a delta (FIX or NVFIX)
+
+`DeltaPublishBuilder` constructs that same partial payload field-by-field.
+Keys can be FIX tags (`11`, `"39"`) or NVFIX names (`"OrdStatus"`) on the
+same builder; values can be codes (`"2"`) or meanings (`"Filled"`). Only
+fields that were set are emitted — no session/header/body fillers.
+
+```java
+String nvfix = new DeltaPublishBuilder(dict)
+    .set(11, "PARENT-AAPL-2")
+    .set("OrdStatus", "Filled")
+    .set("LeavesQty", "0")
+    .buildNvfix();
+String fix = new DeltaPublishBuilder(dict)
+    .set("ClOrdID", "PARENT-AAPL-2")
+    .set(39, "2")
+    .buildFix();
+```
+
+Insertion order is the AMPS field order (including repeating groups: count
+field, then members). Optional nested `group("NoAllocs", 1).set(...).end()`
+is the same sequence with a count field written for you.
+
+Pass an existing `FixNvfixConverter` as the second constructor argument if
+you already have one; `buildNvfix()` uses it after encoding to FIX.
+
 ## Repeating groups
 
 If the dictionary declares a group (`<group name="NoAllocs">` …), instances are
@@ -100,6 +126,12 @@ in the user-defined range and venue-specific extras on a delta.
 - `String partialFixToNvfix(String fixFragment)`
 - `String partialNvfixToFix(String nvfixFragment)`
 - `static String printable(String payload)`
+- `DeltaPublishBuilder(QuickFixDictionary)`
+- `DeltaPublishBuilder(QuickFixDictionary, FixNvfixConverter)`
+- `DeltaPublishBuilder set(int tag, String value)`
+- `DeltaPublishBuilder set(String tagOrName, String value)`
+- `GroupInstance group(int countTag, int count)` / `group(String countTagOrName, int count)`
+- `String buildFix()` / `String buildNvfix()`
 
 `UnknownFieldPolicy` currently has a single value, `PASSTHROUGH`.
 
