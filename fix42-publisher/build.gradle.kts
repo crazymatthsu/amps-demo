@@ -51,6 +51,13 @@ configurations["integrationTestImplementation"]
 configurations["integrationTestRuntimeOnly"]
     .extendsFrom(configurations.testRuntimeOnly.get())
 
+// Declared here rather than in `dependencies` above: the configuration these
+// name is created by the sourceSets block, which runs after it.
+dependencies {
+    "integrationTestImplementation"(libs.testcontainers)
+    "integrationTestImplementation"(libs.testcontainers.junit)
+}
+
 val integrationTestTask = tasks.register<Test>("integrationTest") {
     group = "verification"
     description = "Publish into a real AMPS instance and read the SOW back."
@@ -58,12 +65,25 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
     classpath = integrationTest.runtimeClasspath
     shouldRunAfter(tasks.test)
 
-    // The harness starts its own container, so it needs to know which image
-    // and engine to use. Forwarded rather than hard-coded: there is no public
-    // AMPS image, so the value is necessarily site-specific.
-    listOf("AMPS_IMAGE", "CONTAINER_ENGINE", "AMPS_PLATFORM", "AMPS_BIN").forEach { name ->
-        System.getenv(name)?.let { environment(name, it) }
-    }
+    // The harness starts its own container, so it needs to know which image to
+    // use. Forwarded rather than hard-coded: there is no public AMPS image, so
+    // the value is necessarily site-specific.
+    //
+    // Read through providers.environmentVariable, NOT System.getenv. A test
+    // task inherits the environment of the Gradle DAEMON, which is long-lived:
+    // with System.getenv the value is captured once at configuration time and
+    // a later invocation that sets AMPS_IMAGE differently reuses the stale
+    // one. That produced the worst possible failure -- BUILD SUCCESSFUL with
+    // every integration test silently skipped. A provider is tracked as a
+    // build input, so changing the variable re-configures the task.
+    listOf("AMPS_IMAGE", "AMPS_BIN", "DOCKER_HOST", "TESTCONTAINERS_RYUK_DISABLED")
+        .forEach { name ->
+            val value = providers.environmentVariable(name)
+            inputs.property(name, value.orElse(""))
+            if (value.isPresent) {
+                environment(name, value.get())
+            }
+        }
     // Config and flow files are found relative to the repository root.
     workingDir = rootProject.projectDir
     testLogging {

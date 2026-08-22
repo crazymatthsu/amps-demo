@@ -14,6 +14,7 @@ gson = "2.11.0"
 # every field-selection rule in it is config rather than code.
 springBoot = "3.5.9"
 awaitility = "4.3.0"
+testcontainers = "1.21.3"
 
 [libraries]
 amps-client = { module = "com.crankuptheamps:amps-client", version.ref = "amps" }
@@ -31,6 +32,8 @@ spring-boot-starter = { module = "org.springframework.boot:spring-boot-starter" 
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
 spring-boot-configuration-processor = { module = "org.springframework.boot:spring-boot-configuration-processor" }
 awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
+testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
+testcontainers-junit = { module = "org.testcontainers:junit-jupiter", version.ref = "testcontainers" }
 
 [plugins]
 protobuf = { id = "com.google.protobuf", version.ref = "protobufPlugin" }

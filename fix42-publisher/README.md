@@ -154,21 +154,38 @@ measurements behind this section in
 ## Tests
 
 ```bash
-./gradlew :fix42-publisher:test              # 67 unit tests, no server needed
+./gradlew :fix42-publisher:test              # 71 unit tests, no server needed
 AMPS_IMAGE=<your-image> \
-  ./gradlew :fix42-publisher:integrationTest # 10 tests against a real container
+  ./gradlew :fix42-publisher:integrationTest # 18 tests against a real container
 ```
 
-The integration suite starts its own AMPS container on a free port with an
-empty data directory, publishes the flow, and reads the SOW back. It **skips**
-rather than fails when `AMPS_IMAGE` is unset, so `./gradlew build` stays green
-on a machine that has never seen AMPS — and does real work on one that has.
+The integration suites use **Testcontainers** to start their own AMPS instance
+per class, with the config copied into the container and the data directory on
+a tmpfs — so no run can inherit the last one's SOW or chain map, and there is
+no host state to clean up. They **skip** rather than fail when `AMPS_IMAGE` is
+unset, so `./gradlew build` stays green on a machine that has never seen AMPS.
 
-Two things it checks that are easy to get wrong:
+Testcontainers needs a **Docker-API-compatible socket**. With Docker that is
+automatic; with podman, either `/var/run/docker.sock` already points at the
+podman socket or you export one:
 
+```bash
+export DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
+```
+
+Three things the harness gets right that are easy to get wrong:
+
+- it waits for the server's `initialization completed` log line, not an open
+  port. The container engine's port forwarder accepts connections as soon as
+  the container exists, so a client that races it connects and is then dropped
+  mid-logon;
 - it binds this module's **own** `application.yml` rather than restating the
   rules, so a change to the shipped configuration is exercised;
-- it waits for the server's `initialization completed` log line, not just an
-  open port. The container engine's port forwarder accepts connections as soon
-  as the container exists, so a client that races it connects and is then
-  dropped mid-logon.
+- `AMPS_IMAGE` reaches the test JVM through a Gradle *provider*, not
+  `System.getenv` at configuration time. A test task inherits the long-lived
+  Gradle **daemon's** environment, so the eager form captures the value once
+  and a later run with a different setting silently reuses the stale one —
+  which showed up as BUILD SUCCESSFUL with every integration test skipped.
+
+A green build is not by itself proof the integration tests ran; check for
+`SKIPPED` if it matters.
