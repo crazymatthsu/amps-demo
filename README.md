@@ -14,6 +14,7 @@ amps-demo/
 ├── server/    AMPS config (per environment/flow), Containerfile, compose + lifecycle scripts
 ├── clients/   sixteen runnable feature demos behind one CLI
 ├── utils/     operator tools: load a file, dump the SOW or journal, clear down
+├── amps-cli/  dump a FIX SOW: snapshot, subscribe, or query; raw or NVFIX
 ├── fix42-publisher/  Spring Boot: FIX 4.2 delta publishing onto chained SOW keys
 └── docs/      the written half, link-checked by the build
 ```
@@ -27,7 +28,7 @@ podman build --platform linux/amd64 -f server/Containerfile -t amps-demo:5.3 \
 export AMPS_IMAGE=amps-demo:5.3
 
 ./server/scripts/amps.sh start                # AMPS in a container
-./gradlew build                               # compile + 71 unit tests
+./gradlew build                               # compile + unit tests
 ./gradlew :clients:run --args="sow-load"      # populate the SOW
 ./gradlew :clients:run --args="tour"          # the guided sequence
 ```
@@ -91,6 +92,21 @@ Dumps round-trip — what `ampsToFileSOW.sh` writes, `fileToAMPS.sh` republishes
 Note that `truncateAMPS.sh` clears the SOW only: the transaction log cannot be
 truncated by any client, and `--journal` explains what to do instead.
 → [utils/README.md](utils/README.md)
+
+`amps-cli` dumps a SOW of native FIX messages from the Linux console: snapshot
+only, snapshot then subscribe, or query by filter, as raw SOH-separated
+`tag=value` or as NVFIX (FIX 4.2 tag names and enumerated meanings).
+
+```bash
+./gradlew :amps-cli:test
+./gradlew :clients:run --args="fix-native"     # populate fix.native.* if needed
+./gradlew :amps-cli:run --args="--mode snapshot --topic fix.native.orders --output raw"
+./gradlew :amps-cli:run --args="--mode query --topic fix.native.orders --filter \"/39 = '2'\" --output nvfix"
+./gradlew :amps-cli:run --args="--mode snapshot-subscribe --topic fix.native.orders --output nvfix --timeout-ms 15000"
+```
+
+`--url tcp://127.0.0.1:9007/amps/fix` (or `-Damps.host` / `AMPS_HOST`) matches
+the rest of the repo. Flags and more examples: [amps-cli/README.md](amps-cli/README.md).
 
 ## The two questions this repo was built to answer
 
