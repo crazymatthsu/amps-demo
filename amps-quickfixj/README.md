@@ -75,6 +75,11 @@ Keys can be FIX tags (`11`, `"39"`) or NVFIX names (`"OrdStatus"`) on the
 same builder; values can be codes (`"2"`) or meanings (`"Filled"`). Only
 fields that were set are emitted — no session/header/body fillers.
 
+`set` and `get` both accept a tag number or a field name, whether the stored
+fields came from FIX or NVFIX. `get` returns `Optional.empty()` when the field
+is absent (the last value if a repeating tag appears more than once; use
+`getAll` for every occurrence).
+
 ```java
 String nvfix = new DeltaPublishBuilder(dict)
     .set(11, "PARENT-AAPL-2")
@@ -85,6 +90,16 @@ String fix = new DeltaPublishBuilder(dict)
     .set("ClOrdID", "PARENT-AAPL-2")
     .set(39, "2")
     .buildFix();
+
+DeltaPublishBuilder delta = new DeltaPublishBuilder(dict).set(39, "2");
+delta.get(39);          // Optional.of("2")
+delta.get("OrdStatus"); // Optional.of("2") — same field
+
+DeltaPublishBuilder parsedFix = DeltaPublishBuilder.fromFix(dict, fix);
+parsedFix.get("OrdStatus"); // Optional.of("2") from a FIX payload
+DeltaPublishBuilder parsedNv = DeltaPublishBuilder.fromNvfix(dict, nvfix);
+parsedNv.get(39);           // Optional.of("Filled") from an NVFIX payload
+parsedNv.get("ClOrdID");    // Optional.of("PARENT-AAPL-2")
 ```
 
 Insertion order is the AMPS field order (including repeating groups: count
@@ -128,8 +143,12 @@ in the user-defined range and venue-specific extras on a delta.
 - `static String printable(String payload)`
 - `DeltaPublishBuilder(QuickFixDictionary)`
 - `DeltaPublishBuilder(QuickFixDictionary, FixNvfixConverter)`
+- `static DeltaPublishBuilder fromFix(QuickFixDictionary, String)`
+- `static DeltaPublishBuilder fromNvfix(QuickFixDictionary, String)`
 - `DeltaPublishBuilder set(int tag, String value)`
 - `DeltaPublishBuilder set(String tagOrName, String value)`
+- `Optional<String> get(int tag)` / `Optional<String> get(String tagOrName)`
+- `List<String> getAll(int tag)` / `List<String> getAll(String tagOrName)`
 - `GroupInstance group(int countTag, int count)` / `group(String countTagOrName, int count)`
 - `String buildFix()` / `String buildNvfix()`
 
