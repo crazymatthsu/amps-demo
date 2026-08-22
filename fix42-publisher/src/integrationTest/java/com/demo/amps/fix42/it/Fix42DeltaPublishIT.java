@@ -267,6 +267,57 @@ class Fix42DeltaPublishIT {
                 .isEqualTo(FixTags.OrdStatus.PARTIALLY_FILLED);
     }
 
+    @Test
+    @DisplayName("a stored fill record reconciles against itself: 38 = 14 + 151")
+    void storedFillCarriesTheQuantityInvariant() throws Exception {
+        Map<String, FixMessage> audit = sow.recordsBy(PARENT_EXECS_AUDIT, FixTags.EXEC_ID);
+
+        // AAPL's first partial: 2000 of 10000 at 185.45.
+        FixMessage fill = audit.get("EXEC-PARENT-AAPL-2");
+        assertThat(fill.value(FixTags.LAST_SHARES)).isEqualTo("2000");
+        assertThat(fill.value(FixTags.LAST_PX)).isEqualTo("185.45");
+        assertThat(fill.value(FixTags.CUM_QTY)).isEqualTo("2000");
+        assertThat(fill.value(FixTags.LEAVES_QTY)).isEqualTo("8000");
+
+        // OrderQty rides along on the fill, so the invariant is checkable from
+        // the stored record alone rather than needing another report type.
+        long orderQty = Long.parseLong(fill.value(FixTags.ORDER_QTY));
+        long cumQty = Long.parseLong(fill.value(FixTags.CUM_QTY));
+        long leavesQty = Long.parseLong(fill.value(FixTags.LEAVES_QTY));
+        assertThat(cumQty + leavesQty).isEqualTo(orderQty);
+    }
+
+    @Test
+    @DisplayName("every stored fill reconciles; no stored ack claims a trade")
+    void storedExecutionsAreSelfConsistent() throws Exception {
+        for (FixMessage record : sow.records(PARENT_EXECS_AUDIT)) {
+            String execType = record.value(FixTags.EXEC_TYPE);
+            boolean isFill = FixTags.ExecType.PARTIAL_FILL.equals(execType)
+                    || FixTags.ExecType.FILL.equals(execType);
+
+            if (isFill) {
+                long orderQty = Long.parseLong(record.value(FixTags.ORDER_QTY));
+                long cumQty = Long.parseLong(record.value(FixTags.CUM_QTY));
+                long leavesQty = Long.parseLong(record.value(FixTags.LEAVES_QTY));
+                assertThat(cumQty + leavesQty)
+                        .as("fill %s: 38=%d, 14=%d, 151=%d", record.value(FixTags.EXEC_ID),
+                                orderQty, cumQty, leavesQty)
+                        .isEqualTo(orderQty);
+                assertThat(Long.parseLong(record.value(FixTags.LAST_SHARES)))
+                        .as("a fill reports a traded quantity")
+                        .isPositive();
+            } else if (FixTags.ExecType.NEW.equals(execType)) {
+                // An ack reports no trade, so the record carries no trade
+                // fields at all -- this topic is keyed per ExecID, so nothing
+                // merges into it from a neighbouring report.
+                assertThat(record.has(FixTags.LAST_SHARES))
+                        .as("ack %s must not claim a trade", record.value(FixTags.EXEC_ID))
+                        .isFalse();
+                assertThat(record.has(FixTags.LAST_PX)).isFalse();
+            }
+        }
+    }
+
     // ---- the pending-state family -------------------------------------------
 
     @Test
