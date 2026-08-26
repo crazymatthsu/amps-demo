@@ -134,6 +134,51 @@ public final class AmpsTestServer implements AutoCloseable {
         log.info("AMPS ready on tcp://127.0.0.1:{}", port);
     }
 
+    /**
+     * Restarts the container on the same data directory.
+     *
+     * <p>For tests that care what survives: the SOW file, the journal, and --
+     * the reason this exists -- the chaining key generator's persisted chain
+     * map, without which the identity a record was built under would be lost
+     * while the record itself survived.
+     *
+     * <p>Waits for a NEW readiness marker rather than any marker. The previous
+     * run's "initialization completed" is still in the log after a restart, so
+     * matching on presence alone returns instantly and hands back a server
+     * that is still starting.
+     */
+    public void restart() throws Exception {
+        int before = readyMarkerCount();
+
+        Process process = new ProcessBuilder(engine, "restart", containerName)
+                .redirectErrorStream(true).start();
+        String output = new String(process.getInputStream().readAllBytes());
+        if (!process.waitFor(2, TimeUnit.MINUTES) || process.exitValue() != 0) {
+            throw new IllegalStateException("could not restart AMPS container:\n" + output);
+        }
+
+        Instant deadline = Instant.now().plus(STARTUP_TIMEOUT);
+        while (Instant.now().isBefore(deadline)) {
+            if (readyMarkerCount() > before) {
+                log.info("AMPS container {} restarted on port {}", containerName, port);
+                return;
+            }
+            Thread.sleep(500);
+        }
+        throw new IllegalStateException("AMPS did not come back within "
+                + STARTUP_TIMEOUT.toSeconds() + "s. Container log:\n" + logs());
+    }
+
+    private int readyMarkerCount() {
+        int count = 0;
+        for (String line : logs().split("\n")) {
+            if (line.contains("initialization completed")) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     /** The client URI for this instance, selecting the {@code fix} message type. */
     public String uri() {
         return "tcp://127.0.0.1:" + port + "/amps/fix";
