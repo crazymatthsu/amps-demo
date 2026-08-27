@@ -10,6 +10,31 @@
 Nothing else. Gradle comes from the wrapper; `protoc` is downloaded as a Maven
 artifact by the protobuf plugin.
 
+### AMPS_IMAGE
+
+Every command that runs a container needs one:
+
+```bash
+export AMPS_IMAGE=amps-demo:5.3.5.135
+```
+
+Without it, `amps.sh` stops with *"AMPS_IMAGE is not set, and there is no public
+AMPS server image to default to."* That is deliberate rather than unhelpful:
+60East ships the server as a release tarball only, so there is nothing safe to
+default to and a wrong guess would fail later and more confusingly. It is a
+shell variable, so a new terminal loses it — put the line in your shell profile.
+
+If you have no image yet, build one from a release tarball (the download is
+behind an [evaluation sign-up](https://www.crankuptheamps.com/evaluate/)):
+
+```bash
+podman build --platform linux/amd64 -f server/Containerfile -t amps-demo:5.3.5.135 --build-arg AMPS_TARBALL=AMPS-5.3.5.135-Release-Linux.tar server
+```
+
+Substitute your tarball's exact filename. The tag you build is what
+`AMPS_IMAGE` must name; podman resolves it as `localhost/amps-demo:5.3.5.135`,
+and either form works. → [server/README.md](../../server/README.md)
+
 ## Five minutes
 
 ```bash
@@ -92,8 +117,19 @@ Also available as Gradle tasks — `./gradlew :server:serverStart`, `serverStop`
 `serverValidateConfig`.
 
 Every command above runs one flow at a time (`AMPS_FLOW=market-data`, default
-`default`). For more than one flow or environment at once, there is a compose
-alternative: → [server-env-layering.md](server-env-layering.md).
+`default`). A **flow** is one folder under `server/config/flows/`, holding one
+`amps-config.xml`: the same instance, configured for a different job.
+
+| flow | what its config is for |
+| --- | --- |
+| `default` | the demos above — SOW, delta, FIX/NVFIX, journal lab |
+| `fix42-chaining` | FIX 4.2 order flow keyed by the chaining key generator (below) |
+| `bounded-retention` | capping journal growth with a scheduled ageing action |
+| `market-data` | the 500 GB/day sizing case |
+| `maintenance` | scheduled `<Actions>`: compaction, rotation, archival |
+
+For more than one flow or environment at once, there is a compose alternative:
+→ [server-env-layering.md](server-env-layering.md).
 
 | endpoint | address |
 | --- | --- |
@@ -104,6 +140,57 @@ alternative: → [server-env-layering.md](server-env-layering.md).
 
 Point the demos elsewhere with `AMPS_HOST` / `AMPS_PORT`, or
 `-Damps.host=... -Damps.port=...`.
+
+## The FIX 4.2 chaining flow
+
+Its own flow, because it loads an optional module the other configs do not:
+the **chaining key generator**, which resolves a FIX cancel/replace chain
+(tag 11 → tag 41) inside the server, so a whole amend chain collapses onto one
+SOW record with no chain state in the client.
+
+```bash
+AMPS_FLOW=fix42-chaining ./server/scripts/amps.sh start
+```
+
+Then publish a scripted FIX 4.2 flow — parent and child orders, amends,
+cancels, fills, rejects — into it:
+
+```bash
+./gradlew :fix42-publisher:bootRun
+```
+
+Nine ClOrdIDs across five chains should store as five records. Look at them in
+the admin SQL console (<http://127.0.0.1:8085/>) or query `sow/parent/orders`.
+Record counts accumulate across runs, so reset between them:
+
+```bash
+AMPS_FLOW=fix42-chaining ./server/scripts/amps.sh reset
+```
+
+Two things about this flow specifically:
+
+- **The module is optional and may not be in your build.** If it is missing the
+  server refuses to start and names it. Check before you wonder why:
+
+  ```bash
+  podman run --rm --entrypoint /bin/sh "$AMPS_IMAGE" -c "ls /opt/amps/lib | grep chaining"
+  ```
+
+  Note `amps.sh modules` does *not* answer this — it lists **action** modules
+  only (it greps for `amps-action-on/do-*`), which is a different family.
+
+- Validate after any config edit; it takes about a second and runs the
+  server's own parser:
+
+  ```bash
+  ./server/scripts/amps.sh validate fix42-chaining
+  ```
+
+The publisher's own integration tests need none of this — they start their own
+container and tear it down. Only `bootRun` and manual poking need a server you
+started yourself. → [fix42-publisher/README.md](../../fix42-publisher/README.md),
+and [docs/fix42-view/](../fix42-view/README.md) for what the design does and
+does not buy.
 
 ## Troubleshooting
 
