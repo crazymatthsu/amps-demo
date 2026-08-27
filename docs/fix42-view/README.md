@@ -77,3 +77,4 @@ is what still keeps a state machine outside AMPS.
 | [03-proposed-architecture.md](03-proposed-architecture.md) | the architecture with the state machine outside AMPS, mapped rule-by-rule to the docs/fix42 contract |
 | [04-pending-state-without-a-state-machine.md](04-pending-state-without-a-state-machine.md) | how far a chained blotter gets toward acked-vs-pending terms, measured — and the chaining constraint that cost a rewrite |
 | [05-the-generated-sow-key.md](05-the-generated-sow-key.md) | what a subscriber can do with the key the module generates — and why it is deterministic, but must never be parsed as a long |
+| [06-publish-throughput.md](06-publish-throughput.md) | what is actually slow when publishing — measured, with the 5.3× answer and why transport batching did not help |

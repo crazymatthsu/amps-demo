@@ -64,10 +64,46 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
     listOf("AMPS_IMAGE", "CONTAINER_ENGINE", "AMPS_PLATFORM", "AMPS_BIN").forEach { name ->
         System.getenv(name)?.let { environment(name, it) }
     }
+    // The benchmark is not a test -- it asserts nothing and takes ~30s. Excluded
+    // rather than left to skip itself, so a normal build reports ZERO skipped
+    // tests: "0 skipped" is how you tell the integration suite actually ran
+    // rather than opting out for want of an AMPS_IMAGE, and a permanently
+    // skipped class would blunt that signal.
+    filter { excludeTestsMatching("*Benchmark") }
+
     // Config and flow files are found relative to the repository root.
     workingDir = rootProject.projectDir
     testLogging {
         showStandardStreams = true
+    }
+}
+
+/**
+ * Publish throughput, measured rather than guessed:
+ * `./gradlew :fix42-publisher:publishBenchmark`.
+ *
+ * Starts its own AMPS container and times the same load several ways -- per
+ * message flush, single flush, various setPublishBatching sizes, and through
+ * the real publisher at two log levels. Numbers are hardware- and
+ * network-specific, which is the point: run it where you actually publish.
+ */
+tasks.register<Test>("publishBenchmark") {
+    group = "verification"
+    description = "Measure publish throughput against a real AMPS instance."
+    testClassesDirs = integrationTest.output.classesDirs
+    classpath = integrationTest.runtimeClasspath
+    workingDir = rootProject.projectDir
+    filter { includeTestsMatching("*Benchmark") }
+    systemProperty("fix42.benchmark", "true")
+    outputs.upToDateWhen { false }
+    testLogging { showStandardStreams = true }
+
+    listOf("AMPS_IMAGE", "AMPS_BIN").forEach { name ->
+        val value = providers.environmentVariable(name)
+        inputs.property(name, value.orElse(""))
+        if (value.isPresent) {
+            environment(name, value.get())
+        }
     }
 }
 
