@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Business flow "cache": AMPS as the remote persistent store behind the
+  cache-persistent-store module's local Map caches.
+
+  Two SOW topics, one per cache shape. A SOW topic is already a key/value
+  store maintained by the server - last value per key, queryable at any time -
+  so "use AMPS as a cache persistent store" needs no machinery beyond
+  declaring the topics and choosing their keys. The interesting decision is
+  entirely in the keys:
+
+    cache.entries          Map<String, ?>              key = /key
+    cache.nested.entries   Map<String, Map<String, ?>> key = /outerKey + /innerKey
+
+  The second topic is the "flattened" answer to storing a map of maps: one
+  record per (outerKey, innerKey) PAIR, so updating one inner entry publishes
+  one small record and never rewrites its siblings. The alternative - the
+  whole inner map nested inside one record per outer key - needs no topic of
+  its own, because it is just cache.entries with a map-valued /value. See
+  cache-persistent-store/README.md for the comparison.
+
+  Start it:   AMPS_FLOW=cache ./server/scripts/amps.sh start
+         or:  ./cache-persistent-store/scripts/amps-cache.sh start
+  Check it:   ./server/scripts/amps.sh validate cache
+-->
+<AMPSConfig>
+
+    <Name>amps-cache</Name>
+
+    <!-- Same ports as every other flow in this repo (see
+         server/config/default.env): clients on 9007, websocket on 9008,
+         admin UI on 8085. The Galvanometer SQL console in the admin UI is
+         the quickest way to eyeball the cache: SELECT * FROM "cache.entries". -->
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <SQLTransport>amps-websocket</SQLTransport>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <SOW>
+
+        <!-- The flat cache: one record per entry, shaped
+                 {"key": "...", "value": ...}
+             The cache key is the SOW key, so the server enforces
+             last-value-per-key - a publish IS an upsert, and MapStore.store
+             needs no read-modify-write.
+
+             Durability persistent is the point of this flow: the SOW file
+             survives a server restart, which is what lets a client process
+             that restarted (or failed over to another machine) hydrate its
+             local map from here. -->
+        <Topic>
+            <Name>cache.entries</Name>
+            <MessageType>json</MessageType>
+            <Key>/key</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- The flattened map of maps: one record per (outer, inner) pair,
+                 {"outerKey": "...", "innerKey": "...", "value": ...}
+             Two Key elements make a COMPOSITE SOW key, so the pair is the
+             record's identity: updating portfolio-1/AAPL cannot disturb
+             portfolio-1/MSFT, and "give me all of portfolio-1" is an
+             ordinary content-filtered query on /outerKey. -->
+        <Topic>
+            <Name>cache.nested.entries</Name>
+            <MessageType>json</MessageType>
+            <Key>/outerKey</Key>
+            <Key>/innerKey</Key>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+    </SOW>
+
+    <!-- Both topics are journalled because here the SOW is not derived state -
+         it IS the system of record for the caches in front of it. The journal
+         is what makes an UNCLEAN server stop survivable (the SOW file alone
+         guarantees a clean one) and enables replication downstream. Contrast
+         with quote-cache in the default flow, which is reconstructible and so
+         deliberately journals nothing.
+
+         Note the asymmetry with the client side: the caches recover from the
+         SOW (a query), never by replaying this journal. The journal serves
+         the server's durability, not the client's recovery protocol. -->
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
+        <MinJournalSize>10MB</MinJournalSize>
+
+        <Topic>
+            <Name>cache.entries</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>cache.nested.entries</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+    </TransactionLog>
+
+</AMPSConfig>
