@@ -25,10 +25,14 @@ import com.google.gson.ToNumberPolicy;
  * <p>Nulls need no configuration: the cache rejects {@code null} values at the
  * API (like {@link java.util.concurrent.ConcurrentHashMap}), so none reach
  * serialization.
+ *
+ * <p>Public because hazelcast-persistent-store must speak byte-compatible
+ * JSON: two modules disagreeing on number typing would break the "recovered
+ * equals original" property between them.
  */
-final class JsonValues {
+public final class JsonValues {
 
-    static final Gson GSON = new GsonBuilder()
+    public static final Gson GSON = new GsonBuilder()
             .setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE)
             .disableHtmlEscaping()
             .create();

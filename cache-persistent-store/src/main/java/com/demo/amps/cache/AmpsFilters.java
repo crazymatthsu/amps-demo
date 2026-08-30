@@ -13,17 +13,20 @@ import java.util.Objects;
  * characters cannot be written as a filter literal at all. Such keys are
  * rejected when the entry is stored, rather than corrupting a filter later
  * when the entry is loaded or deleted.
+ *
+ * <p>Public because hazelcast-persistent-store builds on the same filter
+ * rules; still infrastructure, not a user-facing API.
  */
-final class AmpsFilters {
+public final class AmpsFilters {
 
     /** The conventional match-everything filter, as used by the truncate demo. */
-    static final String MATCH_EVERYTHING = "1=1";
+    public static final String MATCH_EVERYTHING = "1=1";
 
     private AmpsFilters() {
     }
 
     /** {@code /field = 'value'}, quoting the literal to suit the value. */
-    static String equalTo(String field, String value) {
+    public static String equalTo(String field, String value) {
         return "/" + field + " = " + literal(value);
     }
 
@@ -32,10 +35,21 @@ final class AmpsFilters {
      * otherwise. Stores call this before writing, so every stored key is
      * guaranteed loadable and deletable.
      */
-    static String checkKey(String key) {
+    public static String checkKey(String key) {
         Objects.requireNonNull(key, "cache keys must not be null");
         literal(key);
         return key;
+    }
+
+    /**
+     * Whether a filter literal can name this value at all. Load paths use
+     * this where {@link #checkKey} would be wrong: a key that cannot be
+     * expressed also cannot have been stored (the write side rejected it),
+     * so a lookup for one should report "absent", not throw.
+     */
+    public static boolean expressible(String value) {
+        return value != null
+                && !(value.indexOf('\'') >= 0 && value.indexOf('"') >= 0);
     }
 
     private static String literal(String value) {

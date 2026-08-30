@@ -48,4 +48,14 @@ class AmpsFiltersTest {
         assertEquals("útf-8 ключ", AmpsFilters.checkKey("útf-8 ключ"));
         assertThrows(NullPointerException.class, () -> AmpsFilters.checkKey(null));
     }
+
+    @Test
+    @DisplayName("expressible mirrors checkKey without throwing -- for load paths")
+    void expressibleIsThePredicateForm() {
+        assertEquals(true, AmpsFilters.expressible("plain"));
+        assertEquals(true, AmpsFilters.expressible("o'brien"));
+        assertEquals(true, AmpsFilters.expressible("say \"hi\""));
+        assertEquals(false, AmpsFilters.expressible("both ' and \""));
+        assertEquals(false, AmpsFilters.expressible(null));
+    }
 }
