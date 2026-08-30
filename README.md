@@ -17,6 +17,7 @@ amps-demo/
 ├── amps-cli/  dump a FIX SOW: snapshot, subscribe, or query; raw or NVFIX
 ├── fix42-publisher/  Spring Boot: FIX 4.2 delta publishing onto chained SOW keys
 ├── cache-persistent-store/  a local Map cache with AMPS as its persistent store
+├── hazelcast-persistent-store/  Hazelcast OSS persisting its IMaps in AMPS (MapStore SPI)
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -90,6 +91,23 @@ AMPS_FLOW=cache ./server/scripts/amps.sh start
 
 -> [cache-persistent-store/README.md](cache-persistent-store/README.md) for the
 design, the map-of-maps trade-offs, and the integration tests.
+
+`hazelcast-persistent-store` takes the same idea to a real cache product:
+Hazelcast open source persisting its `IMap`s through the MapStore SPI (the
+sanctioned persistence route in OSS -- hot-restart is Enterprise-only), with
+AMPS as the store. Topics are grouped by persistence *policy* -- a composite
+`(/map, /key)` SOW key lets any number of Hazelcast maps share one "tier"
+topic -- so fifty caches need two topics, not fifty, and a replacement member
+rehydrates every map from AMPS alone.
+
+```bash
+AMPS_FLOW=hazelcast ./server/scripts/amps.sh start
+./gradlew :hazelcast-persistent-store:run
+```
+
+-> [hazelcast-persistent-store/README.md](hazelcast-persistent-store/README.md)
+for the tier design, the Hazelcast semantics that bite (TTL resurrection,
+`clear()` vs `evictAll()`), and the two-member integration tests.
 
 ## Operator tools
 

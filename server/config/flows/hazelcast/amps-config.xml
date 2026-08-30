@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Business flow "hazelcast": AMPS as the persistence store behind Hazelcast
+  open source IMaps, via the hazelcast-persistent-store module's MapStore.
+
+  TWO topics serve ANY NUMBER of Hazelcast maps. That is the design decision
+  this flow embodies (hazelcast-persistent-store/TODO.md): topics are grouped
+  by persistence POLICY - a "tier" - not created per cache. Records carry the
+  map's name, and the composite SOW key makes (map, key) the record identity:
+
+      {"map": "orders", "key": "ord-1", "value": {...}}
+
+  so two maps on one tier cannot collide, a new Hazelcast map needs no config
+  change here, and 50 caches still mean exactly these two topics. Everything
+  sharing a tier shares its Durability/Expiration/journal policy - add a tier
+  when you need a different policy, never merely a new map.
+
+  Start it:   AMPS_FLOW=hazelcast ./server/scripts/amps.sh start
+         or:  ./hazelcast-persistent-store/scripts/amps-hazelcast.sh start
+  Check it:   ./server/scripts/amps.sh validate hazelcast
+-->
+<AMPSConfig>
+
+    <Name>amps-hazelcast</Name>
+
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <SQLTransport>amps-websocket</SQLTransport>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <SOW>
+
+        <!-- The durable tier. Maps whose contents must survive member
+             restarts AND server crashes: Durability persistent for the file,
+             the TransactionLog entry below for the unclean-stop case.
+
+             The HashIndex on /map is what keeps per-map operations cheap as
+             the tier grows: hydrating one Hazelcast map is a query on
+             /map = 'name', and without an index that is a topic scan. -->
+        <Topic>
+            <Name>hz.persistent</Name>
+            <MessageType>json</MessageType>
+            <Key>/map</Key>
+            <Key>/key</Key>
+            <HashIndex>
+                <Key>/map</Key>
+            </HashIndex>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- The volatile tier: transient (memory only, nothing to recover)
+             with a server-side TTL. The Expiration is load-bearing, not
+             decoration: Hazelcast never calls MapStore.delete() for entries
+             it expires or evicts, so without this the store would keep them
+             forever and a restarted member would resurrect every "expired"
+             entry. Match it to the maps' time-to-live-seconds. -->
+        <Topic>
+            <Name>hz.volatile</Name>
+            <MessageType>json</MessageType>
+            <Key>/map</Key>
+            <Key>/key</Key>
+            <HashIndex>
+                <Key>/map</Key>
+            </HashIndex>
+            <FileName>./sow/%n.sow</FileName>
+            <Durability>transient</Durability>
+            <Expiration>60s</Expiration>
+        </Topic>
+
+    </SOW>
+
+    <!-- Only the durable tier is journalled: it is the system of record for
+         the maps in front of it, and the journal is what survives an unclean
+         server stop. hz.volatile is deliberately absent - reconstructible,
+         short-lived, the same reasoning as quote-cache in the default flow.
+         (Clients never replay this journal; recovery is a SOW query.) -->
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
+        <MinJournalSize>10MB</MinJournalSize>
+
+        <Topic>
+            <Name>hz.persistent</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+    </TransactionLog>
+
+</AMPSConfig>

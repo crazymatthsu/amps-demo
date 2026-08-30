@@ -27,25 +27,29 @@ import java.util.function.Consumer;
  * ({@code storeAll}) pay it once, and a throughput-sensitive user would move
  * to a publish store (see {@code AmpsConnections.connectWithPublishStore})
  * rather than weaken the barrier.
+ *
+ * <p>Public because hazelcast-persistent-store builds its tier store on this
+ * same plumbing rather than re-implementing it; it is still infrastructure,
+ * not a user-facing API.
  */
-final class SowOps {
+public final class SowOps {
 
     private final Client client;
     private final String topic;
     private final long timeoutMillis;
 
-    SowOps(Client client, String topic, long timeoutMillis) {
+    public SowOps(Client client, String topic, long timeoutMillis) {
         this.client = client;
         this.topic = topic;
         this.timeoutMillis = timeoutMillis;
     }
 
-    String topic() {
+    public String topic() {
         return topic;
     }
 
     /** Publishes one record and blocks until the server has processed it. */
-    void publish(JsonObject record) {
+    public void publish(JsonObject record) {
         try {
             client.publish(topic, record.toString());
             client.publishFlush(timeoutMillis);
@@ -54,8 +58,22 @@ final class SowOps {
         }
     }
 
+    /**
+     * Publishes one record WITHOUT the flush barrier. For write-behind callers
+     * (Hazelcast's, notably) that have already decoupled the writer from the
+     * caller and accept the weaker read-your-writes in exchange for not paying
+     * a round trip per store.
+     */
+    public void publishWithoutBarrier(JsonObject record) {
+        try {
+            client.publish(topic, record.toString());
+        } catch (AMPSException e) {
+            throw new CacheStoreException("publish to '" + topic + "' failed", e);
+        }
+    }
+
     /** Publishes a batch, paying the flush barrier once at the end. */
-    void publishAll(Collection<JsonObject> records) {
+    public void publishAll(Collection<JsonObject> records) {
         if (records.isEmpty()) {
             return;
         }
@@ -73,7 +91,7 @@ final class SowOps {
      * Runs a SOW query and hands each record to {@code consumer} as parsed
      * JSON. A null {@code filter} means every record in the topic.
      */
-    void query(String filter, Consumer<JsonObject> consumer) {
+    public void query(String filter, Consumer<JsonObject> consumer) {
         Command command = new Command("sow").setTopic(topic).setTimeout(timeoutMillis);
         if (filter != null) {
             command.setFilter(filter);
@@ -98,7 +116,7 @@ final class SowOps {
      * compute the key exactly as it did on publish. No filter expression is
      * involved, so this path has no quoting constraints at all.
      */
-    void deleteByData(JsonObject keyFields) {
+    public void deleteByData(JsonObject keyFields) {
         CountDownLatch acknowledged = new CountDownLatch(1);
         try {
             client.sowDeleteByData(message -> acknowledged.countDown(),
@@ -116,7 +134,7 @@ final class SowOps {
     }
 
     /** Deletes every record matching {@code filter}; returns the server's count. */
-    long deleteByFilter(String filter) {
+    public long deleteByFilter(String filter) {
         try {
             Message ack = client.sowDelete(topic, filter, timeoutMillis);
             return ack.getRecordsDeleted();
