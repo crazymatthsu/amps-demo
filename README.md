@@ -16,6 +16,7 @@ amps-demo/
 ├── utils/     operator tools: load a file, dump the SOW or journal, clear down
 ├── amps-cli/  dump a FIX SOW: snapshot, subscribe, or query; raw or NVFIX
 ├── fix42-publisher/  Spring Boot: FIX 4.2 delta publishing onto chained SOW keys
+├── cache-persistent-store/  a local Map cache with AMPS as its persistent store
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -74,6 +75,21 @@ carrying the newest amend merged onto the original order's untouched terms,
 with no chain state in the publisher at all.
 -> [fix42-publisher/README.md](fix42-publisher/README.md), and
 [docs/fix42-view/](docs/fix42-view/README.md) for where that stops being enough.
+
+`cache-persistent-store` is a module with its own flow too: a cache library
+whose local `java.util.Map` hydrates from an AMPS SOW at startup, writes
+through on mutation, and reads through on a miss -- so a restarted or
+failed-over process recovers its cache by asking AMPS. It also answers "how do
+I store a `Map<String, Map<String, ?>>` in a keyed store?" two ways (nested
+value vs. a composite-key flattening) and demonstrates both.
+
+```bash
+AMPS_FLOW=cache ./server/scripts/amps.sh start
+./gradlew :cache-persistent-store:run
+```
+
+-> [cache-persistent-store/README.md](cache-persistent-store/README.md) for the
+design, the map-of-maps trade-offs, and the integration tests.
 
 ## Operator tools
 
