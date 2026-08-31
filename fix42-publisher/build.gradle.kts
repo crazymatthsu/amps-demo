@@ -66,7 +66,8 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
     shouldRunAfter(tasks.test)
 
     // The harness starts its own container, so it needs to know which image to
-    // use, and Testcontainers needs to know which engine socket to talk to.
+    // use, which engine, and -- since AMPS_TEST_HARNESS chooses between the CLI
+    // and Testcontainers backends -- which of the two to start it with.
     // Forwarded rather than hard-coded: there is no public AMPS image, so the
     // value is necessarily site-specific.
     //
@@ -84,8 +85,17 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
     // here given the suite is designed to skip when the image is absent.
     // Reading through providers.environmentVariable is the matching
     // configuration-cache-correct way to obtain a value once it is an input.
-    listOf("AMPS_IMAGE", "AMPS_BIN", "DOCKER_HOST", "TESTCONTAINERS_RYUK_DISABLED")
-        .forEach { name ->
+    // AMPS_TEST_HARNESS matters most of all here: it does not merely enable the
+    // suite, it changes which backend runs it. Left out of the key, a cached
+    // result from one harness would be restored for a run that asked for the
+    // other -- and report success without ever exercising it.
+    listOf(
+        "AMPS_IMAGE", "AMPS_BIN", "AMPS_TEST_HARNESS",
+        // The CLI harness.
+        "CONTAINER_ENGINE", "AMPS_PLATFORM",
+        // The Testcontainers harness.
+        "DOCKER_HOST", "TESTCONTAINERS_RYUK_DISABLED",
+    ).forEach { name ->
             val value = providers.environmentVariable(name)
             inputs.property(name, value.orElse(""))
             if (value.isPresent) {
@@ -127,9 +137,12 @@ tasks.register<Test>("publishBenchmark") {
     testLogging { showStandardStreams = true }
 
     // Same forwarding as integrationTest: this task starts its own container,
-    // so it needs the image and the engine socket too.
-    listOf("AMPS_IMAGE", "AMPS_BIN", "DOCKER_HOST", "TESTCONTAINERS_RYUK_DISABLED")
-        .forEach { name ->
+    // so it needs the image, the harness choice and the engine details too.
+    listOf(
+        "AMPS_IMAGE", "AMPS_BIN", "AMPS_TEST_HARNESS",
+        "CONTAINER_ENGINE", "AMPS_PLATFORM",
+        "DOCKER_HOST", "TESTCONTAINERS_RYUK_DISABLED",
+    ).forEach { name ->
             val value = providers.environmentVariable(name)
             inputs.property(name, value.orElse(""))
             if (value.isPresent) {
