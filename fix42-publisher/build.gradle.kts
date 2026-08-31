@@ -61,8 +61,27 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
     // The harness starts its own container, so it needs to know which image
     // and engine to use. Forwarded rather than hard-coded: there is no public
     // AMPS image, so the value is necessarily site-specific.
+    //
+    // Each one is also declared as a task INPUT, and that is not decoration.
+    // This repo sets org.gradle.caching=true, and a value that is merely
+    // forwarded is invisible to the cache key -- so a run without AMPS_IMAGE
+    // caches an all-skipped result, and the next run WITH it restores that
+    // entry instead of executing:
+    //
+    //     > Task :fix42-publisher:integrationTest FROM-CACHE
+    //     BUILD SUCCESSFUL
+    //     ...29 tests, 29 skipped
+    //
+    // A green build that ran nothing, which is the worst outcome available
+    // here given the suite is designed to skip when the image is absent.
+    // Reading through providers.environmentVariable is the matching
+    // configuration-cache-correct way to obtain a value once it is an input.
     listOf("AMPS_IMAGE", "CONTAINER_ENGINE", "AMPS_PLATFORM", "AMPS_BIN").forEach { name ->
-        System.getenv(name)?.let { environment(name, it) }
+        val value = providers.environmentVariable(name)
+        inputs.property(name, value.orElse(""))
+        if (value.isPresent) {
+            environment(name, value.get())
+        }
     }
     // The benchmark is not a test -- it asserts nothing and takes ~30s. Excluded
     // rather than left to skip itself, so a normal build reports ZERO skipped
