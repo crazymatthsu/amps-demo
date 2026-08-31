@@ -51,6 +51,13 @@ configurations["integrationTestImplementation"]
 configurations["integrationTestRuntimeOnly"]
     .extendsFrom(configurations.testRuntimeOnly.get())
 
+// Declared here rather than in `dependencies` above: the configuration these
+// name is created by the sourceSets block, which runs after it.
+dependencies {
+    "integrationTestImplementation"(libs.testcontainers)
+    "integrationTestImplementation"(libs.testcontainers.junit)
+}
+
 val integrationTestTask = tasks.register<Test>("integrationTest") {
     group = "verification"
     description = "Publish into a real AMPS instance and read the SOW back."
@@ -58,12 +65,14 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
     classpath = integrationTest.runtimeClasspath
     shouldRunAfter(tasks.test)
 
-    // The harness starts its own container, so it needs to know which image
-    // and engine to use. Forwarded rather than hard-coded: there is no public
-    // AMPS image, so the value is necessarily site-specific.
+    // The harness starts its own container, so it needs to know which image to
+    // use, which engine, and -- since AMPS_TEST_HARNESS chooses between the CLI
+    // and Testcontainers backends -- which of the two to start it with.
+    // Forwarded rather than hard-coded: there is no public AMPS image, so the
+    // value is necessarily site-specific.
     //
-    // Each one is also declared as a task INPUT, and that is not decoration.
-    // This repo sets org.gradle.caching=true, and a value that is merely
+    // Each one is declared an INPUT, not merely forwarded. This repo sets
+    // org.gradle.caching=true, and an environment variable that is only
     // forwarded is invisible to the cache key -- so a run without AMPS_IMAGE
     // caches an all-skipped result, and the next run WITH it restores that
     // entry instead of executing:
@@ -76,13 +85,23 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
     // here given the suite is designed to skip when the image is absent.
     // Reading through providers.environmentVariable is the matching
     // configuration-cache-correct way to obtain a value once it is an input.
-    listOf("AMPS_IMAGE", "CONTAINER_ENGINE", "AMPS_PLATFORM", "AMPS_BIN").forEach { name ->
-        val value = providers.environmentVariable(name)
-        inputs.property(name, value.orElse(""))
-        if (value.isPresent) {
-            environment(name, value.get())
+    // AMPS_TEST_HARNESS matters most of all here: it does not merely enable the
+    // suite, it changes which backend runs it. Left out of the key, a cached
+    // result from one harness would be restored for a run that asked for the
+    // other -- and report success without ever exercising it.
+    listOf(
+        "AMPS_IMAGE", "AMPS_BIN", "AMPS_TEST_HARNESS",
+        // The CLI harness.
+        "CONTAINER_ENGINE", "AMPS_PLATFORM",
+        // The Testcontainers harness.
+        "DOCKER_HOST", "TESTCONTAINERS_RYUK_DISABLED",
+    ).forEach { name ->
+            val value = providers.environmentVariable(name)
+            inputs.property(name, value.orElse(""))
+            if (value.isPresent) {
+                environment(name, value.get())
+            }
         }
-    }
     // The benchmark is not a test -- it asserts nothing and takes ~30s. Excluded
     // rather than left to skip itself, so a normal build reports ZERO skipped
     // tests: "0 skipped" is how you tell the integration suite actually ran
@@ -117,13 +136,19 @@ tasks.register<Test>("publishBenchmark") {
     outputs.upToDateWhen { false }
     testLogging { showStandardStreams = true }
 
-    listOf("AMPS_IMAGE", "AMPS_BIN").forEach { name ->
-        val value = providers.environmentVariable(name)
-        inputs.property(name, value.orElse(""))
-        if (value.isPresent) {
-            environment(name, value.get())
+    // Same forwarding as integrationTest: this task starts its own container,
+    // so it needs the image, the harness choice and the engine details too.
+    listOf(
+        "AMPS_IMAGE", "AMPS_BIN", "AMPS_TEST_HARNESS",
+        "CONTAINER_ENGINE", "AMPS_PLATFORM",
+        "DOCKER_HOST", "TESTCONTAINERS_RYUK_DISABLED",
+    ).forEach { name ->
+            val value = providers.environmentVariable(name)
+            inputs.property(name, value.orElse(""))
+            if (value.isPresent) {
+                environment(name, value.get())
+            }
         }
-    }
 }
 
 // `check` runs it, but the test itself opts out when no AMPS image is

@@ -157,21 +157,74 @@ measurements behind this section in
 ## Tests
 
 ```bash
-./gradlew :fix42-publisher:test              # 67 unit tests, no server needed
+./gradlew :fix42-publisher:test              # 82 unit tests, no server needed
 AMPS_IMAGE=<your-image> \
-  ./gradlew :fix42-publisher:integrationTest # 10 tests against a real container
+  ./gradlew :fix42-publisher:integrationTest # 29 tests against a real container
 ```
 
-The integration suite starts its own AMPS container on a free port with an
-empty data directory, publishes the flow, and reads the SOW back. It **skips**
-rather than fails when `AMPS_IMAGE` is unset, so `./gradlew build` stays green
-on a machine that has never seen AMPS — and does real work on one that has.
+Each integration test class starts its own AMPS instance. They **skip** rather
+than fail when `AMPS_IMAGE` is unset, so `./gradlew build` stays green on a
+machine that has never seen AMPS.
 
-Two things it checks that are easy to get wrong:
+### Two harnesses, one switch
 
+`AMPS_TEST_HARNESS` picks how the container is started. Both run the same
+tests and expose the same `AmpsTestServer` surface:
+
+| value | backend | needs | good for |
+| --- | --- | --- | --- |
+| `cli` *(default)* — aliases `podman`, `docker` | runs `podman run` as a subprocess | the engine binary on `PATH` | a laptop: nothing to set up beyond `AMPS_IMAGE` |
+| `testcontainers` — alias `tc` | the engine's Docker API | a Docker-API-compatible socket | CI: the socket is there by default, and the reaper cleans up after a killed JVM |
+
+An unrecognised value fails loudly rather than falling back — silently running
+the other backend would be the same class of mistake as a stale cached result.
+
+```bash
+# default: podman directly, no socket needed
+AMPS_IMAGE=<your-image> ./gradlew :fix42-publisher:integrationTest
+
+# via the Docker API instead
+AMPS_IMAGE=<your-image> AMPS_TEST_HARNESS=testcontainers \
+  ./gradlew :fix42-publisher:integrationTest
+```
+
+The `cli` backend takes `CONTAINER_ENGINE` (default `podman`) and
+`AMPS_PLATFORM` (default `linux/amd64` — the AMPS image is amd64, so an Apple
+Silicon machine emulates it). Its data directory is a fresh
+`build/fix42-it/<name>` per instance, which `gradle clean` disposes of.
+
+The `testcontainers` backend needs a **Docker-API-compatible socket**. With
+Docker that is automatic; with podman, either `/var/run/docker.sock` already
+points at the podman socket or you export one:
+
+```bash
+export DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
+```
+
+It copies the config into the container and leaves the data directory in the
+container's own writable layer, so no run inherits the last one's SOW or chain
+map (every run builds a new container), state still survives a deliberate
+`restart()`, and there is no host state to clean up. In CI also set
+`TESTCONTAINERS_RYUK_DISABLED=true`: the runner is ephemeral so there is
+nothing to reap, and it avoids pulling `testcontainers/ryuk` from Docker Hub,
+whose anonymous rate limits are shared across runner IPs.
+
+### Three things both harnesses get right that are easy to get wrong
+
+- it waits for the server's `initialization completed` log line, not an open
+  port. The container engine's port forwarder accepts connections as soon as
+  the container exists, so a client that races it connects and is then dropped
+  mid-logon;
 - it binds this module's **own** `application.yml` rather than restating the
   rules, so a change to the shipped configuration is exercised;
-- it waits for the server's `initialization completed` log line, not just an
-  open port. The container engine's port forwarder accepts connections as soon
-  as the container exists, so a client that races it connects and is then
-  dropped mid-logon.
+- `AMPS_IMAGE` and `AMPS_TEST_HARNESS` are declared `inputs.property` of the
+  task, not merely forwarded to it. This repo sets `org.gradle.caching=true`,
+  and a variable that is only forwarded forms no part of the **build cache
+  key** — so a run without the image caches an all-skipped result and a later
+  run *with* it restores that entry instead of executing, reporting
+  `FROM-CACHE` and BUILD SUCCESSFUL with every integration test silently
+  skipped. The same trap would otherwise let a `cli` result be restored for a
+  run that asked for `testcontainers`.
+
+A green build is not by itself proof the integration tests ran; check for
+`SKIPPED` if it matters.
