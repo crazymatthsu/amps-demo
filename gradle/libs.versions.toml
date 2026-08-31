@@ -14,6 +14,13 @@ gson = "2.11.0"
 # every field-selection rule in it is config rather than code.
 springBoot = "3.5.9"
 awaitility = "4.3.0"
+# Hazelcast open source (community edition). Its MapStore SPI is the sanctioned
+# persistence mechanism in OSS -- native Persistence is Enterprise-only -- and
+# hazelcast-persistent-store implements that SPI on top of AMPS SOW topics.
+hazelcast = "5.5.0"
+# Test-scope only: starts the AMPS container for fix42-publisher's integration
+# suite. Needs a Docker-API-compatible socket, which a GitHub runner has by
+# default and an Apple Silicon laptop running podman does not.
 testcontainers = "1.21.3"
 
 [libraries]
@@ -32,6 +39,7 @@ spring-boot-starter = { module = "org.springframework.boot:spring-boot-starter" 
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
 spring-boot-configuration-processor = { module = "org.springframework.boot:spring-boot-configuration-processor" }
 awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
+hazelcast = { module = "com.hazelcast:hazelcast", version.ref = "hazelcast" }
 testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
 testcontainers-junit = { module = "org.testcontainers:junit-jupiter", version.ref = "testcontainers" }
 

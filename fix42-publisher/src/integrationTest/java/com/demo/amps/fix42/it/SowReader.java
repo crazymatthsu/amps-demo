@@ -39,6 +39,32 @@ final class SowReader {
     }
 
     /**
+     * The SERVER-GENERATED key of every record matching {@code filter}.
+     *
+     * <p>Distinct from any field in the payload: on a topic whose key comes
+     * from the chaining key generator this is the chain's identity, which no
+     * single tag carries.
+     */
+    List<String> sowKeys(String topic, String filter) throws Exception {
+        List<String> keys = new ArrayList<>();
+        Command command = new Command("sow").setTopic(topic).setTimeout(timeoutMs);
+        if (filter != null) {
+            command.setFilter(filter);
+        }
+        try (MessageStream stream = client.execute(command)) {
+            for (Message message : stream) {
+                if (message.getCommand() == Message.Command.GroupEnd) {
+                    break;
+                }
+                if (message.getCommand() == Message.Command.SOW && !message.isDataNull()) {
+                    keys.add(message.getSowKey());
+                }
+            }
+        }
+        return keys;
+    }
+
+    /**
      * Every record in {@code topic}, indexed by the value of {@code keyTag}.
      *
      * <p>Indexing by a business field rather than the server's SOW key keeps

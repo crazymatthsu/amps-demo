@@ -1,0 +1,56 @@
+# Hazelcast member configuration for the AMPS-backed persistence demo: three
+# maps, two tiers, one factory declaration each -- no persistence code anywhere
+# in this file's vicinity.
+#
+#   orders    durable order state         tier hz.persistent, write-through
+#   audit     durable audit entries       tier hz.persistent (SAME topic as
+#                                         orders: tiers are shared by design)
+#   sessions  TTL'd session scratch       tier hz.volatile, write-behind
+#
+# The AMPS URI is deliberately absent: the factory falls back to the repo's
+# DemoConfig resolution (AMPS_HOST/AMPS_PORT, -Damps.host/-Damps.port), so this
+# file works unchanged against any instance. Set `amps.uri` per map to pin one.
+hazelcast:
+  cluster-name: hz-amps-demo
+  properties:
+    hazelcast.phone.home.enabled: false
+    hazelcast.logging.type: slf4j
+  network:
+    join:
+      auto-detection:
+        enabled: false
+      multicast:
+        enabled: false
+      tcp-ip:
+        enabled: true
+        member-list:
+          - 127.0.0.1
+  map:
+    orders:
+      map-store:
+        enabled: true
+        initial-mode: EAGER
+        factory-class-name: com.demo.amps.hazelcast.AmpsMapStoreFactory
+        write-delay-seconds: 0          # write-through: put() returns persisted
+        properties:
+          amps.topic: hz.persistent
+    audit:
+      map-store:
+        enabled: true
+        initial-mode: EAGER
+        factory-class-name: com.demo.amps.hazelcast.AmpsMapStoreFactory
+        write-delay-seconds: 0
+        properties:
+          amps.topic: hz.persistent
+    sessions:
+      time-to-live-seconds: 60          # matched by hz.volatile's AMPS <Expiration>
+      map-store:
+        enabled: true
+        initial-mode: EAGER
+        factory-class-name: com.demo.amps.hazelcast.AmpsMapStoreFactory
+        write-delay-seconds: 2          # write-behind: batched, coalesced
+        write-batch-size: 100
+        write-coalescing: true
+        properties:
+          amps.topic: hz.volatile
+          amps.flushPerWrite: "false"   # the write-behind queue already decoupled us

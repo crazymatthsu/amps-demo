@@ -152,6 +152,57 @@ class PendingStateIT {
         assertThat(record.value(FixTags.ORDER_QTY)).isEqualTo("7000");
     }
 
+    @Test
+    @DisplayName("a fill while an amend is in flight updates quantities and leaves pending alone")
+    void fillDuringPendingAmendDoesNotResolveIt() throws Exception {
+        // The case that makes OrdStatus and PendingAction separate fields: the
+        // venue is filling the order it is still working WHILE deciding on an
+        // amend. Both facts are true, and a blotter that collapsed them into
+        // one field would have to lie about one of them.
+        FixMessage record = publishAndRead(OrderChain.forTest("FILLWHILEPENDING",
+                        Instrument.AAPL, 10_000, 150.00)
+                .newOrder()
+                .ack()
+                .amend(15_000, 150.50)
+                .partialFill(3_000, 150.00));
+
+        // The fill applied: quantities are the venue's, measured against the
+        // quantity it is still working -- 10000, not the 15000 we asked for.
+        assertThat(record.value(FixTags.CUM_QTY)).isEqualTo("3000");
+        assertThat(record.value(FixTags.LEAVES_QTY)).isEqualTo("7000");
+        assertThat(record.value(FixTags.ORDER_QTY)).isEqualTo("10000");
+        assertThat(record.value(FixTags.LAST_SHARES)).isEqualTo("3000");
+        assertThat(record.value(FixTags.ORD_STATUS))
+                .isEqualTo(FixTags.OrdStatus.PARTIALLY_FILLED);
+
+        // The amend is still outstanding. A fill answers no request.
+        assertThat(record.value(FixTags.PENDING_ACTION))
+                .isEqualTo(FixTags.PendingAction.REPLACE);
+        assertThat(record.value(FixTags.PENDING_ORDER_QTY)).isEqualTo("15000");
+        assertThat(record.value(FixTags.PENDING_PRICE)).isEqualTo("150.5");
+        assertThat(record.value(FixTags.WORKING_CL_ORD_ID)).isEqualTo("FILLWHILEPENDING-1");
+    }
+
+    @Test
+    @DisplayName("the blotter shows opening quantities from the ack, before any fill")
+    void ackSeedsTheBlotterQuantities() throws Exception {
+        // A 35=D carries no CumQty or LeavesQty -- it is a request, not a
+        // report -- so without the ack projection the blotter would have terms
+        // and no quantities at all until the first fill.
+        FixMessage record = publishAndRead(OrderChain.forTest("SEEDED", Instrument.MSFT,
+                        6_000, 410.00)
+                .newOrder()
+                .ack());
+
+        assertThat(record.value(FixTags.CUM_QTY)).isEqualTo("0");
+        assertThat(record.value(FixTags.LEAVES_QTY)).isEqualTo("6000");
+        assertThat(record.value(FixTags.ORDER_QTY)).isEqualTo("6000");
+        assertThat(record.value(FixTags.ORD_STATUS)).isEqualTo(FixTags.OrdStatus.NEW);
+        // No trade yet, so no trade fields on the record at all.
+        assertThat(record.has(FixTags.LAST_SHARES)).isFalse();
+        assertThat(record.has(FixTags.LAST_PX)).isFalse();
+    }
+
     /** Publishes a chain into its own fresh topic state and returns its record. */
     private FixMessage publishAndRead(OrderChain chain) throws Exception {
         for (FixEvent event : chain.events()) {

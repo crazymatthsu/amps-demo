@@ -6,6 +6,9 @@ the **chaining key generator** — so a cancel/replace chain collapses to one
 record without the publisher tracking any chain state.
 
 ```bash
+# 0. local image 
+export AMPS_IMAGE=localhost/amps-demo:5.3.5.135
+
 # 1. AMPS on the flow that declares the topics and loads the module
 AMPS_FLOW=fix42-chaining ./server/scripts/amps.sh start
 
@@ -156,14 +159,16 @@ measurements behind this section in
 ```bash
 ./gradlew :fix42-publisher:test              # 71 unit tests, no server needed
 AMPS_IMAGE=<your-image> \
-  ./gradlew :fix42-publisher:integrationTest # 18 tests against a real container
+  ./gradlew :fix42-publisher:integrationTest # 29 tests against a real container
 ```
 
 The integration suites use **Testcontainers** to start their own AMPS instance
-per class, with the config copied into the container and the data directory on
-a tmpfs — so no run can inherit the last one's SOW or chain map, and there is
-no host state to clean up. They **skip** rather than fail when `AMPS_IMAGE` is
-unset, so `./gradlew build` stays green on a machine that has never seen AMPS.
+per class, with the config copied into the container and the data directory
+left in the container's own writable layer — so no run can inherit the last
+one's SOW or chain map (every run builds a new container), state still survives
+a deliberate `restart()`, and there is no host state to clean up. They **skip**
+rather than fail when `AMPS_IMAGE` is unset, so `./gradlew build` stays green on
+a machine that has never seen AMPS.
 
 Testcontainers needs a **Docker-API-compatible socket**. With Docker that is
 automatic; with podman, either `/var/run/docker.sock` already points at the
@@ -181,11 +186,12 @@ Three things the harness gets right that are easy to get wrong:
   mid-logon;
 - it binds this module's **own** `application.yml` rather than restating the
   rules, so a change to the shipped configuration is exercised;
-- `AMPS_IMAGE` reaches the test JVM through a Gradle *provider*, not
-  `System.getenv` at configuration time. A test task inherits the long-lived
-  Gradle **daemon's** environment, so the eager form captures the value once
-  and a later run with a different setting silently reuses the stale one —
-  which showed up as BUILD SUCCESSFUL with every integration test skipped.
+- `AMPS_IMAGE` is a declared `inputs.property` of the task, not merely
+  forwarded to it. This repo sets `org.gradle.caching=true`, and a variable
+  that is only forwarded forms no part of the **build cache key** — so a run
+  without the image caches an all-skipped result and a later run *with* it
+  restores that entry instead of executing, reporting `FROM-CACHE` and
+  BUILD SUCCESSFUL with every integration test silently skipped.
 
 A green build is not by itself proof the integration tests ran; check for
 `SKIPPED` if it matters.

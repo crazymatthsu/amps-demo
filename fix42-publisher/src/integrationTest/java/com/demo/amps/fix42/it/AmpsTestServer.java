@@ -1,11 +1,15 @@
 package com.demo.amps.fix42.it;
 
+import com.github.dockerjava.api.model.ExposedPort;
+import com.github.dockerjava.api.model.Ports;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
@@ -28,12 +32,17 @@ import org.testcontainers.utility.MountableFile;
  * That keeps {@code ./gradlew build} green on a machine that has never seen
  * AMPS, and makes it do real work on one that has.
  *
- * <p>Two deliberate choices about state, both so a run never inherits anything
- * from the last one -- which matters more than usual here, since the chaining
- * module's whole job is remembering identifiers across restarts:
- * the config is <b>copied</b> into the image rather than bind-mounted (no host
- * path has to be visible to the container VM), and the data directory is a
- * <b>tmpfs</b>, so there is nothing on the host to clean up afterwards.
+ * <p>Two deliberate choices about state. The config is <b>copied</b> into the
+ * container rather than bind-mounted, so no host path has to be visible to the
+ * container VM and nothing on the host needs cleaning up afterwards. The data
+ * directory is left in the container's own writable layer -- not a tmpfs and
+ * not a host mount -- which gets both properties this suite needs at once: a
+ * run cannot inherit the previous run's SOW or chain map, because every run
+ * builds a new container from the image; and state DOES survive
+ * {@link #restart()}, because a writable layer belongs to the container rather
+ * than to one execution of it. A tmpfs would satisfy the first and quietly
+ * break the second -- it is discarded whenever the container stops -- and
+ * {@link #restart()} exists precisely to test what survives.
  */
 public final class AmpsTestServer implements AutoCloseable {
 
@@ -93,11 +102,11 @@ public final class AmpsTestServer implements AutoCloseable {
                         .withCopyFileToContainer(
                                 MountableFile.forHostPath(Path.of(FLOW_DIR).toAbsolutePath()),
                                 CONTAINER_CONFIG_DIR)
-                        // AMPS resolves every relative path in its config against
-                        // the working directory, and expects these to exist. A
-                        // tmpfs keeps the SOW and journal entirely in the
-                        // container, so no run can inherit the last one's state.
-                        .withTmpFs(java.util.Map.of(CONTAINER_DATA_DIR, "rw"))
+                        // No mount for the data directory: AMPS writes the SOW,
+                        // the journal and the chain map into the container's own
+                        // writable layer. Fresh per run because the container is
+                        // fresh, and preserved across restart() because the layer
+                        // outlives any single start.
                         // Entrypoint and command are set together here rather
                         // than via withCommand(String), which tokenises on
                         // whitespace and would split the shell line apart.
@@ -132,14 +141,79 @@ public final class AmpsTestServer implements AutoCloseable {
                 + " && exec " + binary + " " + CONTAINER_CONFIG_DIR + "/amps-config.xml";
     }
 
-    /** The client URI for this instance, selecting the {@code fix} message type. */
-    public String uri() {
-        return "tcp://" + container.getHost() + ":" + container.getMappedPort(AMPS_PORT)
-                + "/amps/fix";
+    /**
+     * Restarts the container on the same data directory.
+     *
+     * <p>For tests that care what survives: the SOW file, the journal, and --
+     * the reason this exists -- the chaining key generator's persisted chain
+     * map, without which the identity a record was built under would be lost
+     * while the record itself survived.
+     *
+     * <p>Waits for a NEW readiness marker rather than any marker. The previous
+     * run's "initialization completed" is still in the log after a restart, so
+     * matching on presence alone returns instantly and hands back a server
+     * that is still starting.
+     */
+    public void restart() throws Exception {
+        int before = readyMarkerCount();
+
+        // Through the Docker API rather than a CLI subprocess: Testcontainers
+        // already holds an authenticated client for whichever engine it found,
+        // so this works wherever the rest of the harness does.
+        DockerClientFactory.instance().client()
+                .restartContainerCmd(container.getContainerId())
+                .exec();
+
+        Instant deadline = Instant.now().plus(STARTUP_TIMEOUT);
+        while (Instant.now().isBefore(deadline)) {
+            if (readyMarkerCount() > before) {
+                log.info("AMPS container {} restarted on port {}",
+                        container.getContainerId().substring(0, 12), port());
+                return;
+            }
+            Thread.sleep(500);
+        }
+        throw new IllegalStateException("AMPS did not come back within "
+                + STARTUP_TIMEOUT.toSeconds() + "s. Container log:\n" + logs());
     }
 
+    private int readyMarkerCount() {
+        int count = 0;
+        for (String line : logs().split("\n")) {
+            if (line.contains("initialization completed")) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** The client URI for this instance, selecting the {@code fix} message type. */
+    public String uri() {
+        return "tcp://" + container.getHost() + ":" + port() + "/amps/fix";
+    }
+
+    /**
+     * The host port AMPS is reachable on, inspected live rather than read from
+     * the container info cached at startup.
+     *
+     * <p>The distinction only shows up after {@link #restart()}: the host side
+     * of a dynamically published port is assigned when the container starts, so
+     * a restart can hand back a different one, and the cached value would then
+     * point at nothing. Live inspection is a round trip to the engine, which is
+     * immaterial next to the queries these tests then run over it.
+     */
     public int port() {
-        return container.getMappedPort(AMPS_PORT);
+        Ports.Binding[] bindings = container.getCurrentContainerInfo()
+                .getNetworkSettings()
+                .getPorts()
+                .getBindings()
+                .get(ExposedPort.tcp(AMPS_PORT));
+        if (bindings == null || bindings.length == 0) {
+            throw new IllegalStateException(
+                    "container " + container.getContainerId().substring(0, 12)
+                            + " publishes no host port for " + AMPS_PORT);
+        }
+        return Integer.parseInt(bindings[0].getHostPortSpec());
     }
 
     /** The server log, for diagnosing a failure. */

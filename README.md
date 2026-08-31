@@ -14,7 +14,10 @@ amps-demo/
 ├── server/    AMPS config (per environment/flow), Containerfile, compose + lifecycle scripts
 ├── clients/   sixteen runnable feature demos behind one CLI
 ├── utils/     operator tools: load a file, dump the SOW or journal, clear down
+├── amps-cli/  dump a FIX SOW: snapshot, subscribe, or query; raw or NVFIX
 ├── fix42-publisher/  Spring Boot: FIX 4.2 delta publishing onto chained SOW keys
+├── cache-persistent-store/  a local Map cache with AMPS as its persistent store
+├── hazelcast-persistent-store/  Hazelcast OSS persisting its IMaps in AMPS (MapStore SPI)
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -27,7 +30,7 @@ podman build --platform linux/amd64 -f server/Containerfile -t amps-demo:5.3 \
 export AMPS_IMAGE=amps-demo:5.3
 
 ./server/scripts/amps.sh start                # AMPS in a container
-./gradlew build                               # compile + 71 unit tests
+./gradlew build                               # compile + unit tests
 ./gradlew :clients:run --args="sow-load"      # populate the SOW
 ./gradlew :clients:run --args="tour"          # the guided sequence
 ```
@@ -74,6 +77,38 @@ with no chain state in the publisher at all.
 -> [fix42-publisher/README.md](fix42-publisher/README.md), and
 [docs/fix42-view/](docs/fix42-view/README.md) for where that stops being enough.
 
+`cache-persistent-store` is a module with its own flow too: a cache library
+whose local `java.util.Map` hydrates from an AMPS SOW at startup, writes
+through on mutation, and reads through on a miss -- so a restarted or
+failed-over process recovers its cache by asking AMPS. It also answers "how do
+I store a `Map<String, Map<String, ?>>` in a keyed store?" two ways (nested
+value vs. a composite-key flattening) and demonstrates both.
+
+```bash
+AMPS_FLOW=cache ./server/scripts/amps.sh start
+./gradlew :cache-persistent-store:run
+```
+
+-> [cache-persistent-store/README.md](cache-persistent-store/README.md) for the
+design, the map-of-maps trade-offs, and the integration tests.
+
+`hazelcast-persistent-store` takes the same idea to a real cache product:
+Hazelcast open source persisting its `IMap`s through the MapStore SPI (the
+sanctioned persistence route in OSS -- hot-restart is Enterprise-only), with
+AMPS as the store. Topics are grouped by persistence *policy* -- a composite
+`(/map, /key)` SOW key lets any number of Hazelcast maps share one "tier"
+topic -- so fifty caches need two topics, not fifty, and a replacement member
+rehydrates every map from AMPS alone.
+
+```bash
+AMPS_FLOW=hazelcast ./server/scripts/amps.sh start
+./gradlew :hazelcast-persistent-store:run
+```
+
+-> [hazelcast-persistent-store/README.md](hazelcast-persistent-store/README.md)
+for the tier design, the Hazelcast semantics that bite (TTL resurrection,
+`clear()` vs `evictAll()`), and the two-member integration tests.
+
 ## Operator tools
 
 Separate from the demos: `utils/` holds shell tools for working against a real
@@ -91,6 +126,21 @@ Dumps round-trip — what `ampsToFileSOW.sh` writes, `fileToAMPS.sh` republishes
 Note that `truncateAMPS.sh` clears the SOW only: the transaction log cannot be
 truncated by any client, and `--journal` explains what to do instead.
 → [utils/README.md](utils/README.md)
+
+`amps-cli` dumps a SOW of native FIX messages from the Linux console: snapshot
+only, snapshot then subscribe, or query by filter, as raw SOH-separated
+`tag=value` or as NVFIX (FIX 4.2 tag names and enumerated meanings).
+
+```bash
+./gradlew :amps-cli:test
+./gradlew :clients:run --args="fix-native"     # populate fix.native.* if needed
+./gradlew :amps-cli:run --args="--mode snapshot --topic fix.native.orders --output raw"
+./gradlew :amps-cli:run --args="--mode query --topic fix.native.orders --filter \"/39 = '2'\" --output nvfix"
+./gradlew :amps-cli:run --args="--mode snapshot-subscribe --topic fix.native.orders --output nvfix --timeout-ms 15000"
+```
+
+`--url tcp://127.0.0.1:9007/amps/fix` (or `-Damps.host` / `AMPS_HOST`) matches
+the rest of the repo. Flags and more examples: [amps-cli/README.md](amps-cli/README.md).
 
 ## The two questions this repo was built to answer
 

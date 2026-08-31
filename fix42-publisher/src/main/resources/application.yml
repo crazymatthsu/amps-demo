@@ -163,7 +163,11 @@ fix42:
       projected-topics:
         - "sow/{scope}/orders"
       projection:
-        tags: [11, 41, 39, 60]   # venue status onto the blotter
+        # 39/150 say what the venue did; 14/151/6/38 are its quantities. An
+        # ack carries 14=0 and 151=OrderQty, which is what seeds the blotter:
+        # until a report arrives the record has terms but no quantities, since
+        # a 35=D has none to give.
+        tags: [11, 41, 39, 150, 60, 38, 14, 151, 6]
         copy-tags:
           "11": 9014             # the venue has acknowledged this id
         set-tags:
@@ -185,7 +189,7 @@ fix42:
       projected-topics:
         - "sow/{scope}/orders"
       projection:
-        tags: [11, 41, 39, 60, 38, 44]
+        tags: [11, 41, 39, 150, 60, 38, 44, 14, 151, 6]
         copy-tags:
           "11": 9014             # the amended id is now the working one
         set-tags:
@@ -196,25 +200,79 @@ fix42:
 
     # Partial and full fills: economics only, no pending change, no blotter
     # projection.
+    #
+    # Each fill carries this fill (31/32), the cumulative snapshot (14/151/6),
+    # and the OrderQty (38) those are measured against. 38 is published even
+    # though a fill never changes it, so the stored record can be checked
+    # against itself: OrderQty = CumQty + LeavesQty holds on every working
+    # report. Without it the invariant is unverifiable from the record alone --
+    # 38 would arrive only from other report types, and a chain that never
+    # amends may never send one.
+    #
+    # Note what is deliberately NOT in the other exec routes: 31/32 belong to
+    # fills only. An ack (150=0) or a cancel (150=4) reports no trade, so it
+    # carries no LastPx/LastShares, while CumQty keeps its running total. And
+    # 31 is THIS fill's price where 6 is the weighted average of every fill so
+    # far -- different questions, and easy to confuse.
     - name: exec-partial-fill
       msg-types: ["8"]
       exec-types: ["1"]
       mode: DELTA
       tags: [35, 11, 41, 37, 17, 39, 150, 60]
-      changeable-tags: [31, 32, 14, 151, 6, 30]
+      changeable-tags: [38, 31, 32, 14, 151, 6, 30]
       topics:
         - "sow/parent/execs"
         - "sow/parent/execs_audit"
+      projected-topics:
+        - "sow/{scope}/orders"
+      projection:
+        # The execution economics onto the order blotter: the cumulative
+        # snapshot (14/151/6), this fill (32/31/30), and the OrderQty they are
+        # measured against.
+        #
+        # NO pending tags here, deliberately. A fill does not resolve an
+        # outstanding request: an order can be partially filled while a cancel
+        # or amend is still in flight, and both facts are true at once. The
+        # pending family stays as it is until an 8 with 150=4/5 or a 35=9
+        # answers the request -- so OrdStatus and PendingAction are separate
+        # fields on this record precisely because they answer different
+        # questions.
+        #
+        # 150 rides along so a reader can tell what the last report WAS. That
+        # matters on a merged record: 32/31 are written only by fills, so
+        # after a cancel they still hold the last fill's values. They mean
+        # "the most recent execution", not "this report".
+        tags: [11, 41, 39, 150, 60, 38, 14, 151, 6, 32, 31, 30]
 
     - name: exec-fill
       msg-types: ["8"]
       exec-types: ["2"]
       mode: DELTA
       tags: [35, 11, 41, 37, 17, 39, 150, 60]
-      changeable-tags: [31, 32, 14, 151, 6, 30]
+      changeable-tags: [38, 31, 32, 14, 151, 6, 30]
       topics:
         - "sow/parent/execs"
         - "sow/parent/execs_audit"
+      projected-topics:
+        - "sow/{scope}/orders"
+      projection:
+        # The execution economics onto the order blotter: the cumulative
+        # snapshot (14/151/6), this fill (32/31/30), and the OrderQty they are
+        # measured against.
+        #
+        # NO pending tags here, deliberately. A fill does not resolve an
+        # outstanding request: an order can be partially filled while a cancel
+        # or amend is still in flight, and both facts are true at once. The
+        # pending family stays as it is until an 8 with 150=4/5 or a 35=9
+        # answers the request -- so OrdStatus and PendingAction are separate
+        # fields on this record precisely because they answer different
+        # questions.
+        #
+        # 150 rides along so a reader can tell what the last report WAS. That
+        # matters on a merged record: 32/31 are written only by fills, so
+        # after a cancel they still hold the last fill's values. They mean
+        # "the most recent execution", not "this report".
+        tags: [11, 41, 39, 150, 60, 38, 14, 151, 6, 32, 31, 30]
 
     # Cancel confirmed (150=4) and done for day (150=3): terminal, LeavesQty
     # goes to zero, and any pending request is resolved.
@@ -230,7 +288,9 @@ fix42:
       projected-topics:
         - "sow/{scope}/orders"
       projection:
-        tags: [11, 41, 39, 60]
+        # 151 goes to zero here and the blotter has to show it, or a cancelled
+        # order still reads as working. 14/6 keep the totals the fills left.
+        tags: [11, 41, 39, 150, 60, 14, 151, 6]
         set-tags:
           "9013": "NONE"
           "9010": "0"

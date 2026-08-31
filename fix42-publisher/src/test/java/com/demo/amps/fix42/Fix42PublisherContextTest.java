@@ -195,10 +195,51 @@ class Fix42PublisherContextTest {
     }
 
     @Test
-    @DisplayName("fills and pending acknowledgements never touch the blotter")
-    void onlyResolvingReportsProjectOntoTheBlotter() {
-        for (String execType : List.of(FixTags.ExecType.PARTIAL_FILL, FixTags.ExecType.FILL,
-                FixTags.ExecType.PENDING_CANCEL, FixTags.ExecType.PENDING_REPLACE)) {
+    @DisplayName("a fill reaches the blotter with quantities but does not clear pending")
+    void fillsCarryQuantitiesWithoutResolvingPending() {
+        FixMessage fill = FixMessage.ofType("8")
+                .set(FixTags.ORDER_ID, "ORD-1")
+                .set(FixTags.CL_ORD_ID, "C1")
+                .set(FixTags.EXEC_ID, "E1")
+                .set(FixTags.EXEC_TYPE, FixTags.ExecType.PARTIAL_FILL)
+                .set(FixTags.ORD_STATUS, FixTags.OrdStatus.PARTIALLY_FILLED)
+                .set(FixTags.ORDER_QTY, 10_000)
+                .set(FixTags.LAST_SHARES, 3_000)
+                .setDecimal(FixTags.LAST_PX, 150.00)
+                .set(FixTags.CUM_QTY, 3_000)
+                .set(FixTags.LEAVES_QTY, 7_000)
+                .setDecimal(FixTags.AVG_PX, 150.00)
+                .set(FixTags.TRANSACT_TIME, "20260821-14:03:00.000")
+                .build();
+
+        FixMessage blotter = planner.plan(fill).stream()
+                .filter(instruction -> instruction.topic().endsWith("/orders"))
+                .findFirst().orElseThrow().payload();
+
+        // The economics reach the blotter...
+        assertThat(blotter.value(FixTags.CUM_QTY)).isEqualTo("3000");
+        assertThat(blotter.value(FixTags.LEAVES_QTY)).isEqualTo("7000");
+        assertThat(blotter.value(FixTags.ORDER_QTY)).isEqualTo("10000");
+        assertThat(blotter.value(FixTags.LAST_SHARES)).isEqualTo("3000");
+        assertThat(blotter.value(FixTags.LAST_PX)).isEqualTo("150");
+        assertThat(blotter.value(FixTags.AVG_PX)).isEqualTo("150");
+        assertThat(blotter.value(FixTags.ORD_STATUS))
+                .isEqualTo(FixTags.OrdStatus.PARTIALLY_FILLED);
+
+        // ...but a fill answers no outstanding request, so it must not touch
+        // the pending family. An order can fill while a cancel is in flight.
+        assertThat(blotter.has(FixTags.PENDING_ACTION)).isFalse();
+        assertThat(blotter.has(FixTags.PENDING_ORDER_QTY)).isFalse();
+        assertThat(blotter.has(FixTags.PENDING_CL_ORD_ID)).isFalse();
+        // Nor the working id: only a confirming report moves that.
+        assertThat(blotter.has(FixTags.WORKING_CL_ORD_ID)).isFalse();
+    }
+
+    @Test
+    @DisplayName("a pending acknowledgement (150=6 / 150=E) never touches the blotter")
+    void pendingAcknowledgementsDoNotReachTheBlotter() {
+        for (String execType : List.of(FixTags.ExecType.PENDING_CANCEL,
+                FixTags.ExecType.PENDING_REPLACE)) {
             FixMessage report = FixMessage.ofType("8")
                     .set(FixTags.ORDER_ID, "ORD-1")
                     .set(FixTags.CL_ORD_ID, "C1")
@@ -208,9 +249,10 @@ class Fix42PublisherContextTest {
                     .set(FixTags.TRANSACT_TIME, "20260821-14:03:00.000")
                     .build();
 
+            // These say "I have your request", not "I have applied it".
+            // Projecting one would clear a proposal the venue is still deciding.
             assertThat(planner.plan(report))
-                    .as("150=%s acknowledges or fills; it must not clear a pending request",
-                            execType)
+                    .as("150=%s acknowledges a request; it resolves nothing", execType)
                     .noneSatisfy(instruction ->
                             assertThat(instruction.topic()).endsWith("/orders"));
         }

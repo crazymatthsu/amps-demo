@@ -66,16 +66,24 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
     shouldRunAfter(tasks.test)
 
     // The harness starts its own container, so it needs to know which image to
-    // use. Forwarded rather than hard-coded: there is no public AMPS image, so
-    // the value is necessarily site-specific.
+    // use, and Testcontainers needs to know which engine socket to talk to.
+    // Forwarded rather than hard-coded: there is no public AMPS image, so the
+    // value is necessarily site-specific.
     //
-    // Read through providers.environmentVariable, NOT System.getenv. A test
-    // task inherits the environment of the Gradle DAEMON, which is long-lived:
-    // with System.getenv the value is captured once at configuration time and
-    // a later invocation that sets AMPS_IMAGE differently reuses the stale
-    // one. That produced the worst possible failure -- BUILD SUCCESSFUL with
-    // every integration test silently skipped. A provider is tracked as a
-    // build input, so changing the variable re-configures the task.
+    // Each one is declared an INPUT, not merely forwarded. This repo sets
+    // org.gradle.caching=true, and an environment variable that is only
+    // forwarded is invisible to the cache key -- so a run without AMPS_IMAGE
+    // caches an all-skipped result, and the next run WITH it restores that
+    // entry instead of executing:
+    //
+    //     > Task :fix42-publisher:integrationTest FROM-CACHE
+    //     BUILD SUCCESSFUL
+    //     ...29 tests, 29 skipped
+    //
+    // A green build that ran nothing, which is the worst outcome available
+    // here given the suite is designed to skip when the image is absent.
+    // Reading through providers.environmentVariable is the matching
+    // configuration-cache-correct way to obtain a value once it is an input.
     listOf("AMPS_IMAGE", "AMPS_BIN", "DOCKER_HOST", "TESTCONTAINERS_RYUK_DISABLED")
         .forEach { name ->
             val value = providers.environmentVariable(name)
@@ -84,11 +92,50 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
                 environment(name, value.get())
             }
         }
+    // The benchmark is not a test -- it asserts nothing and takes ~30s. Excluded
+    // rather than left to skip itself, so a normal build reports ZERO skipped
+    // tests: "0 skipped" is how you tell the integration suite actually ran
+    // rather than opting out for want of an AMPS_IMAGE, and a permanently
+    // skipped class would blunt that signal.
+    filter { excludeTestsMatching("*Benchmark") }
+
     // Config and flow files are found relative to the repository root.
     workingDir = rootProject.projectDir
     testLogging {
         showStandardStreams = true
     }
+}
+
+/**
+ * Publish throughput, measured rather than guessed:
+ * `./gradlew :fix42-publisher:publishBenchmark`.
+ *
+ * Starts its own AMPS container and times the same load several ways -- per
+ * message flush, single flush, various setPublishBatching sizes, and through
+ * the real publisher at two log levels. Numbers are hardware- and
+ * network-specific, which is the point: run it where you actually publish.
+ */
+tasks.register<Test>("publishBenchmark") {
+    group = "verification"
+    description = "Measure publish throughput against a real AMPS instance."
+    testClassesDirs = integrationTest.output.classesDirs
+    classpath = integrationTest.runtimeClasspath
+    workingDir = rootProject.projectDir
+    filter { includeTestsMatching("*Benchmark") }
+    systemProperty("fix42.benchmark", "true")
+    outputs.upToDateWhen { false }
+    testLogging { showStandardStreams = true }
+
+    // Same forwarding as integrationTest: this task starts its own container,
+    // so it needs the image and the engine socket too.
+    listOf("AMPS_IMAGE", "AMPS_BIN", "DOCKER_HOST", "TESTCONTAINERS_RYUK_DISABLED")
+        .forEach { name ->
+            val value = providers.environmentVariable(name)
+            inputs.property(name, value.orElse(""))
+            if (value.isPresent) {
+                environment(name, value.get())
+            }
+        }
 }
 
 // `check` runs it, but the test itself opts out when no AMPS image is

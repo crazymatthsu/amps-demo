@@ -114,7 +114,17 @@ public final class FixTags {
     public static final int HANDL_INST = 21;
     public static final int SECURITY_ID_SOURCE = 22;
     public static final int LAST_MKT = 30;
+    /** LastPx: the price of THIS fill, as opposed to tag 6's running average. */
     public static final int LAST_PX = 31;
+    /**
+     * LastShares: the quantity of THIS fill.
+     *
+     * <p>FIX 4.4 renamed the same tag LastQty, which is the name most people
+     * reach for; 4.2 calls it LastShares and this project follows 4.2. It is
+     * the field the cumulative trio is derived from -- CumQty grows by it and
+     * LeavesQty shrinks by it on every fill -- and the one number an execution
+     * report carries that is NOT a running total.
+     */
     public static final int LAST_SHARES = 32;
     public static final int ORDER_QTY = 38;
     public static final int ORD_STATUS = 39;
