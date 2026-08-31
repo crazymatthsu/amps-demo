@@ -14,6 +14,8 @@ import com.demo.amps.hazelcast.AmpsMapStoreFactory;
 import com.demo.amps.hazelcast.HazelcastTiers;
 import com.demo.amps.hazelcast.TierStore;
 import com.demo.amps.hazelcast.ValueCodec;
+import com.demo.amps.testharness.AmpsFlow;
+import com.demo.amps.testharness.AmpsTestServer;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.hazelcast.config.Config;
@@ -74,14 +76,14 @@ class HazelcastPersistentStoreIT {
 
     @BeforeAll
     void startServer() throws Exception {
-        Optional<String> unavailable = AmpsTestServer.unavailableReason();
+        Optional<String> unavailable = AmpsTestServer.unavailableReason(AmpsFlow.HAZELCAST);
         assumeTrue(unavailable.isEmpty(),
                 () -> "integration test prerequisites: " + unavailable.orElse(""));
 
         System.setProperty("hazelcast.phone.home.enabled", "false");
         System.setProperty("hazelcast.logging.type", "slf4j");
 
-        server = AmpsTestServer.start();
+        server = AmpsTestServer.start(AmpsFlow.HAZELCAST);
         inspect = connect("hz-it-inspect");
         clusterName = "hz-it-" + ProcessHandle.current().pid();
         member = Hazelcast.newHazelcastInstance(memberConfig());

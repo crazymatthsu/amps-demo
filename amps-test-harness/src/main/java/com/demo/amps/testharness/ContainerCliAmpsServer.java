@@ -1,4 +1,4 @@
-package com.demo.amps.fix42.it;
+package com.demo.amps.testharness;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -29,7 +29,7 @@ import org.slf4j.LoggerFactory;
  * is what {@code AMPS_TEST_HARNESS} defaults to.
  *
  * <p>Each instance gets its own port and its own empty data directory under
- * {@code build/}, so a run never inherits SOW records or a chain map from the
+ * {@code build/<shortName>-it/}, so a run never inherits SOW records from the
  * last one, {@code gradle clean} disposes of them, and the path stays inside
  * the directory a podman machine shares on macOS.
  *
@@ -41,6 +41,7 @@ final class ContainerCliAmpsServer implements AmpsTestServer {
 
     private static final Logger log = LoggerFactory.getLogger(ContainerCliAmpsServer.class);
 
+    private final AmpsFlow flow;
     private final String engine;
     private final String image;
     private final String containerName;
@@ -48,8 +49,9 @@ final class ContainerCliAmpsServer implements AmpsTestServer {
     private final Path dataDir;
     private boolean started;
 
-    private ContainerCliAmpsServer(String engine, String image, String containerName, int port,
-                                   Path dataDir) {
+    private ContainerCliAmpsServer(AmpsFlow flow, String engine, String image,
+                                   String containerName, int port, Path dataDir) {
+        this.flow = flow;
         this.engine = engine;
         this.image = image;
         this.containerName = containerName;
@@ -68,14 +70,14 @@ final class ContainerCliAmpsServer implements AmpsTestServer {
         return Optional.empty();
     }
 
-    static AmpsTestServer start() throws Exception {
+    static AmpsTestServer start(AmpsFlow flow) throws Exception {
         String image = System.getenv("AMPS_IMAGE");
         int port = freePort();
-        String name = "amps-fix42-it-" + port;
+        String name = "amps-" + flow.shortName() + "-it-" + port;
 
         // Under build/, so it is inside the repository (and therefore inside the
         // path a podman machine shares on macOS) and `gradle clean` disposes of it.
-        Path dataDir = Path.of("build", "fix42-it", name).toAbsolutePath();
+        Path dataDir = Path.of("build", flow.shortName() + "-it", name).toAbsolutePath();
         deleteRecursively(dataDir);
         // The same three directories AmpsTestServer.startupScript creates inside
         // the container for the other harness -- made on the host here, because
@@ -86,13 +88,13 @@ final class ContainerCliAmpsServer implements AmpsTestServer {
         }
 
         ContainerCliAmpsServer server =
-                new ContainerCliAmpsServer(engine(), image, name, port, dataDir);
+                new ContainerCliAmpsServer(flow, engine(), image, name, port, dataDir);
         server.run();
         return server;
     }
 
     private void run() throws Exception {
-        Path flowDir = Path.of(FLOW_DIR).toAbsolutePath();
+        Path flowDir = Path.of(flow.configDir()).toAbsolutePath();
         String mountSuffix = System.getProperty("os.name", "").toLowerCase(Locale.ROOT)
                 .contains("linux") ? ":z" : "";
 
@@ -138,7 +140,7 @@ final class ContainerCliAmpsServer implements AmpsTestServer {
 
     @Override
     public String uri() {
-        return "tcp://127.0.0.1:" + port + "/amps/fix";
+        return "tcp://127.0.0.1:" + port + "/amps/" + flow.messageType();
     }
 
     @Override

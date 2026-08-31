@@ -1,4 +1,4 @@
-package com.demo.amps.fix42.it;
+package com.demo.amps.testharness;
 
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.Ports;
@@ -37,9 +37,11 @@ final class TestcontainersAmpsServer implements AmpsTestServer {
 
     private static final Logger log = LoggerFactory.getLogger(TestcontainersAmpsServer.class);
 
+    private final AmpsFlow flow;
     private final GenericContainer<?> container;
 
-    private TestcontainersAmpsServer(GenericContainer<?> container) {
+    private TestcontainersAmpsServer(AmpsFlow flow, GenericContainer<?> container) {
+        this.flow = flow;
         this.container = container;
     }
 
@@ -62,7 +64,7 @@ final class TestcontainersAmpsServer implements AmpsTestServer {
         return Optional.empty();
     }
 
-    static AmpsTestServer start() {
+    static AmpsTestServer start(AmpsFlow flow) {
         GenericContainer<?> container =
                 new GenericContainer<>(DockerImageName.parse(System.getenv("AMPS_IMAGE")))
                         // The image is built locally from a release tarball and
@@ -70,7 +72,8 @@ final class TestcontainersAmpsServer implements AmpsTestServer {
                         // pull attempt would fail slowly and confusingly.
                         .withImagePullPolicy(imageName -> false)
                         .withCopyFileToContainer(
-                                MountableFile.forHostPath(Path.of(FLOW_DIR).toAbsolutePath()),
+                                MountableFile.forHostPath(
+                                        Path.of(flow.configDir()).toAbsolutePath()),
                                 CONTAINER_CONFIG_DIR)
                         // Entrypoint and command are set together here rather
                         // than via withCommand(String), which tokenises on
@@ -84,7 +87,7 @@ final class TestcontainersAmpsServer implements AmpsTestServer {
                                 .withStartupTimeout(STARTUP_TIMEOUT));
 
         container.start();
-        TestcontainersAmpsServer server = new TestcontainersAmpsServer(container);
+        TestcontainersAmpsServer server = new TestcontainersAmpsServer(flow, container);
         log.info("AMPS ready on tcp://{}:{} (container {}, testcontainers)",
                 container.getHost(), server.port(), shortId(container));
         return server;
@@ -115,7 +118,7 @@ final class TestcontainersAmpsServer implements AmpsTestServer {
 
     @Override
     public String uri() {
-        return "tcp://" + container.getHost() + ":" + port() + "/amps/fix";
+        return "tcp://" + container.getHost() + ":" + port() + "/amps/" + flow.messageType();
     }
 
     /**

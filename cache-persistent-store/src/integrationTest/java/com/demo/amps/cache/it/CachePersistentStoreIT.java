@@ -16,6 +16,8 @@ import com.demo.amps.cache.AmpsNestedMapStore;
 import com.demo.amps.cache.CacheTopics;
 import com.demo.amps.cache.NestedCacheMap;
 import com.demo.amps.cache.PersistentCacheMap;
+import com.demo.amps.testharness.AmpsFlow;
+import com.demo.amps.testharness.AmpsTestServer;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.util.ArrayList;
@@ -54,11 +56,11 @@ class CachePersistentStoreIT {
 
     @BeforeAll
     void startServer() throws Exception {
-        Optional<String> unavailable = AmpsTestServer.unavailableReason();
+        Optional<String> unavailable = AmpsTestServer.unavailableReason(AmpsFlow.CACHE);
         assumeTrue(unavailable.isEmpty(),
                 () -> "integration test prerequisites: " + unavailable.orElse(""));
 
-        server = AmpsTestServer.start();
+        server = AmpsTestServer.start(AmpsFlow.CACHE);
         client = connect("cache-it");
     }
 

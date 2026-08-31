@@ -72,6 +72,15 @@ configurations["integrationTestImplementation"]
 configurations["integrationTestRuntimeOnly"]
     .extendsFrom(configurations.testRuntimeOnly.get())
 
+// Declared here rather than in `dependencies` above: the configuration these
+// name is created by the sourceSets block, which runs after it.
+dependencies {
+    // The container harness, shared with the other modules that need one.
+    // Testcontainers arrives (or does not) as its implementation detail --
+    // nothing here names a Testcontainers type.
+    "integrationTestImplementation"(project(":amps-test-harness"))
+}
+
 val integrationTestTask = tasks.register<Test>("integrationTest") {
     group = "verification"
     description = "Run the cache against a real AMPS instance and read the SOW back."
@@ -84,7 +93,24 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
     // The harness starts its own container, so it needs to know which image
     // and engine to use. Forwarded rather than hard-coded: there is no public
     // AMPS image, so the value is necessarily site-specific.
-    listOf("AMPS_IMAGE", "CONTAINER_ENGINE", "AMPS_PLATFORM", "AMPS_BIN").forEach { name ->
+    // The harness starts its own container, so it needs to know which image to
+    // use, which engine, and -- since AMPS_TEST_HARNESS chooses between the CLI
+    // and Testcontainers backends -- which of the two to start it with.
+    //
+    // Each is declared an INPUT, not merely forwarded. This repo sets
+    // org.gradle.caching=true, and an environment variable that is only
+    // forwarded is invisible to the cache key, so a run without AMPS_IMAGE
+    // caches an all-skipped result and a later run WITH it restores that entry
+    // instead of executing: FROM-CACHE, BUILD SUCCESSFUL, every test silently
+    // skipped. AMPS_TEST_HARNESS matters most of all -- it does not merely
+    // enable the suite, it changes which backend runs it.
+    listOf(
+        "AMPS_IMAGE", "AMPS_BIN", "AMPS_TEST_HARNESS",
+        // The CLI harness.
+        "CONTAINER_ENGINE", "AMPS_PLATFORM",
+        // The Testcontainers harness.
+        "DOCKER_HOST", "TESTCONTAINERS_RYUK_DISABLED",
+    ).forEach { name ->
         val value = providers.environmentVariable(name)
         inputs.property(name, value.orElse(""))
         if (value.isPresent) {

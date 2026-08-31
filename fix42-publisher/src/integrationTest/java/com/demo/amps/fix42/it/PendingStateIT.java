@@ -12,6 +12,8 @@ import com.demo.amps.fix42.mock.Instrument;
 import com.demo.amps.fix42.mock.OrderChain;
 import com.demo.amps.fix42.publish.AmpsDeltaPublisher;
 import com.demo.amps.fix42.publish.PublishPlanner;
+import com.demo.amps.testharness.AmpsFlow;
+import com.demo.amps.testharness.AmpsTestServer;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterAll;
@@ -44,12 +46,12 @@ class PendingStateIT {
 
     @BeforeAll
     void startServer() throws Exception {
-        Optional<String> unavailable = AmpsTestServer.unavailableReason();
+        Optional<String> unavailable = AmpsTestServer.unavailableReason(AmpsFlow.FIX42_CHAINING);
         assumeThat(unavailable)
                 .as("integration test prerequisites: %s", unavailable.orElse(""))
                 .isEmpty();
 
-        server = AmpsTestServer.start();
+        server = AmpsTestServer.start(AmpsFlow.FIX42_CHAINING);
         Fix42Properties properties = Fix42Configurations.shipped(server.uri());
         properties.validate();
 

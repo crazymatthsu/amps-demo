@@ -400,7 +400,17 @@ hydrates from AMPS alone, forces a read-through with `evict()`, and shows
 AMPS_IMAGE=amps-demo:5.3 \
 ./gradlew :hazelcast-persistent-store:integrationTest   # AMPS container + real embedded
                                                         # members; skipped without an image
+
+AMPS_IMAGE=amps-demo:5.3 AMPS_TEST_HARNESS=testcontainers \
+./gradlew :hazelcast-persistent-store:integrationTest   # same tests, Docker API instead
 ```
+
+The container is started by the shared
+[`amps-test-harness`](../amps-test-harness/README.md), which offers two
+backends. `AMPS_TEST_HARNESS=cli` (the default) drives `podman` as a
+subprocess and needs only the binary on `PATH`;
+`AMPS_TEST_HARNESS=testcontainers` goes through the engine's Docker API, which
+is the shape CI wants. Both run the same tests.
 
 The integration suite covers the TODO's list end to end: IMap writes verified
 by querying AMPS directly, a replacement member rehydrating every map, a
