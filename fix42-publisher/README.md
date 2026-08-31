@@ -157,7 +157,7 @@ measurements behind this section in
 ## Tests
 
 ```bash
-./gradlew :fix42-publisher:test              # 71 unit tests, no server needed
+./gradlew :fix42-publisher:test              # 82 unit tests, no server needed
 AMPS_IMAGE=<your-image> \
   ./gradlew :fix42-publisher:integrationTest # 29 tests against a real container
 ```
