@@ -11,6 +11,8 @@ import com.demo.amps.fix42.mock.FixEvent;
 import com.demo.amps.fix42.mock.MockFixFlow;
 import com.demo.amps.fix42.publish.AmpsDeltaPublisher;
 import com.demo.amps.fix42.publish.PublishPlanner;
+import com.demo.amps.testharness.AmpsFlow;
+import com.demo.amps.testharness.AmpsTestServer;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -55,12 +57,12 @@ class Fix42DeltaPublishIT {
 
     @BeforeAll
     void publishTheFlow() throws Exception {
-        Optional<String> unavailable = AmpsTestServer.unavailableReason();
+        Optional<String> unavailable = AmpsTestServer.unavailableReason(AmpsFlow.FIX42_CHAINING);
         assumeThat(unavailable)
                 .as("integration test prerequisites: %s", unavailable.orElse(""))
                 .isEmpty();
 
-        server = AmpsTestServer.start();
+        server = AmpsTestServer.start(AmpsFlow.FIX42_CHAINING);
 
         // The real rulebook from application.yml, pointed at this instance --
         // so a change to the shipped configuration is exercised here too,

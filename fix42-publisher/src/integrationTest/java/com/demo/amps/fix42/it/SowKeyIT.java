@@ -9,6 +9,8 @@ import com.crankuptheamps.client.Message;
 import com.crankuptheamps.client.MessageStream;
 import com.demo.amps.fix42.fix.FixMessage;
 import com.demo.amps.fix42.fix.FixTags;
+import com.demo.amps.testharness.AmpsFlow;
+import com.demo.amps.testharness.AmpsTestServer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -58,12 +60,12 @@ class SowKeyIT {
 
     @BeforeAll
     void startServer() throws Exception {
-        Optional<String> unavailable = AmpsTestServer.unavailableReason();
+        Optional<String> unavailable = AmpsTestServer.unavailableReason(AmpsFlow.FIX42_CHAINING);
         assumeThat(unavailable)
                 .as("integration test prerequisites: %s", unavailable.orElse(""))
                 .isEmpty();
 
-        server = AmpsTestServer.start();
+        server = AmpsTestServer.start(AmpsFlow.FIX42_CHAINING);
         client = connect(server, "sow-key-it");
         sow = new SowReader(client, TIMEOUT_MS);
     }
@@ -232,7 +234,7 @@ class SowKeyIT {
         String here = keyOf("DETERMINISM");
 
         // A second server: new container, empty data directory, no chain map.
-        try (AmpsTestServer other = AmpsTestServer.start();
+        try (AmpsTestServer other = AmpsTestServer.start(AmpsFlow.FIX42_CHAINING);
              Client otherClient = connect(other, "sow-key-it-second-instance")) {
 
             publishChain(otherClient, "DETERMINISM", "DT-1", "DT-2", null);

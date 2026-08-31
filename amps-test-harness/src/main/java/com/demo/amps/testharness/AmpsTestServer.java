@@ -1,4 +1,4 @@
-package com.demo.amps.fix42.it;
+package com.demo.amps.testharness;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -7,8 +7,8 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * A throwaway AMPS instance in a container, running the {@code fix42-chaining}
- * flow.
+ * A throwaway AMPS instance in a container, running the flow an
+ * {@link AmpsFlow} names.
  *
  * <p>Two implementations, because the two places these tests run want
  * different things:
@@ -32,20 +32,18 @@ import java.util.Optional;
  *
  * <p>The image is site-specific -- there is no public AMPS server image, it has
  * to be built from a release tarball -- so both report
- * {@link #unavailableReason()} instead of failing when one is not configured.
+ * {@link #unavailableReason(AmpsFlow)} instead of failing when one is not configured.
  * That keeps {@code ./gradlew build} green on a machine that has never seen
  * AMPS, and makes it do real work on one that has. A green build is therefore
  * not by itself proof these ran: check for {@code SKIPPED} if it matters.
  *
- * <p>Whichever is chosen, a run never inherits SOW records or a chain map from
- * the last one -- which matters more than usual here, because the chaining
- * module's whole job is to remember identifiers across restarts -- while state
- * still survives a deliberate {@link #restart()}.
+ * <p>Whichever is chosen, a run never inherits SOW records from the last one,
+ * while state still survives a deliberate {@link #restart()}. Both halves
+ * matter: the suites that use this are testing what AMPS remembers, so a run
+ * polluted by the last one proves nothing, and neither does a restart that
+ * quietly starts from empty.
  */
 public interface AmpsTestServer extends AutoCloseable {
-
-    /** Where the flow's config lives, relative to the repository root. */
-    String FLOW_DIR = "server/config/flows/fix42-chaining";
 
     String CONTAINER_CONFIG_DIR = "/amps/config";
     String CONTAINER_DATA_DIR = "/amps/data";
@@ -99,16 +97,17 @@ public interface AmpsTestServer extends AutoCloseable {
      * <p>Returned rather than thrown so the test class can turn it into a skip
      * with a readable reason instead of a failure.
      */
-    static Optional<String> unavailableReason() {
+    static Optional<String> unavailableReason(AmpsFlow flow) {
         String image = System.getenv("AMPS_IMAGE");
         if (image == null || image.isBlank()) {
             return Optional.of("AMPS_IMAGE is not set. There is no public AMPS server image; "
                     + "build one from server/Containerfile and export AMPS_IMAGE to run these "
                     + "tests.");
         }
-        if (!Files.isRegularFile(Path.of(FLOW_DIR, "amps-config.xml"))) {
-            return Optional.of("cannot find " + FLOW_DIR + "/amps-config.xml -- the integration "
-                    + "test must run with the repository root as its working directory");
+        if (!Files.isRegularFile(Path.of(flow.configDir(), "amps-config.xml"))) {
+            return Optional.of("cannot find " + flow.configDir() + "/amps-config.xml -- the "
+                    + "integration test must run with the repository root as its working "
+                    + "directory");
         }
         return switch (Harness.selected()) {
             case CLI -> ContainerCliAmpsServer.unavailableReason();
@@ -116,11 +115,11 @@ public interface AmpsTestServer extends AutoCloseable {
         };
     }
 
-    /** Starts an instance and blocks until AMPS is genuinely ready. */
-    static AmpsTestServer start() throws Exception {
+    /** Starts an instance of {@code flow} and blocks until AMPS is genuinely ready. */
+    static AmpsTestServer start(AmpsFlow flow) throws Exception {
         return switch (Harness.selected()) {
-            case CLI -> ContainerCliAmpsServer.start();
-            case TESTCONTAINERS -> TestcontainersAmpsServer.start();
+            case CLI -> ContainerCliAmpsServer.start(flow);
+            case TESTCONTAINERS -> TestcontainersAmpsServer.start(flow);
         };
     }
 

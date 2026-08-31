@@ -343,7 +343,17 @@ siblings. `SELECT * FROM "cache.entries"` in the admin UI
 AMPS_IMAGE=amps-demo:5.3 \
 ./gradlew :cache-persistent-store:integrationTest   # starts a container on the cache
                                                     # flow; skipped without an image
+
+AMPS_IMAGE=amps-demo:5.3 AMPS_TEST_HARNESS=testcontainers \
+./gradlew :cache-persistent-store:integrationTest   # same tests, Docker API instead
 ```
+
+The container is started by the shared
+[`amps-test-harness`](../amps-test-harness/README.md), which offers two
+backends. `AMPS_TEST_HARNESS=cli` (the default) drives `podman` as a
+subprocess and needs only the binary on `PATH`;
+`AMPS_TEST_HARNESS=testcontainers` goes through the engine's Docker API, which
+is the shape CI wants. Both run the same tests.
 
 The integration suite covers the TODO's demo-testing list: records verified by
 querying AMPS directly, read-through of a key another client wrote, a fresh

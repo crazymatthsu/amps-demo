@@ -8,6 +8,8 @@ import com.demo.amps.fix42.mock.Instrument;
 import com.demo.amps.fix42.mock.OrderChain;
 import com.demo.amps.fix42.publish.PublishInstruction;
 import com.demo.amps.fix42.publish.PublishPlanner;
+import com.demo.amps.testharness.AmpsFlow;
+import com.demo.amps.testharness.AmpsTestServer;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -24,7 +26,7 @@ class PublishThroughputBenchmark {
 
     @Test
     void measure() throws Exception {
-        if (AmpsTestServer.unavailableReason().isPresent()) {
+        if (AmpsTestServer.unavailableReason(AmpsFlow.FIX42_CHAINING).isPresent()) {
             return;
         }
         List<FixMessage> messages = new ArrayList<>();
@@ -37,7 +39,7 @@ class PublishThroughputBenchmark {
             }
         }
 
-        try (AmpsTestServer server = AmpsTestServer.start()) {
+        try (AmpsTestServer server = AmpsTestServer.start(AmpsFlow.FIX42_CHAINING)) {
             Fix42Properties props = Fix42Configurations.shipped(server.uri());
             PublishPlanner planner = new PublishPlanner(props);
 

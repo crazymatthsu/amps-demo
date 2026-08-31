@@ -54,8 +54,10 @@ configurations["integrationTestRuntimeOnly"]
 // Declared here rather than in `dependencies` above: the configuration these
 // name is created by the sourceSets block, which runs after it.
 dependencies {
-    "integrationTestImplementation"(libs.testcontainers)
-    "integrationTestImplementation"(libs.testcontainers.junit)
+    // The container harness, shared with the other modules that need one.
+    // Testcontainers arrives (or does not) as its implementation detail --
+    // nothing here names a Testcontainers type.
+    "integrationTestImplementation"(project(":amps-test-harness"))
 }
 
 val integrationTestTask = tasks.register<Test>("integrationTest") {

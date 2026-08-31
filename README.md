@@ -18,6 +18,7 @@ amps-demo/
 ├── fix42-publisher/  Spring Boot: FIX 4.2 delta publishing onto chained SOW keys
 ├── cache-persistent-store/  a local Map cache with AMPS as its persistent store
 ├── hazelcast-persistent-store/  Hazelcast OSS persisting its IMaps in AMPS (MapStore SPI)
+├── amps-test-harness/  starts a throwaway AMPS container for the integration suites
 └── docs/      the written half, link-checked by the build
 ```
 
