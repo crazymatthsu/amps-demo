@@ -20,7 +20,7 @@ import java.util.List;
  * that may not add up. That is deliberate -- {@code 38 = 14 + 151} on every
  * working report and an AvgPx that matches its own fills are the properties
  * that make a mock feed worth publishing, and
- * {@code OrderChainTest} asserts them.
+ * {@code FillArithmeticTest} asserts them.
  *
  * <p>Identity follows the project contract exactly:
  * <ul>
@@ -66,6 +66,17 @@ public final class OrderChain {
     private long cumQty;
     private long leavesQty;
     private double avgPx;
+
+    /**
+     * Every fill this chain has reported, in report order. Busted entries stay
+     * in the list, flagged, so fill ordinals never shift -- and so a bust or
+     * correct can restate the cumulative trio by replaying the survivors from
+     * zero instead of reversing rounded running totals.
+     */
+    private final List<Fill> fills = new ArrayList<>();
+
+    /** Set once the unfilled balance stopped working (reject/cancel/DFD). */
+    private boolean closedOut;
 
     private int clOrdSeq;
     private int execSeq;
@@ -189,6 +200,7 @@ public final class OrderChain {
     public OrderChain reject(String rejectReason, String text) {
         orderId = orderId.isEmpty() ? "ORD-" + chainId : orderId;
         leavesQty = 0;
+        closedOut = true;
         return record("new reject", execution(FixTags.ExecType.REJECTED, FixTags.OrdStatus.REJECTED)
                 .set(FixTags.ORD_REJ_REASON, rejectReason)
                 .set(FixTags.TEXT, text)
@@ -221,9 +233,69 @@ public final class OrderChain {
         avgPx = Prices.averagePrice(cumQty, avgPx, shares, lastPx);
         cumQty += shares;
         leavesQty -= shares;
-        return record(description, execution(execType, ordStatus)
+        FixMessage message = execution(execType, ordStatus)
                 .set(FixTags.LAST_SHARES, shares)
                 .setDecimal(FixTags.LAST_PX, lastPx)
+                .set(FixTags.LAST_MKT, instrument.exDestination())
+                .build();
+        // execution() just minted this report's ExecID; remember the fill
+        // under it so a later bust/correct can name it in tag 19.
+        fills.add(new Fill("EXEC-" + chainId + "-" + execSeq, shares, lastPx));
+        return record(description, message);
+    }
+
+    /**
+     * 35=8 with 20=1 -- the venue busts the {@code fillOrdinal}-th fill this
+     * chain reported (1-based): that execution never happened.
+     *
+     * <p>The report restates 14/151/6/39 as absolutes recomputed over the
+     * surviving fills, per the project contract -- which is exactly what lets
+     * the blotter adopt them with the same merge that applied the fill. It
+     * carries no 31/32 (a bust reports no new trade), and tag 150 mirrors the
+     * restated tag 39, because FIX 4.2 has no bust ExecType: the semantics
+     * ride on tag 20 alone.
+     *
+     * <p>Busting the last fill of a FILLED order reopens it (contract edge
+     * case 6: FILLED goes back to PARTIALLY_FILLED). Busting after the order
+     * closed out (cancel/DFD/reject) throws instead -- the stopped balance
+     * must not resurrect, and this mock does not model that venue-specific
+     * ambiguity.
+     */
+    public OrderChain bust(int fillOrdinal) {
+        Fill target = liveFill(fillOrdinal, "bust");
+        target.busted = true;
+        recomputeFromFills();
+        String status = restatedStatus();
+        return record("trade bust", execution(status, status, FixTags.ExecTransType.CANCEL)
+                .set(FixTags.EXEC_REF_ID, target.execId)
+                .build());
+    }
+
+    /**
+     * 35=8 with 20=2 -- the venue corrects the {@code fillOrdinal}-th fill
+     * (1-based) to {@code newShares} at {@code newLastPx}.
+     *
+     * <p>Unlike a bust this DOES carry trade fields: the correcting report's
+     * 32/31 become the execution's current values, alongside the restated
+     * absolute 14/151/6/39. Same restrictions as {@link #bust(int)}.
+     */
+    public OrderChain correct(int fillOrdinal, long newShares, double newLastPx) {
+        Fill target = liveFill(fillOrdinal, "correct");
+        long restatedCum = cumQty - target.shares + newShares;
+        if (newShares <= 0 || restatedCum > orderQty) {
+            throw new IllegalArgumentException(
+                    "chain " + chainId + ": cannot correct fill #" + fillOrdinal + " to "
+                            + newShares + " shares; CumQty would be " + restatedCum
+                            + " of " + orderQty);
+        }
+        target.shares = newShares;
+        target.px = newLastPx;
+        recomputeFromFills();
+        String status = restatedStatus();
+        return record("trade correct", execution(status, status, FixTags.ExecTransType.CORRECT)
+                .set(FixTags.EXEC_REF_ID, target.execId)
+                .set(FixTags.LAST_SHARES, newShares)
+                .setDecimal(FixTags.LAST_PX, newLastPx)
                 .set(FixTags.LAST_MKT, instrument.exDestination())
                 .build());
     }
@@ -260,6 +332,7 @@ public final class OrderChain {
     /** 35=8 with 150=4/39=4 -- cancel confirmed. LeavesQty goes to zero. Terminal. */
     public OrderChain cancelConfirmed() {
         leavesQty = 0;
+        closedOut = true;
         return record("cancel confirmed",
                 execution(FixTags.ExecType.CANCELED, FixTags.OrdStatus.CANCELED).build());
     }
@@ -267,6 +340,7 @@ public final class OrderChain {
     /** 35=8 with 150=3/39=3 -- done for day; the unfilled balance stops working. */
     public OrderChain doneForDay() {
         leavesQty = 0;
+        closedOut = true;
         return record("done for day",
                 execution(FixTags.ExecType.DONE_FOR_DAY, FixTags.OrdStatus.DONE_FOR_DAY).build());
     }
@@ -350,6 +424,69 @@ public final class OrderChain {
         return chainId;
     }
 
+    // ---- restatement helpers ------------------------------------------------
+
+    /** The referenced fill, after the guards every bust/correct shares. */
+    private Fill liveFill(int fillOrdinal, String action) {
+        if (closedOut) {
+            throw new IllegalStateException("chain " + chainId + ": cannot " + action
+                    + " a fill after the order closed out; the stopped balance must not resurrect");
+        }
+        if (fillOrdinal < 1 || fillOrdinal > fills.size()) {
+            throw new IllegalArgumentException("chain " + chainId + ": no fill #" + fillOrdinal
+                    + " to " + action + " (" + fills.size() + " fills reported)");
+        }
+        Fill target = fills.get(fillOrdinal - 1);
+        if (target.busted) {
+            throw new IllegalArgumentException("chain " + chainId + ": fill #" + fillOrdinal
+                    + " (" + target.execId + ") is already busted");
+        }
+        return target;
+    }
+
+    /**
+     * Restates the cumulative trio by replaying the surviving fills from zero.
+     *
+     * <p>Replaying through {@link Prices#averagePrice} rather than reversing
+     * the running totals matters: the running AvgPx is rounded at every step,
+     * so subtraction would leak that rounding into the restated value, while a
+     * replay produces exactly what a venue that never saw the busted fill
+     * would have published.
+     */
+    private void recomputeFromFills() {
+        cumQty = 0;
+        avgPx = 0.0;
+        for (Fill fill : fills) {
+            if (!fill.busted) {
+                avgPx = Prices.averagePrice(cumQty, avgPx, fill.shares, fill.px);
+                cumQty += fill.shares;
+            }
+        }
+        leavesQty = orderQty - cumQty;
+    }
+
+    /** Tag 39 after a restatement; tag 150 mirrors it (4.2 has no bust type). */
+    private String restatedStatus() {
+        if (cumQty == 0) {
+            return FixTags.OrdStatus.NEW;
+        }
+        return cumQty < orderQty ? FixTags.OrdStatus.PARTIALLY_FILLED : FixTags.OrdStatus.FILLED;
+    }
+
+    /** One reported fill; mutable because a correct replaces 32/31 in place. */
+    private static final class Fill {
+        private final String execId;
+        private long shares;
+        private double px;
+        private boolean busted;
+
+        private Fill(String execId, long shares, double px) {
+            this.execId = execId;
+            this.shares = shares;
+            this.px = px;
+        }
+    }
+
     // ---- construction helpers ----------------------------------------------
 
     /** The fields every client-originated request carries. */
@@ -379,6 +516,10 @@ public final class OrderChain {
      * this design cannot delegate to the server.
      */
     private FixMessage.Builder execution(String execType, String ordStatus) {
+        return execution(execType, ordStatus, FixTags.ExecTransType.NEW);
+    }
+
+    private FixMessage.Builder execution(String execType, String ordStatus, String execTransType) {
         execSeq++;
         return FixMessage.ofType(FixTags.MsgType.EXECUTION_REPORT)
                 .set(FixTags.ORDER_ID, orderId)
@@ -392,7 +533,7 @@ public final class OrderChain {
                 .setIf(clOrdSeq > 1 && !previousClOrdId().equals(currentClOrdId),
                         FixTags.ORIG_CL_ORD_ID, previousClOrdId())
                 .set(FixTags.EXEC_ID, "EXEC-" + chainId + "-" + execSeq)
-                .set(FixTags.EXEC_TRANS_TYPE, "0")
+                .set(FixTags.EXEC_TRANS_TYPE, execTransType)
                 .set(FixTags.EXEC_TYPE, execType)
                 .set(FixTags.ORD_STATUS, ordStatus)
                 .set(FixTags.ACCOUNT, account)

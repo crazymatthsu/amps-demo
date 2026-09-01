@@ -23,4 +23,8 @@ public record Instrument(String symbol, String securityId, String securityIdSour
             new Instrument("TSLA", "US88160R1014", "4", "USD", "XNAS");
     public static final Instrument NVDA =
             new Instrument("NVDA", "US67066G1040", "4", "USD", "XNAS");
+    public static final Instrument AMZN =
+            new Instrument("AMZN", "US0231351067", "4", "USD", "XNAS");
+    public static final Instrument META =
+            new Instrument("META", "US30303M1027", "4", "USD", "XNAS");
 }

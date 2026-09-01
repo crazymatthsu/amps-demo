@@ -1,6 +1,7 @@
 package com.demo.amps.fix42.mock;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.demo.amps.fix42.fix.FixMessage;
 import com.demo.amps.fix42.fix.FixTags;
@@ -208,6 +209,175 @@ class FillArithmeticTest {
             // Still 300 done and 500 working -- a pending state is not an event.
             assertThat(pending.value(FixTags.CUM_QTY)).isEqualTo(fill.value(FixTags.CUM_QTY));
             assertThat(pending.value(FixTags.LEAVES_QTY)).isEqualTo(fill.value(FixTags.LEAVES_QTY));
+        }
+    }
+
+    /**
+     * Busts (20=1) and corrects (20=2) restate the cumulative trio as
+     * absolutes recomputed over the surviving fills -- not as a subtraction
+     * from the rounded running totals, which would leak rounding error.
+     */
+    @Nested
+    @DisplayName("busts and corrects (ExecTransType 20=1/2)")
+    class BustsAndCorrects {
+
+        @Test
+        @DisplayName("busting one of several fills recomputes the trio over the survivors")
+        void bustOfOneOfSeveralFills() {
+            FixMessage bust = OrderChain
+                    .forTest("BUSTED", Instrument.AMZN, 6_000, 210.00)
+                    .newOrder()
+                    .ack()
+                    .partialFill(2_000, 209.95)
+                    .partialFill(1_000, 210.05)
+                    .bust(1)
+                    .events().getLast().message();
+
+            assertThat(bust.value(FixTags.EXEC_TRANS_TYPE))
+                    .isEqualTo(FixTags.ExecTransType.CANCEL);
+            // Tag 19 names the busted execution; tag 17 is a fresh id of its own.
+            assertThat(bust.value(FixTags.EXEC_REF_ID)).isEqualTo("EXEC-BUSTED-2");
+            assertThat(bust.value(FixTags.EXEC_ID)).isEqualTo("EXEC-BUSTED-4");
+            // Only the surviving 1000 @ 210.05 counts.
+            assertThat(bust.value(FixTags.CUM_QTY)).isEqualTo("1000");
+            assertThat(bust.value(FixTags.LEAVES_QTY)).isEqualTo("5000");
+            assertThat(bust.value(FixTags.AVG_PX)).isEqualTo("210.05");
+            // 150 mirrors the restated 39: 4.2 has no bust ExecType, the
+            // semantics ride on tag 20.
+            assertThat(bust.value(FixTags.ORD_STATUS))
+                    .isEqualTo(FixTags.OrdStatus.PARTIALLY_FILLED);
+            assertThat(bust.value(FixTags.EXEC_TYPE)).isEqualTo(FixTags.ExecType.PARTIAL_FILL);
+            // A bust reports no new trade.
+            assertThat(bust.has(FixTags.LAST_SHARES)).isFalse();
+            assertThat(bust.has(FixTags.LAST_PX)).isFalse();
+        }
+
+        @Test
+        @DisplayName("busting the only fill returns the order to NEW with zeroed economics")
+        void bustOfTheOnlyFill() {
+            FixMessage bust = OrderChain
+                    .forTest("UNWOUND", Instrument.AAPL, 4_000, 150.00)
+                    .newOrder()
+                    .ack()
+                    .partialFill(500, 150.10)
+                    .bust(1)
+                    .events().getLast().message();
+
+            assertThat(bust.value(FixTags.CUM_QTY)).isEqualTo("0");
+            assertThat(bust.value(FixTags.LEAVES_QTY)).isEqualTo("4000");
+            assertThat(bust.value(FixTags.AVG_PX)).isEqualTo("0");
+            assertThat(bust.value(FixTags.ORD_STATUS)).isEqualTo(FixTags.OrdStatus.NEW);
+            assertThat(bust.value(FixTags.EXEC_TYPE)).isEqualTo(FixTags.ExecType.NEW);
+        }
+
+        @Test
+        @DisplayName("busting the last fill of a FILLED order reopens it")
+        void bustAfterFullFillReopens() {
+            FixMessage bust = OrderChain
+                    .forTest("REOPENED", Instrument.MSFT, 1_000, 410.00)
+                    .newOrder()
+                    .ack()
+                    .partialFill(400, 410.10)
+                    .fill(410.20)
+                    .bust(2)
+                    .events().getLast().message();
+
+            // Contract edge case 6: FILLED goes back to PARTIALLY_FILLED, and
+            // the busted 600 return to the working balance.
+            assertThat(bust.value(FixTags.CUM_QTY)).isEqualTo("400");
+            assertThat(bust.value(FixTags.LEAVES_QTY)).isEqualTo("600");
+            assertThat(bust.value(FixTags.AVG_PX)).isEqualTo("410.1");
+            assertThat(bust.value(FixTags.ORD_STATUS))
+                    .isEqualTo(FixTags.OrdStatus.PARTIALLY_FILLED);
+        }
+
+        @Test
+        @DisplayName("a price-only correct moves AvgPx and carries the replacement 32/31")
+        void correctPriceOnly() {
+            FixMessage correct = OrderChain
+                    .forTest("REPRICED", Instrument.META, 3_000, 512.00)
+                    .newOrder()
+                    .ack()
+                    .partialFill(1_200, 512.10)
+                    .correct(1, 1_200, 511.95)
+                    .events().getLast().message();
+
+            assertThat(correct.value(FixTags.EXEC_TRANS_TYPE))
+                    .isEqualTo(FixTags.ExecTransType.CORRECT);
+            assertThat(correct.value(FixTags.EXEC_REF_ID)).isEqualTo("EXEC-REPRICED-2");
+            // Unlike a bust, a correct DOES carry trade fields: the
+            // correcting report's 32/31 become the execution's current values.
+            assertThat(correct.value(FixTags.LAST_SHARES)).isEqualTo("1200");
+            assertThat(correct.value(FixTags.LAST_PX)).isEqualTo("511.95");
+            assertThat(correct.value(FixTags.CUM_QTY)).isEqualTo("1200");
+            assertThat(correct.value(FixTags.LEAVES_QTY)).isEqualTo("1800");
+            assertThat(correct.value(FixTags.AVG_PX)).isEqualTo("511.95");
+        }
+
+        @Test
+        @DisplayName("a correct that changes shares restates the whole trio")
+        void correctChangingShares() {
+            FixMessage correct = OrderChain
+                    .forTest("RESIZED", Instrument.GOOG, 2_000, 175.00)
+                    .newOrder()
+                    .ack()
+                    .partialFill(600, 175.05)
+                    .partialFill(400, 175.15)
+                    .correct(1, 500, 175.05)
+                    .events().getLast().message();
+
+            // Survivors: 500 @ 175.05 and 400 @ 175.15.
+            // (500 * 175.05 + 400 * 175.15) / 900 = 175.0944 (4dp, HALF_UP)
+            assertThat(correct.value(FixTags.CUM_QTY)).isEqualTo("900");
+            assertThat(correct.value(FixTags.LEAVES_QTY)).isEqualTo("1100");
+            assertThat(correct.value(FixTags.AVG_PX)).isEqualTo("175.0944");
+        }
+
+        @Test
+        @DisplayName("a fill after a bust continues from the restated totals")
+        void subsequentFillContinuesFromRestatement() {
+            FixMessage fill = OrderChain
+                    .forTest("RESUMED", Instrument.NVDA, 5_000, 121.00)
+                    .newOrder()
+                    .ack()
+                    .partialFill(2_000, 121.10)
+                    .bust(1)
+                    .partialFill(1_000, 121.20)
+                    .events().getLast().message();
+
+            // The busted 2000 never happened: only the new 1000 counts.
+            assertThat(fill.value(FixTags.CUM_QTY)).isEqualTo("1000");
+            assertThat(fill.value(FixTags.LEAVES_QTY)).isEqualTo("4000");
+            assertThat(fill.value(FixTags.AVG_PX)).isEqualTo("121.2");
+        }
+
+        @Test
+        @DisplayName("a bust or correct that cannot mean anything is rejected loudly")
+        void restatementGuards() {
+            OrderChain busted = OrderChain.forTest("GUARD-A", Instrument.AAPL, 1_000, 150.00)
+                    .newOrder().ack().partialFill(300, 150.00).bust(1);
+            assertThatThrownBy(() -> busted.bust(1))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("already busted");
+            assertThatThrownBy(() -> busted.correct(1, 200, 150.00))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> busted.bust(2))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("no fill #2");
+
+            OrderChain working = OrderChain.forTest("GUARD-B", Instrument.MSFT, 1_000, 410.00)
+                    .newOrder().ack().partialFill(300, 410.00);
+            assertThatThrownBy(() -> working.correct(1, 1_500, 410.00))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("CumQty would be");
+
+            // After a cancel the stopped balance must not resurrect.
+            OrderChain cancelled = OrderChain.forTest("GUARD-C", Instrument.GOOG, 1_000, 175.00)
+                    .newOrder().ack().partialFill(300, 175.00)
+                    .cancelRequest().cancelConfirmed();
+            assertThatThrownBy(() -> cancelled.bust(1))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("closed out");
         }
     }
 

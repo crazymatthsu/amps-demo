@@ -60,6 +60,11 @@ public record Fix42Properties(Amps amps, Map<String, List<Integer>> topicKeys, L
      *                        This is what splits {@code 35=8} into new-ack,
      *                        partial-fill, fill and cancel-confirmed rules,
      *                        each carrying a different field set
+     * @param execTransTypes  tag 20 values it handles; empty means "any".
+     *                        Busts and corrects carry an ordinary tag 150
+     *                        mirroring the restated status, so tag 20 is the
+     *                        only field that distinguishes them from fills --
+     *                        their rules match on it and are declared first
      * @param mode            {@link PublishMode#FULL} or {@link PublishMode#DELTA}
      * @param tags            the identity and always-sent fields to extract
      * @param changeableTags  the mutable business fields to extract; kept
@@ -72,6 +77,7 @@ public record Fix42Properties(Amps amps, Map<String, List<Integer>> topicKeys, L
     public record Route(String name,
                         @DefaultValue List<String> msgTypes,
                         @DefaultValue List<String> execTypes,
+                        @DefaultValue List<String> execTransTypes,
                         @DefaultValue("DELTA") PublishMode mode,
                         @DefaultValue List<Integer> tags,
                         @DefaultValue List<Integer> changeableTags,
@@ -79,12 +85,15 @@ public record Fix42Properties(Amps amps, Map<String, List<Integer>> topicKeys, L
                         @DefaultValue List<String> projectedTopics,
                         Projection projection) {
 
-        /** True when this rule handles the given message type and exec type. */
-        public boolean matches(String msgType, String execType) {
+        /** True when this rule handles the given message, by tags 35/150/20. */
+        public boolean matches(String msgType, String execType, String execTransType) {
             if (!msgTypes.contains(msgType)) {
                 return false;
             }
-            return execTypes.isEmpty() || execTypes.contains(execType);
+            if (!execTypes.isEmpty() && !execTypes.contains(execType)) {
+                return false;
+            }
+            return execTransTypes.isEmpty() || execTransTypes.contains(execTransType);
         }
 
         /**
@@ -161,6 +170,10 @@ public record Fix42Properties(Amps amps, Map<String, List<Integer>> topicKeys, L
             }
             if (route.msgTypes().isEmpty()) {
                 problems.add(where + ": msg-types is empty, so this route can never match");
+            }
+            if (!route.execTransTypes().isEmpty() && !List.of("8").equals(route.msgTypes())) {
+                problems.add(where + ": exec-trans-types matches tag 20, which only an "
+                        + "execution report carries, so msg-types must be exactly [\"8\"]");
             }
             if (route.topics().isEmpty() && route.projectedTopics().isEmpty()) {
                 problems.add(where + ": topics is empty, so matching messages would go nowhere");

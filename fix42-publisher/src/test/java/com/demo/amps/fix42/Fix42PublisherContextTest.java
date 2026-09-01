@@ -236,6 +236,93 @@ class Fix42PublisherContextTest {
     }
 
     @Test
+    @DisplayName("a bust projects the restated totals to the blotter without trade fields")
+    void bustProjectsRestatedTotalsWithoutTradeFields() {
+        FixMessage bust = FixMessage.ofType("8")
+                .set(FixTags.ORDER_ID, "ORD-1")
+                .set(FixTags.CL_ORD_ID, "C1")
+                .set(FixTags.EXEC_ID, "E5")
+                .set(FixTags.EXEC_REF_ID, "E2")
+                .set(FixTags.EXEC_TRANS_TYPE, FixTags.ExecTransType.CANCEL)
+                .set(FixTags.EXEC_TYPE, FixTags.ExecType.PARTIAL_FILL)
+                .set(FixTags.ORD_STATUS, FixTags.OrdStatus.PARTIALLY_FILLED)
+                .set(FixTags.ORDER_QTY, 6_000)
+                .set(FixTags.CUM_QTY, 1_000)
+                .set(FixTags.LEAVES_QTY, 5_000)
+                .setDecimal(FixTags.AVG_PX, 210.05)
+                .set(FixTags.TRANSACT_TIME, "20260821-14:04:00.000")
+                .build();
+
+        List<PublishInstruction> plan = planner.plan(bust);
+        assertThat(plan).isNotEmpty().allSatisfy(instruction ->
+                assertThat(instruction.routeName()).isEqualTo("exec-bust"));
+
+        FixMessage blotter = plan.stream()
+                .filter(instruction -> instruction.topic().endsWith("/orders"))
+                .findFirst().orElseThrow().payload();
+        // The restated absolutes are adopted wholesale...
+        assertThat(blotter.value(FixTags.CUM_QTY)).isEqualTo("1000");
+        assertThat(blotter.value(FixTags.LEAVES_QTY)).isEqualTo("5000");
+        assertThat(blotter.value(FixTags.AVG_PX)).isEqualTo("210.05");
+        assertThat(blotter.value(FixTags.ORDER_QTY)).isEqualTo("6000");
+        // ...but not the reference pair: 19/20 describe a PRIOR execution and
+        // would go stale on the merged record. No trade fields either, so the
+        // blotter keeps the last real fill's 32/31.
+        assertThat(blotter.has(FixTags.EXEC_REF_ID)).isFalse();
+        assertThat(blotter.has(FixTags.EXEC_TRANS_TYPE)).isFalse();
+        assertThat(blotter.has(FixTags.LAST_SHARES)).isFalse();
+        // A bust answers no request: the pending family is untouched.
+        assertThat(blotter.has(FixTags.PENDING_ACTION)).isFalse();
+
+        // The exec topics DO keep 19/20 -- there the reference is the point.
+        plan.stream()
+                .filter(instruction -> !instruction.topic().endsWith("/orders"))
+                .forEach(instruction -> {
+                    assertThat(instruction.payload().value(FixTags.EXEC_REF_ID)).isEqualTo("E2");
+                    assertThat(instruction.payload().value(FixTags.EXEC_TRANS_TYPE))
+                            .isEqualTo(FixTags.ExecTransType.CANCEL);
+                });
+    }
+
+    @Test
+    @DisplayName("a correct projects the replacement 32/31 alongside the restated snapshot")
+    void correctProjectsReplacementFillValues() {
+        FixMessage correct = FixMessage.ofType("8")
+                .set(FixTags.ORDER_ID, "ORD-1")
+                .set(FixTags.CL_ORD_ID, "C1")
+                .set(FixTags.EXEC_ID, "E6")
+                .set(FixTags.EXEC_REF_ID, "E2")
+                .set(FixTags.EXEC_TRANS_TYPE, FixTags.ExecTransType.CORRECT)
+                .set(FixTags.EXEC_TYPE, FixTags.ExecType.PARTIAL_FILL)
+                .set(FixTags.ORD_STATUS, FixTags.OrdStatus.PARTIALLY_FILLED)
+                .set(FixTags.ORDER_QTY, 3_000)
+                .set(FixTags.LAST_SHARES, 1_200)
+                .setDecimal(FixTags.LAST_PX, 511.95)
+                .set(FixTags.LAST_MKT, "XNAS")
+                .set(FixTags.CUM_QTY, 1_200)
+                .set(FixTags.LEAVES_QTY, 1_800)
+                .setDecimal(FixTags.AVG_PX, 511.95)
+                .set(FixTags.TRANSACT_TIME, "20260821-14:05:00.000")
+                .build();
+
+        List<PublishInstruction> plan = planner.plan(correct);
+        assertThat(plan).isNotEmpty().allSatisfy(instruction ->
+                assertThat(instruction.routeName()).isEqualTo("exec-correct"));
+
+        FixMessage blotter = plan.stream()
+                .filter(instruction -> instruction.topic().endsWith("/orders"))
+                .findFirst().orElseThrow().payload();
+        // The corrected execution's replacement values, not the originals.
+        assertThat(blotter.value(FixTags.LAST_SHARES)).isEqualTo("1200");
+        assertThat(blotter.value(FixTags.LAST_PX)).isEqualTo("511.95");
+        assertThat(blotter.value(FixTags.CUM_QTY)).isEqualTo("1200");
+        assertThat(blotter.value(FixTags.LEAVES_QTY)).isEqualTo("1800");
+        assertThat(blotter.value(FixTags.AVG_PX)).isEqualTo("511.95");
+        assertThat(blotter.has(FixTags.EXEC_REF_ID)).isFalse();
+        assertThat(blotter.has(FixTags.EXEC_TRANS_TYPE)).isFalse();
+    }
+
+    @Test
     @DisplayName("a pending acknowledgement (150=6 / 150=E) never touches the blotter")
     void pendingAcknowledgementsDoNotReachTheBlotter() {
         for (String execType : List.of(FixTags.ExecType.PENDING_CANCEL,

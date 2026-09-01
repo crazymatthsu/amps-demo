@@ -48,13 +48,15 @@ public class PublishPlanner {
     public List<PublishInstruction> plan(FixMessage message) {
         String msgType = message.msgType();
         String execType = message.value(FixTags.EXEC_TYPE);
+        String execTransType = message.value(FixTags.EXEC_TRANS_TYPE);
 
         Fix42Properties.Route route = properties.routes().stream()
-                .filter(candidate -> candidate.matches(msgType, execType))
+                .filter(candidate -> candidate.matches(msgType, execType, execTransType))
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException(
                         "no fix42 route matches 35=" + msgType
                                 + (execType.isEmpty() ? "" : " with 150=" + execType)
+                                + (execTransType.isEmpty() ? "" : " and 20=" + execTransType)
                                 + ": " + message.printable()
                                 + "\nAdd a route for it in application.yml, or a catch-all for "
                                 + "this message type, so nothing is dropped unnoticed."));

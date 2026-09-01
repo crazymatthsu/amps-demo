@@ -104,11 +104,11 @@ class Fix42DeltaPublishIT {
     void chainCollapsesToOneRecord() throws Exception {
         List<FixMessage> parents = sow.records(PARENT_ORDERS);
 
-        // Five parent chains published D/G/F under nine distinct ClOrdIDs; the
-        // chaining key generator resolves 11/41 back to one key per chain.
+        // Seven parent chains published D/G/F under eleven distinct ClOrdIDs;
+        // the chaining key generator resolves 11/41 back to one key per chain.
         assertThat(parents)
                 .as("one record per parent order chain, not one per ClOrdID")
-                .hasSize(5);
+                .hasSize(7);
 
         Map<String, FixMessage> audit = sow.recordsBy(PARENT_ORDERS_AUDIT, FixTags.CL_ORD_ID);
         assertThat(audit.keySet())
@@ -192,8 +192,8 @@ class Fix42DeltaPublishIT {
     void execsHoldLatestPerOrder() throws Exception {
         Map<String, FixMessage> execs = sow.recordsBy(PARENT_EXECS, FixTags.ORDER_ID);
 
-        // One per chain that ever reached the venue -- all seven.
-        assertThat(execs).hasSize(7);
+        // One per chain that ever reached the venue -- all nine.
+        assertThat(execs).hasSize(9);
 
         FixMessage apple = execs.get("ORD-PARENT-AAPL");
         assertThat(apple).isNotNull();
@@ -210,6 +210,13 @@ class Fix42DeltaPublishIT {
         // the delta that reported it. Nothing overwrote it, because the cancel
         // confirmation only sends 151.
         assertThat(microsoft.value(FixTags.CUM_QTY)).isEqualTo("1500");
+
+        // AMZN's latest report is the bust: restated totals, reference intact.
+        FixMessage amazon = execs.get("ORD-PARENT-AMZN");
+        assertThat(amazon.value(FixTags.EXEC_TRANS_TYPE)).isEqualTo(FixTags.ExecTransType.CANCEL);
+        assertThat(amazon.value(FixTags.EXEC_REF_ID)).isEqualTo("EXEC-PARENT-AMZN-2");
+        assertThat(amazon.value(FixTags.CUM_QTY)).isEqualTo("1000");
+        assertThat(amazon.value(FixTags.ORD_STATUS)).isEqualTo(FixTags.OrdStatus.PARTIALLY_FILLED);
     }
 
     @Test
@@ -294,10 +301,37 @@ class Fix42DeltaPublishIT {
     void storedExecutionsAreSelfConsistent() throws Exception {
         for (FixMessage record : sow.records(PARENT_EXECS_AUDIT)) {
             String execType = record.value(FixTags.EXEC_TYPE);
-            boolean isFill = FixTags.ExecType.PARTIAL_FILL.equals(execType)
-                    || FixTags.ExecType.FILL.equals(execType);
+            // A stored fill carries no tag 20 (the fill routes never select
+            // it); busts and corrects carry 20=1/2 and an ordinary 150, so
+            // tag 20 -- not 150 -- is what separates them here.
+            String transType = record.value(FixTags.EXEC_TRANS_TYPE);
+            boolean isRestatement = FixTags.ExecTransType.CANCEL.equals(transType)
+                    || FixTags.ExecTransType.CORRECT.equals(transType);
+            boolean isFill = !isRestatement
+                    && (FixTags.ExecType.PARTIAL_FILL.equals(execType)
+                            || FixTags.ExecType.FILL.equals(execType));
 
-            if (isFill) {
+            if (isRestatement) {
+                // Both name the execution they act on and restate absolutes
+                // that reconcile; only a correct reports replacement trade
+                // fields.
+                assertThat(record.value(FixTags.EXEC_REF_ID))
+                        .as("restatement %s names its target", record.value(FixTags.EXEC_ID))
+                        .startsWith("EXEC-");
+                long orderQty = Long.parseLong(record.value(FixTags.ORDER_QTY));
+                long cumQty = Long.parseLong(record.value(FixTags.CUM_QTY));
+                long leavesQty = Long.parseLong(record.value(FixTags.LEAVES_QTY));
+                assertThat(cumQty + leavesQty).isEqualTo(orderQty);
+                if (FixTags.ExecTransType.CANCEL.equals(transType)) {
+                    assertThat(record.has(FixTags.LAST_SHARES))
+                            .as("a bust reports no new trade")
+                            .isFalse();
+                } else {
+                    assertThat(Long.parseLong(record.value(FixTags.LAST_SHARES)))
+                            .as("a correct carries its replacement quantity")
+                            .isPositive();
+                }
+            } else if (isFill) {
                 long orderQty = Long.parseLong(record.value(FixTags.ORDER_QTY));
                 long cumQty = Long.parseLong(record.value(FixTags.CUM_QTY));
                 long leavesQty = Long.parseLong(record.value(FixTags.LEAVES_QTY));
@@ -318,6 +352,78 @@ class Fix42DeltaPublishIT {
                 assertThat(record.has(FixTags.LAST_PX)).isFalse();
             }
         }
+    }
+
+    // ---- busts and corrects -------------------------------------------------
+
+    @Test
+    @DisplayName("the blotter adopts the bust's restated totals -- and only those")
+    void blotterAdoptsRestatedTotalsAfterBust() throws Exception {
+        // AMZN filled 2000 @ 209.95 and 1000 @ 210.05, then the venue busted
+        // the first fill. The bust's restated absolutes merged over the fill
+        // deltas -- the same mechanism that applied them takes them back.
+        FixMessage amazon = chainRecord(PARENT_ORDERS, "AMZN");
+
+        assertThat(amazon.value(FixTags.CUM_QTY)).isEqualTo("1000");
+        assertThat(amazon.value(FixTags.LEAVES_QTY)).isEqualTo("5000");
+        assertThat(amazon.value(FixTags.ORDER_QTY)).isEqualTo("6000");
+        // The exact recompute over the surviving fill, not a subtraction from
+        // the rounded running average.
+        assertThat(amazon.value(FixTags.AVG_PX)).isEqualTo("210.05");
+        assertThat(amazon.value(FixTags.ORD_STATUS))
+                .isEqualTo(FixTags.OrdStatus.PARTIALLY_FILLED);
+        // 32/31 still hold the last REAL fill: a bust reports no new trade,
+        // and its projection deliberately omits them.
+        assertThat(amazon.value(FixTags.LAST_SHARES)).isEqualTo("1000");
+        assertThat(amazon.value(FixTags.LAST_PX)).isEqualTo("210.05");
+        // The reference pair stays off the blotter: 19/20 describe a PRIOR
+        // execution and would sit stale on the merged record.
+        assertThat(amazon.has(FixTags.EXEC_REF_ID)).isFalse();
+        assertThat(amazon.has(FixTags.EXEC_TRANS_TYPE)).isFalse();
+    }
+
+    @Test
+    @DisplayName("a corrected fill's economics flow through to the finished blotter record")
+    void blotterReflectsCorrectedFillEconomics() throws Exception {
+        // META's 1200 @ 512.10 was corrected to 511.95 before the final 1800
+        // filled at 512.00. The terminal AvgPx is only 511.98 if the
+        // correction actually applied -- it would read 512.04 otherwise.
+        FixMessage meta = chainRecord(PARENT_ORDERS, "META");
+
+        assertThat(meta.value(FixTags.CUM_QTY)).isEqualTo("3000");
+        assertThat(meta.value(FixTags.LEAVES_QTY)).isEqualTo("0");
+        assertThat(meta.value(FixTags.ORDER_QTY)).isEqualTo("3000");
+        assertThat(meta.value(FixTags.AVG_PX)).isEqualTo("511.98");
+        assertThat(meta.value(FixTags.ORD_STATUS)).isEqualTo(FixTags.OrdStatus.FILLED);
+    }
+
+    @Test
+    @DisplayName("execs_audit keeps a bust/correct with tags 19/20, beside its untouched target")
+    void execsAuditKeepsBustAndCorrectWithReferences() throws Exception {
+        Map<String, FixMessage> audit = sow.recordsBy(PARENT_EXECS_AUDIT, FixTags.EXEC_ID);
+
+        // The bust: its own ExecID, the reference pair, restated absolutes,
+        // and no trade fields of its own.
+        FixMessage bust = audit.get("EXEC-PARENT-AMZN-4");
+        assertThat(bust.value(FixTags.EXEC_TRANS_TYPE)).isEqualTo(FixTags.ExecTransType.CANCEL);
+        assertThat(bust.value(FixTags.EXEC_REF_ID)).isEqualTo("EXEC-PARENT-AMZN-2");
+        assertThat(bust.value(FixTags.CUM_QTY)).isEqualTo("1000");
+        assertThat(bust.has(FixTags.LAST_SHARES)).isFalse();
+
+        // The busted fill's own audit record is untouched -- this topic is
+        // keyed per ExecID, so the bust lands beside it, not on top of it.
+        // Which execution actually stands is exactly what tag 19 is for.
+        FixMessage bustedFill = audit.get("EXEC-PARENT-AMZN-2");
+        assertThat(bustedFill.value(FixTags.LAST_SHARES)).isEqualTo("2000");
+        assertThat(bustedFill.value(FixTags.LAST_PX)).isEqualTo("209.95");
+
+        // The correct: reference pair plus the REPLACEMENT trade fields.
+        FixMessage correct = audit.get("EXEC-PARENT-META-3");
+        assertThat(correct.value(FixTags.EXEC_TRANS_TYPE)).isEqualTo(FixTags.ExecTransType.CORRECT);
+        assertThat(correct.value(FixTags.EXEC_REF_ID)).isEqualTo("EXEC-PARENT-META-2");
+        assertThat(correct.value(FixTags.LAST_SHARES)).isEqualTo("1200");
+        assertThat(correct.value(FixTags.LAST_PX)).isEqualTo("511.95");
+        assertThat(correct.value(FixTags.AVG_PX)).isEqualTo("511.95");
     }
 
     // ---- the pending-state family -------------------------------------------
