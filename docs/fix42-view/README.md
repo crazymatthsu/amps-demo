@@ -58,9 +58,13 @@ findings in [02, §4.3](02-amps-view-feasibility.md):
 | the rulebook: which tags leave, per message type | [`application.yml`](../../fix42-publisher/src/main/resources/application.yml) |
 | end-to-end proof against a real container | `./gradlew :fix42-publisher:integrationTest` |
 
-Headline result: nine parent ClOrdIDs across five cancel/replace chains store
-as **five records**, each carrying the newest amend merged onto the original
+Headline result: eleven parent ClOrdIDs across seven order chains store as
+**seven records**, each carrying the newest amend merged onto the original
 order's untouched terms — with no chain state anywhere in the publisher.
+Trade busts and corrects — the "fill bust/correct" clause of the question —
+are now absorbed at order level by the same merge, because a 4.2 venue
+restates the cumulative fields as absolutes; see
+[07](07-trade-busts-and-corrects.md).
 
 The blotter also answers "working at what, asked to change to what?" in one
 record, which a single tag 38 never can — see
@@ -78,3 +82,4 @@ is what still keeps a state machine outside AMPS.
 | [04-pending-state-without-a-state-machine.md](04-pending-state-without-a-state-machine.md) | how far a chained blotter gets toward acked-vs-pending terms, measured — and the chaining constraint that cost a rewrite |
 | [05-the-generated-sow-key.md](05-the-generated-sow-key.md) | what a subscriber can do with the key the module generates — and why it is deterministic, but must never be parsed as a long |
 | [06-publish-throughput.md](06-publish-throughput.md) | what is actually slow when publishing — measured, with the 5.3× answer and why transport batching did not help |
+| [07-trade-busts-and-corrects.md](07-trade-busts-and-corrects.md) | how the blotter absorbs a trade bust/correct (20=1/2) with no state machine — and why tag 20 had to become a routing dimension |

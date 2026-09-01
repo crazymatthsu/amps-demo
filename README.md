@@ -72,7 +72,7 @@ AMPS_FLOW=fix42-chaining ./server/scripts/amps.sh start
 It publishes FIX 4.2 order flow -- parent and child orders, amends, cancels,
 fills, rejects -- as field-level deltas onto SOW topics keyed by AMPS's
 optional **chaining key generator**, which resolves the 11/41 ClOrdID chain
-server-side. Nine ClOrdIDs across five chains store as five records, each
+server-side. Eleven ClOrdIDs across seven chains store as seven records, each
 carrying the newest amend merged onto the original order's untouched terms,
 with no chain state in the publisher at all.
 -> [fix42-publisher/README.md](fix42-publisher/README.md), and
