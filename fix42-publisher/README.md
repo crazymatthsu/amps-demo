@@ -155,7 +155,9 @@ the same merge that applied a fill applies its reversal, no state machine
 required at order level. Tags 19/20 ride to the exec topics so a reader can
 tell which execution was undone; the blotter projection deliberately omits
 them (they describe a *prior* execution and would sit stale on the merged
-record) along with 31/32 on a bust (a bust reports no new trade).
+record) along with 31/32 on a bust (a bust reports no new trade). The change
+record, with the worked SOW examples, is
+[docs/fix42-view/07](../docs/fix42-view/07-trade-busts-and-corrects.md).
 
 ## What this still does *not* give you
 
