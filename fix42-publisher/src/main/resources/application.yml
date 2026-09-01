@@ -151,6 +151,51 @@ fix42:
     # blotter to clear it. Fills do not -- a fill changes quantities, not
     # intent, and the execs topics are where quantities live.
 
+    # Trade bust (20=1) and trade correct (20=2) -- matched on ExecTransType
+    # and declared BEFORE the 150-based rules, because a 4.2 bust/correct
+    # carries an ordinary 150 mirroring the restated status, and the fill
+    # rules would swallow it. The venue restates 14/151/6/39 as ABSOLUTES
+    # (docs/fix42/01, section 2), which is why the blotter can simply adopt
+    # them: the same merge that applies a fill applies its reversal. Tags
+    # 19/20 ride to the exec topics so a reader can tell WHICH execution was
+    # undone -- with the same caveat as 31/32 on sow/parent/execs: they mean
+    # "the most recent report", and persist until something overwrites them.
+    - name: exec-bust
+      msg-types: ["8"]
+      exec-trans-types: ["1"]
+      mode: DELTA
+      tags: [35, 11, 41, 37, 17, 19, 20, 39, 150, 60]
+      changeable-tags: [38, 14, 151, 6]
+      topics:
+        - "sow/parent/execs"
+        - "sow/parent/execs_audit"
+      projected-topics:
+        - "sow/{scope}/orders"
+      projection:
+        # Restated absolutes only. Deliberately NO 31/32 -- a bust reports no
+        # new trade, so the blotter keeps the last real fill's values -- and
+        # NO 19/20: they describe a PRIOR execution, and left on the merged
+        # record they would go stale the moment the next fill arrives. No
+        # pending tags either; a bust answers no request.
+        tags: [11, 41, 39, 150, 60, 38, 14, 151, 6]
+
+    # A correct replaces a prior fill's economics, so unlike a bust it DOES
+    # carry trade fields: the correcting report's 32/31 become the current
+    # values (docs/fix42/01, section 5), on the blotter too.
+    - name: exec-correct
+      msg-types: ["8"]
+      exec-trans-types: ["2"]
+      mode: DELTA
+      tags: [35, 11, 41, 37, 17, 19, 20, 39, 150, 60]
+      changeable-tags: [38, 31, 32, 30, 14, 151, 6]
+      topics:
+        - "sow/parent/execs"
+        - "sow/parent/execs_audit"
+      projected-topics:
+        - "sow/{scope}/orders"
+      projection:
+        tags: [11, 41, 39, 150, 60, 38, 14, 151, 6, 32, 31, 30]
+
     # New ack: the order is working. Clears the NEW pending flag.
     - name: exec-new-ack
       msg-types: ["8"]

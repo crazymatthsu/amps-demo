@@ -7,6 +7,7 @@ import com.demo.amps.fix42.fix.FixTags;
 import com.demo.amps.fix42.fix.Prices;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -37,6 +38,9 @@ class MockFixFlowTest {
                 continue;
             }
             String execType = message.value(FixTags.EXEC_TYPE);
+            // Busts and corrects need no branch of their own: they are gated
+            // off closed-out orders and restate 151 = 38 - 14, so they satisfy
+            // the working-report invariant below by construction.
             // Terminal cancel and done-for-day zero LeavesQty by definition:
             // the unfilled balance stops working, it is not filled.
             boolean terminalWithZeroedLeaves = FixTags.ExecType.CANCELED.equals(execType)
@@ -61,28 +65,49 @@ class MockFixFlowTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("chains")
-    @DisplayName("AvgPx on every report is the volume-weighted average of the fills so far")
+    @DisplayName("AvgPx on every report is the volume-weighted average of the surviving fills")
     void averagePriceMatchesItsOwnFills(OrderChain chain) {
-        long cumQty = 0;
-        double avgPx = 0.0;
+        // The oracle keeps the fills BY ExecID rather than as running totals,
+        // because the history is no longer append-only: a bust (20=1) removes
+        // the fill tag 19 names, and a correct (20=2) replaces its economics
+        // in place. Recomputing the VWAP fresh over the survivors after every
+        // report is exactly what the venue's restated absolutes promise.
+        record Fill(long shares, double px) {
+        }
+        LinkedHashMap<String, Fill> fills = new LinkedHashMap<>();
 
         for (FixEvent event : chain.events()) {
             FixMessage message = event.message();
             if (!FixTags.MsgType.EXECUTION_REPORT.equals(message.msgType())) {
                 continue;
             }
-            if (message.has(FixTags.LAST_SHARES)) {
-                long lastShares = Long.parseLong(message.value(FixTags.LAST_SHARES));
-                double lastPx = Double.parseDouble(message.value(FixTags.LAST_PX));
-                avgPx = Prices.averagePrice(cumQty, avgPx, lastShares, lastPx);
-                cumQty += lastShares;
+            String transType = message.value(FixTags.EXEC_TRANS_TYPE);
+            if (FixTags.ExecTransType.CANCEL.equals(transType)) {
+                fills.remove(message.value(FixTags.EXEC_REF_ID));
+            } else if (FixTags.ExecTransType.CORRECT.equals(transType)) {
+                // put() on an existing key keeps its position, matching the
+                // venue's in-place correction.
+                fills.put(message.value(FixTags.EXEC_REF_ID), new Fill(
+                        Long.parseLong(message.value(FixTags.LAST_SHARES)),
+                        Double.parseDouble(message.value(FixTags.LAST_PX))));
+            } else if (message.has(FixTags.LAST_SHARES)) {
+                fills.put(message.value(FixTags.EXEC_ID), new Fill(
+                        Long.parseLong(message.value(FixTags.LAST_SHARES)),
+                        Double.parseDouble(message.value(FixTags.LAST_PX))));
+            }
+
+            long cumQty = 0;
+            double avgPx = 0.0;
+            for (Fill fill : fills.values()) {
+                avgPx = Prices.averagePrice(cumQty, avgPx, fill.shares(), fill.px());
+                cumQty += fill.shares();
             }
             assertThat(message.value(FixTags.AVG_PX))
-                    .as("%s %s: AvgPx should be the VWAP of fills so far",
+                    .as("%s %s: AvgPx should be the VWAP of the surviving fills",
                             chain.chainId(), event.description())
                     .isEqualTo(Prices.plain(avgPx));
             assertThat(Long.parseLong(message.value(FixTags.CUM_QTY)))
-                    .as("%s %s: CumQty should be the sum of fills so far",
+                    .as("%s %s: CumQty should be the sum of the surviving fills",
                             chain.chainId(), event.description())
                     .isEqualTo(cumQty);
         }
@@ -232,6 +257,21 @@ class MockFixFlowTest {
                 FixTags.ExecType.DONE_FOR_DAY,    // exec-cancel-or-done
                 FixTags.ExecType.REPLACED,        // exec-other
                 FixTags.ExecType.PENDING_CANCEL); // exec-other
+    }
+
+    @Test
+    @DisplayName("the flow covers every ExecTransType the routing rules split on")
+    void flowCoversRoutedExecTransTypes() {
+        Set<String> execTransTypes = MockFixFlow.events().stream()
+                .map(FixEvent::message)
+                .filter(message -> FixTags.MsgType.EXECUTION_REPORT.equals(message.msgType()))
+                .map(message -> message.value(FixTags.EXEC_TRANS_TYPE))
+                .collect(Collectors.toSet());
+
+        assertThat(execTransTypes).contains(
+                FixTags.ExecTransType.NEW,      // every ordinary report
+                FixTags.ExecTransType.CANCEL,   // exec-bust
+                FixTags.ExecTransType.CORRECT); // exec-correct
     }
 
     @Test

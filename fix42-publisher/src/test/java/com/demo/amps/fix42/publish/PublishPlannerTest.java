@@ -38,21 +38,29 @@ class PublishPlannerTest {
     }
 
     private static Fix42Properties.Route newOrderRoute() {
-        return new Fix42Properties.Route("new-order", List.of("D"), List.of(), PublishMode.FULL,
-                List.of(), List.of(),
+        return new Fix42Properties.Route("new-order", List.of("D"), List.of(), List.of(),
+                PublishMode.FULL, List.of(), List.of(),
                 List.of("sow/{scope}/orders", "sow/{scope}/orders_audit"), List.of(), null);
     }
 
     private static Fix42Properties.Route amendRoute() {
-        return new Fix42Properties.Route("amend", List.of("G"), List.of(), PublishMode.DELTA,
-                List.of(35, 11, 41, 60), List.of(38, 44, 59),
+        return new Fix42Properties.Route("amend", List.of("G"), List.of(), List.of(),
+                PublishMode.DELTA, List.of(35, 11, 41, 60), List.of(38, 44, 59),
                 List.of("sow/{scope}/orders", "sow/{scope}/orders_audit"), List.of(), null);
     }
 
     private static Fix42Properties.Route execRoute(String name, List<String> execTypes,
                                                    List<Integer> changeable) {
-        return new Fix42Properties.Route(name, List.of("8"), execTypes, PublishMode.DELTA,
-                List.of(35, 11, 41, 37, 17, 39, 150, 60), changeable,
+        return new Fix42Properties.Route(name, List.of("8"), execTypes, List.of(),
+                PublishMode.DELTA, List.of(35, 11, 41, 37, 17, 39, 150, 60), changeable,
+                List.of("sow/parent/execs", "sow/parent/execs_audit"), List.of(), null);
+    }
+
+    /** The bust rule: matches on tag 20, carries the 19/20 reference pair. */
+    private static Fix42Properties.Route bustRoute() {
+        return new Fix42Properties.Route("exec-bust", List.of("8"), List.of(), List.of("1"),
+                PublishMode.DELTA, List.of(35, 11, 41, 37, 17, 19, 20, 39, 150, 60),
+                List.of(38, 14, 151, 6),
                 List.of("sow/parent/execs", "sow/parent/execs_audit"), List.of(), null);
     }
 
@@ -164,6 +172,50 @@ class PublishPlannerTest {
 
         assertThat(planner.plan(replaced)).allSatisfy(instruction ->
                 assertThat(instruction.routeName()).isEqualTo("exec-other"));
+    }
+
+    @Test
+    @DisplayName("tag 20 routes a bust ahead of the fill rule its tag 150 would match")
+    void bustRoutesByExecTransTypeBeforeFillRoutes() {
+        // A 4.2 bust carries an ordinary 150=1/2 mirroring the restated
+        // status; declared first and matched on tag 20, its rule wins, while
+        // a genuine fill's 20=0 falls through to the fill rule.
+        PublishPlanner planner = planner(
+                bustRoute(),
+                execRoute("exec-partial-fill", List.of("1"), List.of(31, 32, 14, 151, 6)));
+
+        FixMessage bust = execution(FixTags.ExecType.PARTIAL_FILL,
+                FixTags.OrdStatus.PARTIALLY_FILLED)
+                .set(FixTags.EXEC_TRANS_TYPE, FixTags.ExecTransType.CANCEL)
+                .set(FixTags.EXEC_REF_ID, "EXEC-0")
+                .build();
+        FixMessage fill = execution(FixTags.ExecType.PARTIAL_FILL,
+                FixTags.OrdStatus.PARTIALLY_FILLED)
+                .set(FixTags.EXEC_TRANS_TYPE, FixTags.ExecTransType.NEW)
+                .build();
+
+        assertThat(planner.plan(bust)).allSatisfy(instruction ->
+                assertThat(instruction.routeName()).isEqualTo("exec-bust"));
+        assertThat(planner.plan(fill)).allSatisfy(instruction ->
+                assertThat(instruction.routeName()).isEqualTo("exec-partial-fill"));
+    }
+
+    @Test
+    @DisplayName("a bust payload keeps tags 19 and 20, or no reader could tell what was undone")
+    void bustPayloadKeepsReferenceTags() {
+        FixMessage bust = execution(FixTags.ExecType.PARTIAL_FILL,
+                FixTags.OrdStatus.PARTIALLY_FILLED)
+                .set(FixTags.EXEC_TRANS_TYPE, FixTags.ExecTransType.CANCEL)
+                .set(FixTags.EXEC_REF_ID, "EXEC-REF-7")
+                .set(FixTags.CUM_QTY, 300)
+                .set(FixTags.LEAVES_QTY, 700)
+                .build();
+
+        assertThat(planner(bustRoute()).plan(bust)).isNotEmpty().allSatisfy(instruction -> {
+            assertThat(instruction.payload().value(FixTags.EXEC_REF_ID)).isEqualTo("EXEC-REF-7");
+            assertThat(instruction.payload().value(FixTags.EXEC_TRANS_TYPE))
+                    .isEqualTo(FixTags.ExecTransType.CANCEL);
+        });
     }
 
     @Test

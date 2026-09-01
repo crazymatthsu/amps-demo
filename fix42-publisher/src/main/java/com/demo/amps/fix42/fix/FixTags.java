@@ -178,6 +178,26 @@ public final class FixTags {
         public static final String PENDING_REPLACE = "E";
     }
 
+    /**
+     * ExecTransType (20) values -- what a report DOES to a prior execution.
+     *
+     * <p>FIX 4.2 has no bust/correct ExecType (4.4's H/G came later): the
+     * semantics ride entirely on this tag, with tag 150 mirroring the restated
+     * OrdStatus. A report with 20=1/2 names the execution it acts on in
+     * {@link #EXEC_REF_ID} and restates 14/151/6/39 as absolutes.
+     */
+    public static final class ExecTransType {
+        private ExecTransType() {
+        }
+
+        public static final String NEW = "0";
+        /** A trade bust: the referenced execution never happened. */
+        public static final String CANCEL = "1";
+        /** A trade correct: the referenced execution's 32/31 are replaced. */
+        public static final String CORRECT = "2";
+        public static final String STATUS = "3";
+    }
+
     /** OrdStatus (39) values. */
     public static final class OrdStatus {
         private OrdStatus() {

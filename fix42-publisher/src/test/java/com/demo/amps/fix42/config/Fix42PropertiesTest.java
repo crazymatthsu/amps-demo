@@ -29,8 +29,8 @@ class Fix42PropertiesTest {
     private static Fix42Properties.Route route(String name, List<String> msgTypes,
                                                PublishMode mode, List<Integer> tags,
                                                List<Integer> changeable, List<String> topics) {
-        return new Fix42Properties.Route(name, msgTypes, List.of(), mode, tags, changeable,
-                topics, List.of(), null);
+        return new Fix42Properties.Route(name, msgTypes, List.of(), List.of(), mode, tags,
+                changeable, topics, List.of(), null);
     }
 
     @Test
@@ -179,15 +179,48 @@ class Fix42PropertiesTest {
     @DisplayName("a route with exec-types matches only those, and one without matches any")
     void matchesOnMsgTypeAndExecType() {
         Fix42Properties.Route fills = new Fix42Properties.Route("fills", List.of("8"),
-                List.of("1", "2"), PublishMode.DELTA, List.of(35), List.of(),
+                List.of("1", "2"), List.of(), PublishMode.DELTA, List.of(35), List.of(),
                 List.of("sow/parent/execs"), List.of(), null);
         Fix42Properties.Route any = route("any", List.of("8"), PublishMode.DELTA, List.of(35),
                 List.of(), List.of("sow/parent/execs"));
 
-        assertThat(fills.matches("8", "1")).isTrue();
-        assertThat(fills.matches("8", "0")).isFalse();
-        assertThat(fills.matches("D", "")).isFalse();
-        assertThat(any.matches("8", "0")).isTrue();
-        assertThat(any.matches("8", "")).isTrue();
+        assertThat(fills.matches("8", "1", "0")).isTrue();
+        assertThat(fills.matches("8", "0", "0")).isFalse();
+        assertThat(fills.matches("D", "", "")).isFalse();
+        assertThat(any.matches("8", "0", "0")).isTrue();
+        assertThat(any.matches("8", "", "")).isTrue();
+    }
+
+    @Test
+    @DisplayName("a route with exec-trans-types matches only those tag 20 values")
+    void matchesOnExecTransType() {
+        // The bust rule: any 150, but only 20=1. A fill's 20=0 -- or a message
+        // that omits tag 20 entirely -- must fall through to the fill rules.
+        Fix42Properties.Route bust = new Fix42Properties.Route("exec-bust", List.of("8"),
+                List.of(), List.of("1"), PublishMode.DELTA, List.of(35), List.of(),
+                List.of("sow/parent/execs"), List.of(), null);
+
+        assertThat(bust.matches("8", "1", "1")).isTrue();
+        assertThat(bust.matches("8", "2", "1")).isTrue();
+        assertThat(bust.matches("8", "1", "0")).isFalse();
+        assertThat(bust.matches("8", "1", "")).isFalse();
+    }
+
+    @Test
+    @DisplayName("rejects exec-trans-types on anything but an execution-report route")
+    void rejectsExecTransTypesOnNonExecutionRoute() {
+        // Tag 20 exists only on a 35=8, so this rule could never match as
+        // written -- and a rule that never matches is a rule someone believes
+        // is doing something.
+        Fix42Properties broken = properties(
+                Map.of("sow/parent/orders", List.of(11)),
+                new Fix42Properties.Route("amend", List.of("G"), List.of(), List.of("1"),
+                        PublishMode.DELTA, List.of(35, 11), List.of(),
+                        List.of("sow/parent/orders"), List.of(), null));
+
+        assertThatThrownBy(broken::validate)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("exec-trans-types")
+                .hasMessageContaining("[\"8\"]");
     }
 }

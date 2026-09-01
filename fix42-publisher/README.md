@@ -20,8 +20,8 @@ Then look at the result in the admin SQL console at http://127.0.0.1:8085/.
 
 ## What it demonstrates
 
-Nine parent ClOrdIDs go in; five records come out — one per order chain, each
-carrying the newest amend *and* the original order's untouched terms:
+Eleven parent ClOrdIDs go in; seven records come out — one per order chain,
+each carrying the newest amend *and* the original order's untouched terms:
 
 ```
 35=G|11=PARENT-AAPL-2|41=PARENT-AAPL-1|60=…|38=12000|44=185.75|59=0|      <- from the amend
@@ -67,11 +67,12 @@ trail — so nothing is published only to a chained topic.
   `PARENT-AAPL-1`; it sends tags 11 and 41 and lets the server resolve the
   record. That is the whole point of delegating identity to AMPS.
 - [`MockFixFlow`](src/main/java/com/demo/amps/fix42/mock/MockFixFlow.java)
-  generates seven order chains covering D/G/F/8/9, both order scopes, and
-  every execution outcome. Deterministic, and internally consistent by
-  construction — `OrderChain` holds the economic state and derives every
-  report from it, so `38 = 14 + 151` and AvgPx matching its own fills are
-  properties of the generator rather than numbers someone typed.
+  generates nine order chains covering D/G/F/8/9, both order scopes, and
+  every execution outcome — trade busts and corrects (ExecTransType 20=1/2)
+  included. Deterministic, and internally consistent by construction —
+  `OrderChain` holds the economic state and derives every report from it, so
+  `38 = 14 + 151` and AvgPx matching its own fills are properties of the
+  generator rather than numbers someone typed.
 
 ## Parent and child orders
 
@@ -143,23 +144,38 @@ either hides the linkage — an early version of this made tag 11 mean "working
 id" and orders silently split into two records. Anything else the blotter wants
 to say about identity needs its own tag, which is what 9014 is for.
 
+## Busts and corrects
+
+A FIX 4.2 trade bust (`20=1`) or trade correct (`20=2`) carries an ordinary
+tag 150 mirroring the restated status — the semantics ride on ExecTransType,
+so the `exec-bust`/`exec-correct` routes match on tag 20 and are declared
+ahead of the fill routes that would otherwise swallow them. The venue restates
+`14/151/6/39` as absolutes, which is exactly what lets the blotter adopt them:
+the same merge that applied a fill applies its reversal, no state machine
+required at order level. Tags 19/20 ride to the exec topics so a reader can
+tell which execution was undone; the blotter projection deliberately omits
+them (they describe a *prior* execution and would sit stale on the merged
+record) along with 31/32 on a bust (a bust reports no new trade).
+
 ## What this still does *not* give you
 
 A stale or duplicate execution report merges unconditionally: nothing here
-expresses "ignore this message if its CumQty went backwards". Nor do busts and
-corrects, ExecID dedupe, or per-request status snapshots for two simultaneous
-in-flight requests — 9012/9013 hold one. Those need conditional apply, which no
-merge can express, and they are what a state machine outside AMPS is for. The
-full accounting is [docs/fix42-view/](../docs/fix42-view/README.md), with the
+expresses "ignore this message if its CumQty went backwards". Nor do
+per-execution disposition (marking the ExecID named by tag 19 as BUSTED on the
+execs topics would rewrite a *different* record than the one being published),
+ExecID dedupe, or per-request status snapshots for two simultaneous in-flight
+requests — 9012/9013 hold one. Those need conditional apply, which no merge
+can express, and they are what a state machine outside AMPS is for. The full
+accounting is [docs/fix42-view/](../docs/fix42-view/README.md), with the
 measurements behind this section in
 [04](../docs/fix42-view/04-pending-state-without-a-state-machine.md).
 
 ## Tests
 
 ```bash
-./gradlew :fix42-publisher:test              # 82 unit tests, no server needed
+./gradlew :fix42-publisher:test              # 102 unit tests, no server needed
 AMPS_IMAGE=<your-image> \
-  ./gradlew :fix42-publisher:integrationTest # 29 tests against a real container
+  ./gradlew :fix42-publisher:integrationTest # 32 tests against a real container
 ```
 
 Each integration test class starts its own AMPS instance. They **skip** rather

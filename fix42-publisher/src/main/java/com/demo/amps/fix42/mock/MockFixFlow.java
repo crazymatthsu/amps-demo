@@ -6,9 +6,9 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * The scripted FIX 4.2 flow this demo publishes: six order chains covering
+ * The scripted FIX 4.2 flow this demo publishes: nine order chains covering
  * every message type, both order scopes, and every execution outcome the
- * publisher has a routing rule for.
+ * publisher has a routing rule for -- trade busts and corrects included.
  *
  * <p>Deterministic by construction -- no randomness, no wall clock -- so the
  * integration test can assert exact stored records, and two runs against a
@@ -29,6 +29,10 @@ import java.util.stream.Stream;
  *       <td>D, ack, partials as its children fill, done for day</td></tr>
  *   <tr><td>CHILD-TSLA-A / -B</td><td>child</td>
  *       <td>tag 9000 to the parent; A amends then fills, B is cancelled</td></tr>
+ *   <tr><td>PARENT-AMZN</td><td>parent</td>
+ *       <td>D, ack, two partials, then a trade bust (20=1) of the first</td></tr>
+ *   <tr><td>PARENT-META</td><td>parent</td>
+ *       <td>D, ack, partial, trade correct (20=2) of its price, full fill</td></tr>
  * </table>
  */
 public final class MockFixFlow {
@@ -55,7 +59,9 @@ public final class MockFixFlow {
                 nvidiaAmendRejectedThenDoneForDay(),
                 teslaParent(),
                 teslaChildAmendedAndFilled(),
-                teslaChildCancelled());
+                teslaChildCancelled(),
+                amazonFillBusted(),
+                metaFillCorrected());
     }
 
     /**
@@ -148,6 +154,36 @@ public final class MockFixFlow {
                 .cancelConfirmed();
     }
 
+    /**
+     * A fill busted by the venue (20=1). The chain is deliberately left
+     * WORKING after the bust, so the stored blotter record pins the restated
+     * absolutes directly rather than whatever a later event overwrote.
+     */
+    private static OrderChain amazonFillBusted() {
+        return parent("PARENT-AMZN", Instrument.AMZN, "ACC-INSTL-01", "TRADER-AH", "1",
+                6_000, 210.00, "0")
+                .newOrder()
+                .ack()
+                .partialFill(2_000, 209.95)
+                .partialFill(1_000, 210.05)
+                .bust(1);
+    }
+
+    /**
+     * A fill corrected by the venue (20=2): same shares, new price, then
+     * filled out. The terminal AvgPx is only right if the correction applied
+     * -- 511.98 with it, 512.04 without.
+     */
+    private static OrderChain metaFillCorrected() {
+        return parent("PARENT-META", Instrument.META, "ACC-HEDGE-07", "TRADER-BK", "2",
+                3_000, 512.00, "0")
+                .newOrder()
+                .ack()
+                .partialFill(1_200, 512.10)
+                .correct(1, 1_200, 511.95)
+                .fill(512.00);
+    }
+
     // ---- chain factories ----------------------------------------------------
 
     private static OrderChain parent(String chainId, Instrument instrument, String account,
@@ -176,6 +212,7 @@ public final class MockFixFlow {
 
     private static List<String> chainOrder() {
         return Stream.of("PARENT-AAPL", "PARENT-MSFT", "PARENT-GOOG", "PARENT-NVDA",
-                "PARENT-TSLA", "CHILD-TSLA-A", "CHILD-TSLA-B").toList();
+                "PARENT-TSLA", "CHILD-TSLA-A", "CHILD-TSLA-B",
+                "PARENT-AMZN", "PARENT-META").toList();
     }
 }
