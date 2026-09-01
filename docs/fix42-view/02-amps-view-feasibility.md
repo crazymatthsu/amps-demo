@@ -252,8 +252,9 @@ container and reads the SOW back:
 - **The module ships and loads.** `libamps_id_chaining_key_generator.so` is
   present in the 5.3.5.135 image; the `<Modules>` / `<KeyGenerator>` /
   `<Options>` config below validates with `amps.sh validate`.
-- **Chain collapse works as documented.** Nine parent ClOrdIDs across five
-  chains produce five records on the chained topic and nine on its audit twin.
+- **Chain collapse works as documented.** Eleven parent ClOrdIDs across seven
+  chains produce seven records on the chained topic and eleven on its audit
+  twin.
   An amend chain C1 -> C2 -> C3 resolves to one record.
 - **Delta merge preserves untouched fields.** After a `35=G` carrying seven
   tags, the record still holds the symbol, side, account, ord type, currency
