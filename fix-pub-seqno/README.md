@@ -9,7 +9,7 @@ or duplicating a message**, by asking AMPS for the last sender sequence number
 AMPS_FLOW=fix-pub-seqno ./server/scripts/amps.sh start
 
 # 2. the guided sequence: publish -> crash -> recover -> subscribe -> naive
-./gradlew :Claude-code:fix-pub-seqno:run --args="all"
+./gradlew :fix-pub-seqno:run --args="all"
 ```
 
 This is the FIX resend-request problem with AMPS as the counterparty that
@@ -76,7 +76,7 @@ with no server (`GapRecoveryTest`).
 
 ## The demo, phase by phase
 
-`./gradlew :Claude-code:fix-pub-seqno:run --args="<phase>"`
+`./gradlew :fix-pub-seqno:run --args="<phase>"`
 
 | phase | what it shows |
 | --- | --- |
@@ -93,11 +93,11 @@ in separate invocations with a real server restart -- or a `podman kill` --
 in between:
 
 ```bash
-./gradlew :Claude-code:fix-pub-seqno:run --args="publish --count 10"
-./gradlew :Claude-code:fix-pub-seqno:run --args="crash --count 6 --sent 2"
+./gradlew :fix-pub-seqno:run --args="publish --count 10"
+./gradlew :fix-pub-seqno:run --args="crash --count 6 --sent 2"
 ./server/scripts/amps.sh restart
-./gradlew :Claude-code:fix-pub-seqno:run --args="recover"
-./gradlew :Claude-code:fix-pub-seqno:run --args="subscribe"
+./gradlew :fix-pub-seqno:run --args="recover"
+./gradlew :fix-pub-seqno:run --args="subscribe"
 ```
 
 Point it at another sender or instance without editing anything:
@@ -106,7 +106,7 @@ Point it at another sender or instance without editing anything:
 
 ## The server side
 
-[`server/config/flows/fix-pub-seqno/amps-config.xml`](../../server/config/flows/fix-pub-seqno/amps-config.xml)
+[`server/config/flows/fix-pub-seqno/amps-config.xml`](../server/config/flows/fix-pub-seqno/amps-config.xml)
 declares one topic, two ways at once:
 
 ```xml
@@ -133,9 +133,9 @@ keyed read and the message itself is the checkpoint.
 ## Tests
 
 ```bash
-./gradlew :Claude-code:fix-pub-seqno:test              # unit tests, no server
+./gradlew :fix-pub-seqno:test              # unit tests, no server
 AMPS_IMAGE=<your-image> \
-  ./gradlew :Claude-code:fix-pub-seqno:integrationTest  # crash/recover against a real container
+  ./gradlew :fix-pub-seqno:integrationTest  # crash/recover against a real container
 ```
 
 The unit tests cover the outbox invariants, the FIX codec, the full
@@ -147,7 +147,7 @@ the outbox holds 1..16, recovery republishes exactly four messages and the
 journal ends with an unbroken 1..16. It **skips** rather than fails when
 `AMPS_IMAGE` is unset, so `./gradlew build` stays green on a machine without
 one; see the harness notes in
-[amps-test-harness](../../amps-test-harness/README.md).
+[amps-test-harness](../amps-test-harness/README.md).
 
 ## What this deliberately does not do
 

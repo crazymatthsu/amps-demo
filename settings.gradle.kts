@@ -28,6 +28,6 @@ include("amps-quickfixj")
 include("cache-persistent-store")
 include("hazelcast-persistent-store")
 
-// Demo modules developed in Claude Code sessions live under Claude-code/;
-// each is an ordinary subproject with the folder as its parent path.
-include("Claude-code:fix-pub-seqno")
+// A FIX publisher that recovers its sender sequence number (tag 8888) from
+// AMPS after a disconnect; see fix-pub-seqno/README.md.
+include("fix-pub-seqno")

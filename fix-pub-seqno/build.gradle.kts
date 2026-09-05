@@ -7,7 +7,7 @@
  * Runs against the `fix-pub-seqno` server flow:
  *
  *   AMPS_FLOW=fix-pub-seqno ./server/scripts/amps.sh start
- *   ./gradlew :Claude-code:fix-pub-seqno:run --args="all"
+ *   ./gradlew :fix-pub-seqno:run --args="all"
  *
  * Two test suites, split the same way as fix42-publisher's:
  *

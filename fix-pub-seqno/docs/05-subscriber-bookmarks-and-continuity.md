@@ -19,7 +19,7 @@ new Command("subscribe")
 ```
 
 Three things about this, all of which the repository's
-[`bookmark-replay`](../../../clients/src/main/java/com/demo/amps/clients/demos/BookmarkReplayDemo.java)
+[`bookmark-replay`](../../clients/src/main/java/com/demo/amps/clients/demos/BookmarkReplayDemo.java)
 demo also relies on:
 
 - **The position lives with the subscriber, not the server.** The

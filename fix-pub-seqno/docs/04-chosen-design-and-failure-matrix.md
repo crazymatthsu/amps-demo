@@ -97,7 +97,7 @@ the highest in the outbox; L is what AMPS holds.
 
 ## What the demo shows
 
-`./gradlew :Claude-code:fix-pub-seqno:run --args="all"` runs, against one
+`./gradlew :fix-pub-seqno:run --args="all"` runs, against one
 instance and with state under `build/client-state/fix-pub-seqno/`:
 
 1. **publish** -- 8888 = 1..N go out and are acknowledged; L is read back
@@ -134,7 +134,7 @@ a throwaway container and asserts the numbers.
 - **Retention.** The journal must retain at least the scan lookback, and
   subscribers must be able to resume from their oldest bookmark; both are
   retention decisions, covered in
-  [transaction-log-sizing.md](../../../docs/src/transaction-log-sizing.md).
+  [transaction-log-sizing.md](../../docs/src/transaction-log-sizing.md).
 - **One connection at a time per sender.** Two publishers with the same
   sender identity would each be right about their own outbox and wrong about
   the other's; the client-name rule enforces this for AMPS connections, and

@@ -31,7 +31,7 @@ import org.slf4j.LoggerFactory;
  *
  * <pre>
  *   AMPS_FLOW=fix-pub-seqno ./server/scripts/amps.sh start
- *   ./gradlew :Claude-code:fix-pub-seqno:run --args="all"
+ *   ./gradlew :fix-pub-seqno:run --args="all"
  * </pre>
  *
  * <p>Phases (also runnable one at a time, so the crash and the recovery can be

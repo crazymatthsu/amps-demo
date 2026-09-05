@@ -4,8 +4,8 @@
   last sender sequence number (tag 8888) it recorded was, and republish the
   gap after a disconnect with no loss and no duplicate.
 
-  Backs the Claude-code/fix-pub-seqno module; the reasoning is in
-  Claude-code/fix-pub-seqno/docs/.
+  Backs the fix-pub-seqno module; the reasoning is in
+  fix-pub-seqno/docs/.
 
   One topic, declared two ways at once, and the combination is the design:
 
