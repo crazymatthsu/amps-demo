@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Business flow "fix-pub-seqno": a FIX publisher that can ask AMPS what the
+  last sender sequence number (tag 8888) it recorded was, and republish the
+  gap after a disconnect with no loss and no duplicate.
+
+  Backs the Claude-code/fix-pub-seqno module; the reasoning is in
+  Claude-code/fix-pub-seqno/docs/.
+
+  One topic, declared two ways at once, and the combination is the design:
+
+    TransactionLog   every message is journalled, so subscribers resume from
+                     bookmarks and the publisher can scan its own history.
+    SOW keyed /49    the SOW keeps the LAST message per key, and the key is
+                     the sender (SenderCompID). So the SOW holds exactly one
+                     record per publisher: its most recent message, whose
+                     tag 8888 is the last sequence number AMPS recorded for
+                     it. "What did you last get from me?" becomes one keyed
+                     read, and the message itself is the checkpoint, which is
+                     what makes the checkpoint atomic.
+
+  Note what the SOW here is NOT: it is not an order blotter. Keyed on the
+  sender it is a publisher checkpoint table. Subscribers wanting order flow
+  use bookmark subscriptions, which are served from the journal and see
+  every message.
+-->
+<AMPSConfig>
+
+    <Name>amps-fix-pub-seqno</Name>
+
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <SQLTransport>amps-websocket</SQLTransport>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <!-- One transport, every message type. The publisher and the
+             subscriber select `fix` in the connection URI:
+             tcp://host:9007/amps/fix -->
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <!--
+      Topic names carry slashes (fix/seqno/orders). That is a naming
+      convention only; it does mean %n cannot be used in FileName, because
+      %n expands to the topic name and would ask for a nested directory that
+      nothing creates. The SOW file is therefore named explicitly, as the
+      fix42-chaining flow does.
+
+      <Key>/49</Key>: tag-number field references on a fix-typed topic are
+      the form this repository has verified against AMPS 5.3.5.135 (the
+      default flow keys on /37 and /9001).
+    -->
+    <SOW>
+        <Topic>
+            <Name>fix/seqno/orders</Name>
+            <MessageType>fix</MessageType>
+            <Key>/49</Key>
+            <FileName>./sow/fix-seqno-orders.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+    </SOW>
+
+    <!--
+      The journal is the system of record: bookmark subscriptions replay
+      from it, and the publisher's verification scan reads it. Retention has
+      to cover the longest outage after which a publisher or subscriber is
+      expected to resume; see docs/src/transaction-log-sizing.md.
+
+      MinJournalSize 10MB is the floor AMPS accepts (verified on 5.3.5.135);
+      production instances use far larger files.
+    -->
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
+        <MinJournalSize>10MB</MinJournalSize>
+
+        <Topic>
+            <Name>fix/seqno/orders</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+    </TransactionLog>
+
+</AMPSConfig>

@@ -32,6 +32,9 @@ public record AmpsFlow(String flow, String shortName, String messageType) {
 
     public static final AmpsFlow HAZELCAST = new AmpsFlow("hazelcast", "hz", "json");
 
+    /** The FIX sender-sequence recovery demo under Claude-code/fix-pub-seqno. */
+    public static final AmpsFlow FIX_PUB_SEQNO = new AmpsFlow("fix-pub-seqno", "seqno", "fix");
+
     /** Where this flow's config lives, relative to the repository root. */
     public String configDir() {
         return "server/config/flows/" + flow;

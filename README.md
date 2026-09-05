@@ -19,6 +19,7 @@ amps-demo/
 ├── cache-persistent-store/  a local Map cache with AMPS as its persistent store
 ├── hazelcast-persistent-store/  Hazelcast OSS persisting its IMaps in AMPS (MapStore SPI)
 ├── amps-test-harness/  starts a throwaway AMPS container for the integration suites
+├── Claude-code/  demo modules built in Claude Code sessions (fix-pub-seqno: FIX publisher sequence recovery)
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -109,6 +110,28 @@ AMPS_FLOW=hazelcast ./server/scripts/amps.sh start
 -> [hazelcast-persistent-store/README.md](hazelcast-persistent-store/README.md)
 for the tier design, the Hazelcast semantics that bite (TTL resurrection,
 `clear()` vs `evictAll()`), and the two-member integration tests.
+
+`Claude-code/fix-pub-seqno` is a module with its own flow that answers a
+publisher's version of the FIX resend-request problem: a FIX publisher loses
+its AMPS connection, and has to find out the last **sender sequence number
+(tag 8888)** AMPS actually recorded before it sends anything else, so it can
+republish only the gap -- losing nothing, duplicating nothing. It keeps an
+append-only outbox, and on every reconnect asks AMPS what it holds two ways:
+a one-read SOW lookup on a topic keyed by the sender, verified by a journal
+scan that also catches a gap or a duplicate the lookup cannot see. The design
+is written out first, then built and tested against a real container.
+
+```bash
+AMPS_FLOW=fix-pub-seqno ./server/scripts/amps.sh start
+./gradlew :Claude-code:fix-pub-seqno:run --args="all"
+```
+
+-> [Claude-code/fix-pub-seqno/README.md](Claude-code/fix-pub-seqno/README.md)
+for the phases, and
+[Claude-code/fix-pub-seqno/docs/](Claude-code/fix-pub-seqno/docs/README.md)
+for the analysis: the prefix invariant that makes one number a sufficient
+answer, what the AMPS client library already does about this, and the failure
+matrix the recovery is checked against.
 
 ## Operator tools
 
