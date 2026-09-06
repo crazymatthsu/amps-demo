@@ -27,3 +27,7 @@ include("amps-cli")
 include("amps-quickfixj")
 include("cache-persistent-store")
 include("hazelcast-persistent-store")
+
+// A FIX publisher that recovers its sender sequence number (tag 8888) from
+// AMPS after a disconnect; see fix-pub-seqno/README.md.
+include("fix-pub-seqno")
