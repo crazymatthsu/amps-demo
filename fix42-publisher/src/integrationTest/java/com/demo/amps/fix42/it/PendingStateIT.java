@@ -37,7 +37,7 @@ import org.junit.jupiter.api.TestInstance;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class PendingStateIT {
 
-    private static final String PARENT_ORDERS = "sow/parent/orders";
+    private static final String ORDERS = "sow/fix42/orders";
 
     private AmpsTestServer server;
     private Client client;
@@ -96,7 +96,7 @@ class PendingStateIT {
         // One record for this chain, not two: the module bound 11=INFLIGHT-2 to
         // it via 41=INFLIGHT-1. This is why the projection leaves 11 and 41
         // alone -- rewriting either hides the linkage and the order splits.
-        assertThat(sow.records(PARENT_ORDERS).stream()
+        assertThat(sow.records(ORDERS).stream()
                 .filter(r -> r.value(FixTags.CL_ORD_ID).startsWith("INFLIGHT")
                         || r.value(FixTags.WORKING_CL_ORD_ID).startsWith("INFLIGHT"))
                 .toList())
@@ -215,7 +215,7 @@ class PendingStateIT {
         String working = chain.chainId() + "-1";
         List<FixMessage> matching = List.of();
         for (int attempt = 0; attempt < 40 && matching.isEmpty(); attempt++) {
-            matching = sow.records(PARENT_ORDERS).stream()
+            matching = sow.records(ORDERS).stream()
                     .filter(record -> record.value(FixTags.WORKING_CL_ORD_ID).equals(working)
                             || record.value(FixTags.CL_ORD_ID).startsWith(chain.chainId()))
                     .toList();

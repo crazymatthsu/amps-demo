@@ -4,7 +4,7 @@ When the chaining key generator keys a topic, the key it computes is not any
 field in the message. This document records what a consumer can do with it,
 measured against AMPS 5.3.5.135.
 
-The question: **`sow/parent/orders` is keyed by the module on tags 11 and 41 —
+The question: **`sow/fix42/orders` is keyed by the module on tags 11 and 41 —
 can a subscriber get the generated key through the API?**
 
 Yes, on every delivery, via `Message.getSowKey()`. Two of the properties below
@@ -118,8 +118,8 @@ not a substitute for the fields that do:
 - it is not an OrderID. Tag 37 is the venue's identifier and exists only after
   the first execution report; the generated key exists from the first message,
   including before any ack;
-- it is per topic. The key for a chain on `sow/parent/orders` has no relation to
-  anything on `sow/parent/execs`, which is keyed on tag 37 by an ordinary SOW
+- it is per topic. The key for a chain on `sow/fix42/orders` has no relation to
+  anything on `sow/fix42/execs`, which is keyed on tag 37 by an ordinary SOW
   key, not by the module.
 
 And the module's own hard rule still applies upstream of all this: **tags 11 and

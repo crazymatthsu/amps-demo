@@ -51,7 +51,7 @@ import org.junit.jupiter.api.TestInstance;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class SowKeyIT {
 
-    private static final String ORDERS = "sow/parent/orders";
+    private static final String ORDERS = "sow/fix42/orders";
     private static final long TIMEOUT_MS = 10_000;
 
     private AmpsTestServer server;

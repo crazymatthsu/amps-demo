@@ -2,7 +2,7 @@
 
 Change record for crazymatthsu/amps-demo#22 (commit `88a42e6`, 2026-08-31).
 The question that prompted it: *does the delta publish really keep CumQty (14),
-LeavesQty (151) and AvgPx (6) correct on `sow/{scope}/orders` for execution
+LeavesQty (151) and AvgPx (6) correct on `sow/fix42/orders` for execution
 amendment and execution cancel?* The answer split cleanly in two — and the
 second half is what this change closed.
 
@@ -28,7 +28,7 @@ followed:
    fill, with the 19/20 reference lost everywhere.
 2. A report shaped `150=D` (or a 4.3-style `G`/`H`) would fall into the
    `exec-other` catch-all, which has **no blotter projection** — leaving
-   `sow/{scope}/orders` with stale CumQty/LeavesQty/AvgPx indefinitely.
+   `sow/fix42/orders` with stale CumQty/LeavesQty/AvgPx indefinitely.
 
 The publisher README declared busts and corrects out of scope; the test
 oracles were strictly accumulating and would have failed on any restatement
@@ -72,7 +72,7 @@ are deliberate about what they leave out:
 | 31 / 32 / 30 | bust: **no** · correct: yes | a bust reports no new trade, so the blotter keeps the last real fill's values; a correct's 32/31 *are* the execution's new values |
 | 9010–9014 | untouched | a bust or correct answers no outstanding request |
 
-The exec topics (`sow/parent/execs`, `sow/parent/execs_audit`) **do** carry
+The exec topics (`sow/fix42/execs`, `sow/fix42/execs_audit`) **do** carry
 19/20 — there the reference is the point. On the latest-per-order execs record
 they persist until something overwrites them, the same "most recent report,
 not this report" caveat 31/32 have always had.

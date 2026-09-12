@@ -120,12 +120,14 @@ public class PublishPlanner {
     /**
      * Parent or child, from tag 9000 alone.
      *
-     * <p>Only affects topics carrying {@code {scope}}. The exec and reject
-     * TOPICS are fixed, so scope does not choose those -- but a venue message
-     * that resolves a pending request also projects onto the order blotter,
-     * and that topic is scoped. So execution reports and cancel rejects on a
-     * child chain must carry tag 9000 as well; see {@code OrderChain.execution}
-     * for why that is a venue/OMS dependency rather than a free choice.
+     * <p>Only affects topics carrying {@code {scope}}. The shipped rulebook has
+     * none -- parents and children share {@code sow/fix42/orders} -- but a
+     * rulebook that splits the blotter by scope has a consequence worth
+     * knowing: a venue message that resolves a pending request also projects
+     * onto the order blotter, so execution reports and cancel rejects on a
+     * child chain must then carry tag 9000 as well. See
+     * {@code OrderChain.execution} for why that is a venue/OMS dependency
+     * rather than a free choice.
      */
     public OrderScope scopeOf(FixMessage message) {
         return message.has(FixTags.PARENT_ORDER_ID) ? OrderScope.CHILD : OrderScope.PARENT;

@@ -93,11 +93,11 @@
       ===================================================================
       SOW
       ===================================================================
-      Topic names carry slashes (sow/parent/orders). That is a naming
+      Topic names carry slashes (sow/fix42/orders). That is a naming
       convention only - AMPS topic names are opaque strings, and the slash
       has no filesystem meaning. It DOES mean %n cannot be used in
       <FileName>: %n expands to the topic name, so ./sow/%n.sow would ask for
-      ./sow/sow/parent/orders.sow, in directories nothing creates. Every
+      ./sow/sow/fix42/orders.sow, in directories nothing creates. Every
       topic below therefore names its SOW file explicitly.
 
       How the KeyGenerator block reads:
@@ -118,57 +118,34 @@
     -->
     <SOW>
 
-        <!-- ===== parent orders: D / G / F for parent chains ===== -->
-        <Topic>
-            <Name>sow/parent/orders</Name>
-            <MessageType>fix</MessageType>
-            <KeyGenerator>
-                <Module>key-chaining</Module>
-                <Options>
-                    <Key>/11</Key>
-                    <Key>/41</Key>
-                    <FileName>./sow/parent-orders.chain</FileName>
-                    <Validation>true</Validation>
-                </Options>
-            </KeyGenerator>
-            <FileName>./sow/parent-orders.sow</FileName>
-            <Durability>persistent</Durability>
-        </Topic>
-
-        <Topic>
-            <Name>sow/parent/orders_audit</Name>
-            <MessageType>fix</MessageType>
-            <Key>/11</Key>
-            <FileName>./sow/parent-orders-audit.sow</FileName>
-            <Durability>persistent</Durability>
-        </Topic>
-
-        <!-- ===== child orders: D carrying tag 9000 (ParentOrderID) =====
-             Same two shapes. A child order is a distinct FIX chain with its
-             own 11/41 lineage; tag 9000 links it to the parent, and is
+        <!-- ===== orders: D / G / F, parent chains and child slices alike =====
+             A child order is a distinct FIX chain with its own 11/41
+             lineage, so the module keeps it as its own record on the same
+             topic; its first message carries no 41 that could point at the
+             parent's chain. Tag 9000 (ParentOrderID) links it to the parent,
              carried as an ordinary field so filters can walk the hierarchy
              (/9000 = '<parent ClOrdID>'). -->
         <Topic>
-            <Name>sow/child/orders</Name>
+            <Name>sow/fix42/orders</Name>
             <MessageType>fix</MessageType>
             <KeyGenerator>
                 <Module>key-chaining</Module>
                 <Options>
                     <Key>/11</Key>
                     <Key>/41</Key>
-                    <FileName>./sow/child-orders.chain</FileName>
+                    <FileName>./sow/fix42-orders.chain</FileName>
                     <Validation>true</Validation>
                 </Options>
             </KeyGenerator>
-            <FileName>./sow/child-orders.sow</FileName>
+            <FileName>./sow/fix42-orders.sow</FileName>
             <Durability>persistent</Durability>
         </Topic>
 
         <Topic>
-            <Name>sow/child/orders_audit</Name>
+            <Name>sow/fix42/orders_audit</Name>
             <MessageType>fix</MessageType>
             <Key>/11</Key>
-            <FileName>./sow/child-orders-audit.sow</FileName>
+            <FileName>./sow/fix42-orders-audit.sow</FileName>
             <Durability>persistent</Durability>
         </Topic>
 
@@ -187,18 +164,18 @@
              even though the TODO's field list names neither - see
              Fix42PublisherProperties for the check that enforces it. -->
         <Topic>
-            <Name>sow/parent/execs</Name>
+            <Name>sow/fix42/execs</Name>
             <MessageType>fix</MessageType>
             <Key>/37</Key>
-            <FileName>./sow/parent-execs.sow</FileName>
+            <FileName>./sow/fix42-execs.sow</FileName>
             <Durability>persistent</Durability>
         </Topic>
 
         <Topic>
-            <Name>sow/parent/execs_audit</Name>
+            <Name>sow/fix42/execs_audit</Name>
             <MessageType>fix</MessageType>
             <Key>/17</Key>
-            <FileName>./sow/parent-execs-audit.sow</FileName>
+            <FileName>./sow/fix42-execs-audit.sow</FileName>
             <Durability>persistent</Durability>
         </Topic>
 
@@ -208,10 +185,10 @@
              carry 37=NONE when the target was never acked, which is exactly
              why this topic is not keyed on OrderID. -->
         <Topic>
-            <Name>sow/parent/rejects</Name>
+            <Name>sow/fix42/rejects</Name>
             <MessageType>fix</MessageType>
             <Key>/11</Key>
-            <FileName>./sow/parent-rejects.sow</FileName>
+            <FileName>./sow/fix42-rejects.sow</FileName>
             <Durability>persistent</Durability>
         </Topic>
 
@@ -222,10 +199,10 @@
       TransactionLog
       ===================================================================
       The audit topics are the system of record and get the journal. The
-      chained blotters (sow/parent/orders, sow/child/orders) and the
-      latest-per-order execs topic are derivable by replaying the audit
-      streams, so journalling them would record the same information twice -
-      the reasoning in docs/src/transaction-log-sizing.md.
+      chained blotter (sow/fix42/orders) and the latest-per-order execs topic
+      are derivable by replaying the audit streams, so journalling them would
+      record the same information twice - the reasoning in
+      docs/src/transaction-log-sizing.md.
     -->
     <TransactionLog>
         <JournalDirectory>./journal</JournalDirectory>
@@ -233,19 +210,15 @@
         <MinJournalSize>10MB</MinJournalSize>
 
         <Topic>
-            <Name>sow/parent/orders_audit</Name>
+            <Name>sow/fix42/orders_audit</Name>
             <MessageType>fix</MessageType>
         </Topic>
         <Topic>
-            <Name>sow/child/orders_audit</Name>
+            <Name>sow/fix42/execs_audit</Name>
             <MessageType>fix</MessageType>
         </Topic>
         <Topic>
-            <Name>sow/parent/execs_audit</Name>
-            <MessageType>fix</MessageType>
-        </Topic>
-        <Topic>
-            <Name>sow/parent/rejects</Name>
+            <Name>sow/fix42/rejects</Name>
             <MessageType>fix</MessageType>
         </Topic>
     </TransactionLog>

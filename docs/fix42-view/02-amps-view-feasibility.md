@@ -264,7 +264,7 @@ container and reads the SOW back:
   request was published and the `35=9` does not retract them. The integration
   test asserts this rather than hiding it.
 - **`%n` is unusable in `<FileName>`** when topic names contain slashes
-  (`sow/parent/orders` would ask for `./sow/sow/parent/orders.sow`). Name the
+  (`sow/fix42/orders` would ask for `./sow/sow/fix42/orders.sow`). Name the
   SOW file explicitly.
 - **XML comments may not contain a double hyphen**, which rejects the whole
   config — so a pasted shell flag (`--rm`) in an explanatory comment is enough
