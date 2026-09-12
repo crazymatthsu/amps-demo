@@ -71,7 +71,7 @@ are routed to different SOW topics?*
 **Yes.** `Client.setPublishBatching(batchSizeBytes, batchTimeoutMillis)`
 buffers outgoing publishes and sends them together. It operates at the
 **transport** layer, below the topic, so a batch may carry publishes for
-`sow/parent/orders`, `sow/parent/execs` and `sow/child/orders` alike. Nothing
+`sow/fix42/orders`, `sow/fix42/execs` and `sow/fix42/rejects` alike. Nothing
 about the routing has to change.
 
 **But it measured no faster** -- C, D and E all sit within noise of B, and the

@@ -23,37 +23,54 @@ import org.junit.jupiter.api.Test;
 class PublishPlannerTest {
 
     private static final Map<String, List<Integer>> TOPIC_KEYS = Map.of(
+            "sow/fix42/orders", List.of(11),
+            "sow/fix42/orders_audit", List.of(11),
+            "sow/fix42/execs", List.of(37),
+            "sow/fix42/execs_audit", List.of(17),
+            "sow/fix42/rejects", List.of(11));
+
+    /**
+     * A rulebook that splits the blotter by scope. Not what ships -- parents
+     * and children share sow/fix42/orders -- but the placeholder is still a
+     * supported knob, and this is what exercises it.
+     */
+    private static final Map<String, List<Integer>> SCOPED_TOPIC_KEYS = Map.of(
             "sow/parent/orders", List.of(11),
             "sow/parent/orders_audit", List.of(11),
             "sow/child/orders", List.of(11),
-            "sow/child/orders_audit", List.of(11),
-            "sow/parent/execs", List.of(37),
-            "sow/parent/execs_audit", List.of(17),
-            "sow/parent/rejects", List.of(11));
+            "sow/child/orders_audit", List.of(11));
 
     private static PublishPlanner planner(Fix42Properties.Route... routes) {
+        return planner(TOPIC_KEYS, routes);
+    }
+
+    private static PublishPlanner planner(Map<String, List<Integer>> topicKeys,
+                                          Fix42Properties.Route... routes) {
         return new PublishPlanner(new Fix42Properties(
                 new Fix42Properties.Amps("tcp://127.0.0.1:9007/amps/fix", "test", 10_000),
-                TOPIC_KEYS, List.of(routes)));
+                topicKeys, List.of(routes)));
     }
 
     private static Fix42Properties.Route newOrderRoute() {
+        return newOrderRoute("sow/fix42/orders", "sow/fix42/orders_audit");
+    }
+
+    private static Fix42Properties.Route newOrderRoute(String... topics) {
         return new Fix42Properties.Route("new-order", List.of("D"), List.of(), List.of(),
-                PublishMode.FULL, List.of(), List.of(),
-                List.of("sow/{scope}/orders", "sow/{scope}/orders_audit"), List.of(), null);
+                PublishMode.FULL, List.of(), List.of(), List.of(topics), List.of(), null);
     }
 
     private static Fix42Properties.Route amendRoute() {
         return new Fix42Properties.Route("amend", List.of("G"), List.of(), List.of(),
                 PublishMode.DELTA, List.of(35, 11, 41, 60), List.of(38, 44, 59),
-                List.of("sow/{scope}/orders", "sow/{scope}/orders_audit"), List.of(), null);
+                List.of("sow/fix42/orders", "sow/fix42/orders_audit"), List.of(), null);
     }
 
     private static Fix42Properties.Route execRoute(String name, List<String> execTypes,
                                                    List<Integer> changeable) {
         return new Fix42Properties.Route(name, List.of("8"), execTypes, List.of(),
                 PublishMode.DELTA, List.of(35, 11, 41, 37, 17, 39, 150, 60), changeable,
-                List.of("sow/parent/execs", "sow/parent/execs_audit"), List.of(), null);
+                List.of("sow/fix42/execs", "sow/fix42/execs_audit"), List.of(), null);
     }
 
     /** The bust rule: matches on tag 20, carries the 19/20 reference pair. */
@@ -61,11 +78,11 @@ class PublishPlannerTest {
         return new Fix42Properties.Route("exec-bust", List.of("8"), List.of(), List.of("1"),
                 PublishMode.DELTA, List.of(35, 11, 41, 37, 17, 19, 20, 39, 150, 60),
                 List.of(38, 14, 151, 6),
-                List.of("sow/parent/execs", "sow/parent/execs_audit"), List.of(), null);
+                List.of("sow/fix42/execs", "sow/fix42/execs_audit"), List.of(), null);
     }
 
     @Test
-    @DisplayName("35=D publishes the whole message to both parent order topics")
+    @DisplayName("35=D publishes the whole message to both order topics")
     void newOrderGoesOutWhole() {
         FixMessage order = FixMessage.ofType("D")
                 .set(FixTags.CL_ORD_ID, "C1")
@@ -77,7 +94,7 @@ class PublishPlannerTest {
         List<PublishInstruction> plan = planner(newOrderRoute()).plan(order);
 
         assertThat(plan).extracting(PublishInstruction::topic)
-                .containsExactly("sow/parent/orders", "sow/parent/orders_audit");
+                .containsExactly("sow/fix42/orders", "sow/fix42/orders_audit");
         assertThat(plan).allSatisfy(instruction -> {
             assertThat(instruction.mode()).isEqualTo(PublishMode.FULL);
             // FULL means the record is created complete; nothing is stripped.
@@ -86,8 +103,8 @@ class PublishPlannerTest {
     }
 
     @Test
-    @DisplayName("tag 9000 routes a request to the child topics instead")
-    void parentOrderIdSelectsChildTopics() {
+    @DisplayName("on the shipped topics a child slice goes where its parent does, tag 9000 and all")
+    void childSliceSharesTheOrderTopics() {
         FixMessage childOrder = FixMessage.ofType("D")
                 .set(FixTags.CL_ORD_ID, "CHILD-1")
                 .set(FixTags.PARENT_ORDER_ID, "PARENT-1")
@@ -97,6 +114,31 @@ class PublishPlannerTest {
         List<PublishInstruction> plan = planner(newOrderRoute()).plan(childOrder);
 
         assertThat(plan).extracting(PublishInstruction::topic)
+                .containsExactly("sow/fix42/orders", "sow/fix42/orders_audit");
+        assertThat(plan).allSatisfy(instruction ->
+                assertThat(instruction.payload().value(FixTags.PARENT_ORDER_ID))
+                        .as("the parent link rides along for a filter to find")
+                        .isEqualTo("PARENT-1"));
+    }
+
+    @Test
+    @DisplayName("a {scope} topic pattern still resolves to parent or child from tag 9000")
+    void scopePlaceholderSelectsTopicFamily() {
+        PublishPlanner scoped = planner(SCOPED_TOPIC_KEYS,
+                newOrderRoute("sow/{scope}/orders", "sow/{scope}/orders_audit"));
+        FixMessage parentOrder = FixMessage.ofType("D")
+                .set(FixTags.CL_ORD_ID, "PARENT-1")
+                .set(FixTags.SYMBOL, "TSLA")
+                .build();
+        FixMessage childOrder = FixMessage.ofType("D")
+                .set(FixTags.CL_ORD_ID, "CHILD-1")
+                .set(FixTags.PARENT_ORDER_ID, "PARENT-1")
+                .set(FixTags.SYMBOL, "TSLA")
+                .build();
+
+        assertThat(scoped.plan(parentOrder)).extracting(PublishInstruction::topic)
+                .containsExactly("sow/parent/orders", "sow/parent/orders_audit");
+        assertThat(scoped.plan(childOrder)).extracting(PublishInstruction::topic)
                 .containsExactly("sow/child/orders", "sow/child/orders_audit");
     }
 
@@ -230,7 +272,7 @@ class PublishPlannerTest {
                 planner(execRoute("exec-fill", List.of("2"), List.of(14, 151))).plan(fill);
 
         assertThat(plan).extracting(PublishInstruction::topic)
-                .containsExactly("sow/parent/execs", "sow/parent/execs_audit");
+                .containsExactly("sow/fix42/execs", "sow/fix42/execs_audit");
         assertThat(plan).allSatisfy(instruction -> {
             assertThat(instruction.payload().has(FixTags.ORDER_ID)).isTrue();
             assertThat(instruction.payload().has(FixTags.EXEC_ID)).isTrue();

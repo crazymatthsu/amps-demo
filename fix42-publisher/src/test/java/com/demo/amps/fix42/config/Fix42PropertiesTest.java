@@ -37,9 +37,9 @@ class Fix42PropertiesTest {
     @DisplayName("accepts a rulebook whose delta routes all carry their topic keys")
     void acceptsValidConfiguration() {
         Fix42Properties valid = properties(
-                Map.of("sow/parent/orders", List.of(11), "sow/parent/orders_audit", List.of(11)),
+                Map.of("sow/fix42/orders", List.of(11), "sow/fix42/orders_audit", List.of(11)),
                 route("amend", List.of("G"), PublishMode.DELTA, List.of(35, 11, 41, 60),
-                        List.of(38, 44), List.of("sow/parent/orders", "sow/parent/orders_audit")));
+                        List.of(38, 44), List.of("sow/fix42/orders", "sow/fix42/orders_audit")));
 
         assertThatCode(valid::validate).doesNotThrowAnyException();
     }
@@ -50,13 +50,13 @@ class Fix42PropertiesTest {
         // Publishing to an execs topic keyed /37 without sending tag 37: AMPS
         // would reject every one of these, silently from the publisher's side.
         Fix42Properties broken = properties(
-                Map.of("sow/parent/execs", List.of(37)),
+                Map.of("sow/fix42/execs", List.of(37)),
                 route("exec", List.of("8"), PublishMode.DELTA, List.of(35, 11, 39, 150),
-                        List.of(), List.of("sow/parent/execs")));
+                        List.of(), List.of("sow/fix42/execs")));
 
         assertThatThrownBy(broken::validate)
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("sow/parent/execs")
+                .hasMessageContaining("sow/fix42/execs")
                 .hasMessageContaining("[37]");
     }
 
@@ -78,13 +78,13 @@ class Fix42PropertiesTest {
     @DisplayName("rejects a topic with no declared key, since nothing can be checked")
     void rejectsUnknownTopic() {
         Fix42Properties broken = properties(
-                Map.of("sow/parent/orders", List.of(11)),
+                Map.of("sow/fix42/orders", List.of(11)),
                 route("amend", List.of("G"), PublishMode.DELTA, List.of(35, 11),
-                        List.of(), List.of("sow/parent/typo")));
+                        List.of(), List.of("sow/fix42/typo")));
 
         assertThatThrownBy(broken::validate)
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("sow/parent/typo")
+                .hasMessageContaining("sow/fix42/typo")
                 .hasMessageContaining("topic-keys");
     }
 
@@ -102,9 +102,9 @@ class Fix42PropertiesTest {
     @DisplayName("rejects a delta route with no tags: it would publish nothing")
     void rejectsDeltaRouteWithNoTags() {
         Fix42Properties broken = properties(
-                Map.of("sow/parent/orders", List.of(11)),
+                Map.of("sow/fix42/orders", List.of(11)),
                 route("empty", List.of("G"), PublishMode.DELTA, List.of(), List.of(),
-                        List.of("sow/parent/orders")));
+                        List.of("sow/fix42/orders")));
 
         assertThatThrownBy(broken::validate)
                 .isInstanceOf(IllegalStateException.class)
@@ -115,9 +115,9 @@ class Fix42PropertiesTest {
     @DisplayName("rejects a FULL route that also lists tags, which are ignored")
     void rejectsFullRouteWithTags() {
         Fix42Properties confused = properties(
-                Map.of("sow/parent/orders", List.of(11)),
+                Map.of("sow/fix42/orders", List.of(11)),
                 route("new-order", List.of("D"), PublishMode.FULL, List.of(35, 11), List.of(),
-                        List.of("sow/parent/orders")));
+                        List.of("sow/fix42/orders")));
 
         assertThatThrownBy(confused::validate)
                 .isInstanceOf(IllegalStateException.class)
@@ -140,11 +140,11 @@ class Fix42PropertiesTest {
     @DisplayName("rejects duplicate route names, which make logs ambiguous")
     void rejectsDuplicateNames() {
         Fix42Properties broken = properties(
-                Map.of("sow/parent/orders", List.of(11)),
+                Map.of("sow/fix42/orders", List.of(11)),
                 route("amend", List.of("G"), PublishMode.DELTA, List.of(35, 11), List.of(),
-                        List.of("sow/parent/orders")),
+                        List.of("sow/fix42/orders")),
                 route("amend", List.of("F"), PublishMode.DELTA, List.of(35, 11), List.of(),
-                        List.of("sow/parent/orders")));
+                        List.of("sow/fix42/orders")));
 
         assertThatThrownBy(broken::validate)
                 .isInstanceOf(IllegalStateException.class)
@@ -156,7 +156,7 @@ class Fix42PropertiesTest {
     void reportsAllProblems() {
         Fix42Properties broken = properties(Map.of(),
                 route("a", List.of(), PublishMode.DELTA, List.of(35), List.of(),
-                        List.of("sow/parent/orders")),
+                        List.of("sow/fix42/orders")),
                 route("b", List.of("F"), PublishMode.DELTA, List.of(35), List.of(), List.of()));
 
         assertThatThrownBy(broken::validate)
@@ -170,7 +170,7 @@ class Fix42PropertiesTest {
     @DisplayName("selectedTags is identity tags then changeable tags, de-duplicated")
     void selectedTagsPreservesOrderAndDeduplicates() {
         Fix42Properties.Route route = route("amend", List.of("G"), PublishMode.DELTA,
-                List.of(35, 11, 41, 60), List.of(38, 44, 60), List.of("sow/parent/orders"));
+                List.of(35, 11, 41, 60), List.of(38, 44, 60), List.of("sow/fix42/orders"));
 
         assertThat(route.selectedTags()).containsExactly(35, 11, 41, 60, 38, 44);
     }
@@ -180,9 +180,9 @@ class Fix42PropertiesTest {
     void matchesOnMsgTypeAndExecType() {
         Fix42Properties.Route fills = new Fix42Properties.Route("fills", List.of("8"),
                 List.of("1", "2"), List.of(), PublishMode.DELTA, List.of(35), List.of(),
-                List.of("sow/parent/execs"), List.of(), null);
+                List.of("sow/fix42/execs"), List.of(), null);
         Fix42Properties.Route any = route("any", List.of("8"), PublishMode.DELTA, List.of(35),
-                List.of(), List.of("sow/parent/execs"));
+                List.of(), List.of("sow/fix42/execs"));
 
         assertThat(fills.matches("8", "1", "0")).isTrue();
         assertThat(fills.matches("8", "0", "0")).isFalse();
@@ -198,7 +198,7 @@ class Fix42PropertiesTest {
         // that omits tag 20 entirely -- must fall through to the fill rules.
         Fix42Properties.Route bust = new Fix42Properties.Route("exec-bust", List.of("8"),
                 List.of(), List.of("1"), PublishMode.DELTA, List.of(35), List.of(),
-                List.of("sow/parent/execs"), List.of(), null);
+                List.of("sow/fix42/execs"), List.of(), null);
 
         assertThat(bust.matches("8", "1", "1")).isTrue();
         assertThat(bust.matches("8", "2", "1")).isTrue();
@@ -213,10 +213,10 @@ class Fix42PropertiesTest {
         // written -- and a rule that never matches is a rule someone believes
         // is doing something.
         Fix42Properties broken = properties(
-                Map.of("sow/parent/orders", List.of(11)),
+                Map.of("sow/fix42/orders", List.of(11)),
                 new Fix42Properties.Route("amend", List.of("G"), List.of(), List.of("1"),
                         PublishMode.DELTA, List.of(35, 11), List.of(),
-                        List.of("sow/parent/orders"), List.of(), null));
+                        List.of("sow/fix42/orders"), List.of(), null));
 
         assertThatThrownBy(broken::validate)
                 .isInstanceOf(IllegalStateException.class)

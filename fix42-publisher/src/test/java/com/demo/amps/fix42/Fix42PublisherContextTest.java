@@ -51,9 +51,8 @@ class Fix42PublisherContextTest {
         // pins the shape so an accidental deletion is visible.
         assertThat(properties.routes()).isNotEmpty();
         assertThat(properties.topicKeys())
-                .containsKeys("sow/parent/orders", "sow/parent/orders_audit",
-                        "sow/child/orders", "sow/child/orders_audit",
-                        "sow/parent/execs", "sow/parent/execs_audit", "sow/parent/rejects");
+                .containsKeys("sow/fix42/orders", "sow/fix42/orders_audit",
+                        "sow/fix42/execs", "sow/fix42/execs_audit", "sow/fix42/rejects");
         assertThat(properties.amps().uri()).endsWith("/amps/fix");
     }
 
@@ -346,18 +345,14 @@ class Fix42PublisherContextTest {
     }
 
     @Test
-    @DisplayName("child orders reach the child topics and parents the parent ones")
-    void mockFlowReachesBothTopicFamilies() {
+    @DisplayName("the mock flow, parents and children alike, reaches every declared topic")
+    void mockFlowReachesEveryTopic() {
         List<String> topics = MockFixFlow.events().stream()
                 .flatMap(event -> planner.plan(event.message()).stream())
                 .map(PublishInstruction::topic)
                 .distinct()
                 .toList();
 
-        assertThat(topics).contains(
-                "sow/parent/orders", "sow/parent/orders_audit",
-                "sow/child/orders", "sow/child/orders_audit",
-                "sow/parent/execs", "sow/parent/execs_audit",
-                "sow/parent/rejects");
+        assertThat(topics).containsExactlyInAnyOrderElementsOf(properties.topicKeys().keySet());
     }
 }

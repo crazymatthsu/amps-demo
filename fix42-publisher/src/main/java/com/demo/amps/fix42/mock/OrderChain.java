@@ -505,15 +505,17 @@ public final class OrderChain {
     /**
      * The fields every execution report carries, cumulative trio included.
      *
-     * <p>Child chains get tag 9000 here too, not only on their requests. That
-     * is a real dependency rather than a convenience: an execution report
-     * resolves a pending request, so it has to reach the same blotter the
-     * request went to, and a stateless router picks that topic from tag 9000.
-     * Venues commonly echo a client-supplied custom tag back on execution
-     * reports -- it is a standard FIX onboarding request, and exactly why
-     * parent linkage is put in a custom tag. Where a venue will not, an OMS
-     * has to stamp it on the way in, which is the one piece of chain state
-     * this design cannot delegate to the server.
+     * <p>Child chains get tag 9000 here too, not only on their requests. On
+     * the shipped topics that is a courtesy -- parents and children share one
+     * blotter, and a report finds its record through 11/41 -- but with a
+     * rulebook that splits the blotter by {@code {scope}} it becomes a real
+     * dependency: an execution report resolves a pending request, so it has
+     * to reach the same blotter the request went to, and a stateless router
+     * picks that topic from tag 9000. Venues commonly echo a client-supplied
+     * custom tag back on execution reports -- it is a standard FIX onboarding
+     * request, and exactly why parent linkage is put in a custom tag. Where a
+     * venue will not, an OMS has to stamp it on the way in, which is the one
+     * piece of chain state this design cannot delegate to the server.
      */
     private FixMessage.Builder execution(String execType, String ordStatus) {
         return execution(execType, ordStatus, FixTags.ExecTransType.NEW);

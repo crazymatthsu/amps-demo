@@ -42,13 +42,11 @@ class Fix42DeltaPublishIT {
 
     private static final Logger log = LoggerFactory.getLogger(Fix42DeltaPublishIT.class);
 
-    private static final String PARENT_ORDERS = "sow/parent/orders";
-    private static final String PARENT_ORDERS_AUDIT = "sow/parent/orders_audit";
-    private static final String CHILD_ORDERS = "sow/child/orders";
-    private static final String CHILD_ORDERS_AUDIT = "sow/child/orders_audit";
-    private static final String PARENT_EXECS = "sow/parent/execs";
-    private static final String PARENT_EXECS_AUDIT = "sow/parent/execs_audit";
-    private static final String PARENT_REJECTS = "sow/parent/rejects";
+    private static final String ORDERS = "sow/fix42/orders";
+    private static final String ORDERS_AUDIT = "sow/fix42/orders_audit";
+    private static final String EXECS = "sow/fix42/execs";
+    private static final String EXECS_AUDIT = "sow/fix42/execs_audit";
+    private static final String REJECTS = "sow/fix42/rejects";
 
     private AmpsTestServer server;
     private AmpsDeltaPublisher publisher;
@@ -102,25 +100,26 @@ class Fix42DeltaPublishIT {
     @Test
     @DisplayName("a whole cancel/replace chain collapses to ONE record on the chained topic")
     void chainCollapsesToOneRecord() throws Exception {
-        List<FixMessage> parents = sow.records(PARENT_ORDERS);
+        List<FixMessage> orders = sow.records(ORDERS);
 
-        // Seven parent chains published D/G/F under eleven distinct ClOrdIDs;
-        // the chaining key generator resolves 11/41 back to one key per chain.
-        assertThat(parents)
-                .as("one record per parent order chain, not one per ClOrdID")
-                .hasSize(7);
+        // Nine chains (seven parents, two child slices) published D/G/F under
+        // fifteen distinct ClOrdIDs; the chaining key generator resolves 11/41
+        // back to one key per chain.
+        assertThat(orders)
+                .as("one record per order chain, not one per ClOrdID")
+                .hasSize(9);
 
-        Map<String, FixMessage> audit = sow.recordsBy(PARENT_ORDERS_AUDIT, FixTags.CL_ORD_ID);
+        Map<String, FixMessage> audit = sow.recordsBy(ORDERS_AUDIT, FixTags.CL_ORD_ID);
         assertThat(audit.keySet())
                 .as("the audit topic keeps every ClOrdID separately")
-                .hasSizeGreaterThan(parents.size())
+                .hasSizeGreaterThan(orders.size())
                 .contains("PARENT-AAPL-1", "PARENT-AAPL-2", "PARENT-GOOG-2");
     }
 
     @Test
     @DisplayName("the merged record carries the latest amend AND the original order's terms")
     void deltaMergePreservesUntouchedFields() throws Exception {
-        FixMessage apple = chainRecord(PARENT_ORDERS, "AAPL");
+        FixMessage apple = chainRecord(ORDERS, "AAPL");
 
         // The last message to reach the blotter was the venue's replace
         // confirm (150=5), which is why tag 35 is 8 rather than G: the request
@@ -143,7 +142,7 @@ class Fix42DeltaPublishIT {
     @Test
     @DisplayName("a cancel request merges onto the same record as the order it cancels")
     void cancelRequestJoinsTheChain() throws Exception {
-        FixMessage microsoft = chainRecord(PARENT_ORDERS, "MSFT");
+        FixMessage microsoft = chainRecord(ORDERS, "MSFT");
 
         // Last to touch the blotter is the cancel confirmation (150=4).
         assertThat(microsoft.value(FixTags.MSG_TYPE)).isEqualTo("8");
@@ -156,33 +155,45 @@ class Fix42DeltaPublishIT {
         assertThat(microsoft.value(FixTags.SYMBOL)).isEqualTo("MSFT");
     }
 
-    // ---- parent / child separation -----------------------------------------
+    // ---- parent / child on one topic ----------------------------------------
 
     @Test
-    @DisplayName("child slices land on the child topics, keyed by their own chains")
-    void childOrdersAreSeparate() throws Exception {
-        List<FixMessage> children = sow.records(CHILD_ORDERS);
+    @DisplayName("child slices share the topic, each keyed by its own chain")
+    void childOrdersAreTheirOwnChains() throws Exception {
+        List<FixMessage> tesla = sow.records(ORDERS).stream()
+                .filter(record -> "TSLA".equals(record.value(FixTags.SYMBOL)))
+                .toList();
 
+        // One parent and two children, all TSLA. A child's first message
+        // carries no 41 pointing at the parent, so the module opens a chain
+        // of its own rather than merging the slice into the parent's record.
+        assertThat(tesla).as("parent chain plus two child chains").hasSize(3);
+
+        List<FixMessage> children = tesla.stream()
+                .filter(record -> record.has(FixTags.PARENT_ORDER_ID))
+                .toList();
         assertThat(children).as("two child chains").hasSize(2);
-        assertThat(children).allSatisfy(record -> {
-            assertThat(record.value(FixTags.PARENT_ORDER_ID))
-                    .as("every child record keeps its parent link in tag 9000")
-                    .isEqualTo("PARENT-TSLA-1");
-            assertThat(record.value(FixTags.SYMBOL)).isEqualTo("TSLA");
-        });
+        assertThat(children).allSatisfy(record ->
+                assertThat(record.value(FixTags.PARENT_ORDER_ID))
+                        .as("every child record keeps its parent link in tag 9000")
+                        .isEqualTo("PARENT-TSLA-1"));
 
-        Map<String, FixMessage> audit = sow.recordsBy(CHILD_ORDERS_AUDIT, FixTags.CL_ORD_ID);
+        Map<String, FixMessage> audit = sow.recordsBy(ORDERS_AUDIT, FixTags.CL_ORD_ID);
         assertThat(audit.keySet())
                 .contains("CHILD-TSLA-A-1", "CHILD-TSLA-A-2", "CHILD-TSLA-B-1", "CHILD-TSLA-B-2");
     }
 
     @Test
-    @DisplayName("the parent's own chain is not polluted by its children")
-    void parentAndChildTopicsDoNotMix() throws Exception {
-        assertThat(sow.records(PARENT_ORDERS))
-                .as("no child slice should appear among the parent orders")
-                .allSatisfy(record ->
-                        assertThat(record.has(FixTags.PARENT_ORDER_ID)).isFalse());
+    @DisplayName("tag 9000 is what tells a parent from a child on the shared topic")
+    void parentOrderIdSplitsTheBlotter() throws Exception {
+        List<FixMessage> orders = sow.records(ORDERS);
+
+        assertThat(orders.stream().filter(record -> !record.has(FixTags.PARENT_ORDER_ID)))
+                .as("seven parent chains, none carrying a parent link")
+                .hasSize(7);
+        assertThat(orders.stream().filter(record -> record.has(FixTags.PARENT_ORDER_ID)))
+                .as("two child slices, each carrying one")
+                .hasSize(2);
     }
 
     // ---- executions ---------------------------------------------------------
@@ -190,7 +201,7 @@ class Fix42DeltaPublishIT {
     @Test
     @DisplayName("execs keyed on OrderID hold the latest report per order")
     void execsHoldLatestPerOrder() throws Exception {
-        Map<String, FixMessage> execs = sow.recordsBy(PARENT_EXECS, FixTags.ORDER_ID);
+        Map<String, FixMessage> execs = sow.recordsBy(EXECS, FixTags.ORDER_ID);
 
         // One per chain that ever reached the venue -- all nine.
         assertThat(execs).hasSize(9);
@@ -226,7 +237,7 @@ class Fix42DeltaPublishIT {
                 .filter(event -> FixTags.MsgType.EXECUTION_REPORT.equals(event.msgType()))
                 .count();
 
-        Map<String, FixMessage> audit = sow.recordsBy(PARENT_EXECS_AUDIT, FixTags.EXEC_ID);
+        Map<String, FixMessage> audit = sow.recordsBy(EXECS_AUDIT, FixTags.EXEC_ID);
 
         assertThat(audit).as("one record per ExecID, none merged away").hasSize((int) expected);
         assertThat(audit.keySet()).allSatisfy(execId -> assertThat(execId).startsWith("EXEC-"));
@@ -235,7 +246,7 @@ class Fix42DeltaPublishIT {
     @Test
     @DisplayName("a fill report carries this fill and the cumulative snapshot together")
     void fillReportsCarryBothFillAndSnapshot() throws Exception {
-        Map<String, FixMessage> audit = sow.recordsBy(PARENT_EXECS_AUDIT, FixTags.EXEC_ID);
+        Map<String, FixMessage> audit = sow.recordsBy(EXECS_AUDIT, FixTags.EXEC_ID);
 
         // PARENT-AAPL: ack, partial, pending-replace, replace-ack, partial, fill.
         FixMessage firstPartial = audit.get("EXEC-PARENT-AAPL-2");
@@ -257,7 +268,7 @@ class Fix42DeltaPublishIT {
     @Test
     @DisplayName("cancel rejects land keyed on the rejected request's ClOrdID")
     void rejectsAreKeyedByRejectedRequest() throws Exception {
-        Map<String, FixMessage> rejects = sow.recordsBy(PARENT_REJECTS, FixTags.CL_ORD_ID);
+        Map<String, FixMessage> rejects = sow.recordsBy(REJECTS, FixTags.CL_ORD_ID);
 
         assertThat(rejects).hasSize(2);
 
@@ -279,7 +290,7 @@ class Fix42DeltaPublishIT {
     @Test
     @DisplayName("a stored fill record reconciles against itself: 38 = 14 + 151")
     void storedFillCarriesTheQuantityInvariant() throws Exception {
-        Map<String, FixMessage> audit = sow.recordsBy(PARENT_EXECS_AUDIT, FixTags.EXEC_ID);
+        Map<String, FixMessage> audit = sow.recordsBy(EXECS_AUDIT, FixTags.EXEC_ID);
 
         // AAPL's first partial: 2000 of 10000 at 185.45.
         FixMessage fill = audit.get("EXEC-PARENT-AAPL-2");
@@ -299,7 +310,7 @@ class Fix42DeltaPublishIT {
     @Test
     @DisplayName("every stored fill reconciles; no stored ack claims a trade")
     void storedExecutionsAreSelfConsistent() throws Exception {
-        for (FixMessage record : sow.records(PARENT_EXECS_AUDIT)) {
+        for (FixMessage record : sow.records(EXECS_AUDIT)) {
             String execType = record.value(FixTags.EXEC_TYPE);
             // A stored fill carries no tag 20 (the fill routes never select
             // it); busts and corrects carry 20=1/2 and an ordinary 150, so
@@ -362,7 +373,7 @@ class Fix42DeltaPublishIT {
         // AMZN filled 2000 @ 209.95 and 1000 @ 210.05, then the venue busted
         // the first fill. The bust's restated absolutes merged over the fill
         // deltas -- the same mechanism that applied them takes them back.
-        FixMessage amazon = chainRecord(PARENT_ORDERS, "AMZN");
+        FixMessage amazon = chainRecord(ORDERS, "AMZN");
 
         assertThat(amazon.value(FixTags.CUM_QTY)).isEqualTo("1000");
         assertThat(amazon.value(FixTags.LEAVES_QTY)).isEqualTo("5000");
@@ -388,7 +399,7 @@ class Fix42DeltaPublishIT {
         // META's 1200 @ 512.10 was corrected to 511.95 before the final 1800
         // filled at 512.00. The terminal AvgPx is only 511.98 if the
         // correction actually applied -- it would read 512.04 otherwise.
-        FixMessage meta = chainRecord(PARENT_ORDERS, "META");
+        FixMessage meta = chainRecord(ORDERS, "META");
 
         assertThat(meta.value(FixTags.CUM_QTY)).isEqualTo("3000");
         assertThat(meta.value(FixTags.LEAVES_QTY)).isEqualTo("0");
@@ -400,7 +411,7 @@ class Fix42DeltaPublishIT {
     @Test
     @DisplayName("execs_audit keeps a bust/correct with tags 19/20, beside its untouched target")
     void execsAuditKeepsBustAndCorrectWithReferences() throws Exception {
-        Map<String, FixMessage> audit = sow.recordsBy(PARENT_EXECS_AUDIT, FixTags.EXEC_ID);
+        Map<String, FixMessage> audit = sow.recordsBy(EXECS_AUDIT, FixTags.EXEC_ID);
 
         // The bust: its own ExecID, the reference pair, restated absolutes,
         // and no trade fields of its own.
@@ -439,7 +450,7 @@ class Fix42DeltaPublishIT {
         // the proposal into tag 38: a merge can overwrite but never remove, so
         // the record would keep a quantity the venue refused, and the only way
         // back would be re-publishing an older message over the top of it.
-        FixMessage nvidia = chainRecord(PARENT_ORDERS, "NVDA");
+        FixMessage nvidia = chainRecord(ORDERS, "NVDA");
 
         assertThat(nvidia.value(FixTags.ORDER_QTY))
                 .as("the acked quantity was never overwritten by the proposal")
@@ -455,7 +466,7 @@ class Fix42DeltaPublishIT {
         assertThat(nvidia.value(FixTags.WORKING_CL_ORD_ID)).isEqualTo("PARENT-NVDA-1");
 
         // And the blotter agrees with the venue, which is the real test.
-        Map<String, FixMessage> execs = sow.recordsBy(PARENT_EXECS, FixTags.ORDER_ID);
+        Map<String, FixMessage> execs = sow.recordsBy(EXECS, FixTags.ORDER_ID);
         FixMessage venueView = execs.get("ORD-PARENT-NVDA");
         assertThat(venueView.value(FixTags.ORD_STATUS)).isEqualTo(FixTags.OrdStatus.DONE_FOR_DAY);
         assertThat(venueView.value(FixTags.CUM_QTY)).isEqualTo("1000");
@@ -468,7 +479,7 @@ class Fix42DeltaPublishIT {
         // with a 150=5 carrying its own 38/44. The blotter takes the venue's
         // numbers, not the ones we asked for -- the same principle the rest of
         // this design runs on, since a 4.2 report is a cumulative snapshot.
-        FixMessage apple = chainRecord(PARENT_ORDERS, "AAPL");
+        FixMessage apple = chainRecord(ORDERS, "AAPL");
 
         assertThat(apple.value(FixTags.ORDER_QTY)).isEqualTo("12000");
         assertThat(apple.value(FixTags.PRICE)).isEqualTo("185.75");
@@ -486,7 +497,7 @@ class Fix42DeltaPublishIT {
     void cancelRequestShowsAsPending() throws Exception {
         // GOOG sent a 35=F which the venue rejected as too late, so the order
         // is still working -- pending cleared, terms untouched.
-        FixMessage google = chainRecord(PARENT_ORDERS, "GOOG");
+        FixMessage google = chainRecord(ORDERS, "GOOG");
 
         assertThat(google.value(FixTags.PENDING_ACTION)).isEqualTo(FixTags.PendingAction.NONE);
         assertThat(google.value(FixTags.ORDER_QTY)).isEqualTo("800");
@@ -494,10 +505,10 @@ class Fix42DeltaPublishIT {
 
         // MSFT's cancel was CONFIRMED, so its pending is cleared too -- the
         // difference between the two lives on the execs topic, not here.
-        FixMessage microsoft = chainRecord(PARENT_ORDERS, "MSFT");
+        FixMessage microsoft = chainRecord(ORDERS, "MSFT");
         assertThat(microsoft.value(FixTags.PENDING_ACTION))
                 .isEqualTo(FixTags.PendingAction.NONE);
-        Map<String, FixMessage> execs = sow.recordsBy(PARENT_EXECS, FixTags.ORDER_ID);
+        Map<String, FixMessage> execs = sow.recordsBy(EXECS, FixTags.ORDER_ID);
         assertThat(execs.get("ORD-PARENT-MSFT").value(FixTags.ORD_STATUS))
                 .isEqualTo(FixTags.OrdStatus.CANCELED);
     }
@@ -508,14 +519,12 @@ class Fix42DeltaPublishIT {
         // Every scripted chain reaches a terminal or resolved point, so nothing
         // should still claim a request in flight. A record stuck on REPLACE
         // would mean a resolving report failed to project.
-        for (String topic : List.of(PARENT_ORDERS, CHILD_ORDERS)) {
-            assertThat(sow.records(topic)).allSatisfy(record -> {
-                assertThat(record.value(FixTags.PENDING_ACTION))
-                        .as("%s record %s", topic, record.value(FixTags.CL_ORD_ID))
-                        .isEqualTo(FixTags.PendingAction.NONE);
-                assertThat(record.value(FixTags.PENDING_ORDER_QTY)).isEqualTo("0");
-            });
-        }
+        assertThat(sow.records(ORDERS)).allSatisfy(record -> {
+            assertThat(record.value(FixTags.PENDING_ACTION))
+                    .as("record %s", record.value(FixTags.CL_ORD_ID))
+                    .isEqualTo(FixTags.PendingAction.NONE);
+            assertThat(record.value(FixTags.PENDING_ORDER_QTY)).isEqualTo("0");
+        });
     }
 
     @Test
@@ -524,7 +533,7 @@ class Fix42DeltaPublishIT {
         // The projection is a blotter concern. An audit trail that showed
         // 9010=12000 instead of 38=12000 would be recording a rewrite rather
         // than the message.
-        Map<String, FixMessage> audit = sow.recordsBy(PARENT_ORDERS_AUDIT, FixTags.CL_ORD_ID);
+        Map<String, FixMessage> audit = sow.recordsBy(ORDERS_AUDIT, FixTags.CL_ORD_ID);
 
         FixMessage amend = audit.get("PARENT-AAPL-2");
         assertThat(amend.value(FixTags.MSG_TYPE)).isEqualTo("G");

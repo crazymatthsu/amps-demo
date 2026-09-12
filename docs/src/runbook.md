@@ -160,7 +160,7 @@ cancels, fills, rejects — into it:
 ```
 
 Eleven ClOrdIDs across seven chains should store as seven records. Look at them in
-the admin SQL console (<http://127.0.0.1:8085/>) or query `sow/parent/orders`.
+the admin SQL console (<http://127.0.0.1:8085/>) or query `sow/fix42/orders`.
 Record counts accumulate across runs, so reset between them:
 
 ```bash

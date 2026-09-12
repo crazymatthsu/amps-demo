@@ -36,17 +36,15 @@ single record is the chaining key generator resolving `41 → 11`.
 ## The two halves
 
 **Server** — [`server/config/flows/fix42-chaining/amps-config.xml`](../server/config/flows/fix42-chaining/amps-config.xml)
-loads the module and declares seven topics, in pairs:
+loads the module and declares five topics, in pairs:
 
 | topic | key | one record per |
 | --- | --- | --- |
-| `sow/parent/orders` | key-chaining `/11` + `/41` | order **chain** |
-| `sow/parent/orders_audit` | `/11` | message |
-| `sow/child/orders` | key-chaining `/11` + `/41` | child order **chain** |
-| `sow/child/orders_audit` | `/11` | message |
-| `sow/parent/execs` | `/37` | order (latest report) |
-| `sow/parent/execs_audit` | `/17` | execution report |
-| `sow/parent/rejects` | `/11` | rejected request |
+| `sow/fix42/orders` | key-chaining `/11` + `/41` | order **chain** (parent or child) |
+| `sow/fix42/orders_audit` | `/11` | message |
+| `sow/fix42/execs` | `/37` | order (latest report) |
+| `sow/fix42/execs_audit` | `/17` | execution report |
+| `sow/fix42/rejects` | `/11` | rejected request |
 
 Every stream is a chained/derived topic **paired with an audit topic**, and
 only the audit topics are journalled. The pairing is not decoration: per the
@@ -77,27 +75,37 @@ trail — so nothing is published only to a chained topic.
 ## Parent and child orders
 
 Tag **9000** (`ParentOrderID`, user-defined range — FIX 4.2 has no standard
-parent/child field) decides the topic family: present means a child slice,
-absent means a parent order.
+parent/child field) decides the scope: present means a child slice, absent
+means a parent order. The publisher reads it per message, with no chain
+memory, and a topic pattern written as `sow/{scope}/orders` resolves to
+`sow/parent/orders` or `sow/child/orders` accordingly.
+
+The shipped rulebook does not use the placeholder. Parents and children share
+`sow/fix42/orders`, and the chaining module keeps them apart on its own: a
+child's first message carries no 41 pointing at the parent, so it opens a
+chain of its own. `/9000 = 'PARENT-TSLA-1'` is how a filter walks from a
+parent to its slices. Splitting the blotter again is a config change — declare
+`sow/parent/*` and `sow/child/*` on the server, list them under `topic-keys`,
+and write `sow/{scope}/orders` in the routes.
 
 The mock feed stamps 9000 on **every request a child chain originates** (D, G
-and F), not only on the `35=D`. That is a deliberate constraint: a stateless
-router cannot recover the association later, and reintroducing a chain→scope
-map in the publisher would put back exactly the client-side state this design
-removes. Execution reports carry no 9000 and route to the parent exec topics
-regardless — a venue has no reason to echo a client's custom tag back.
+and F), not only on the `35=D`, and on the venue's reports for it too. On one
+shared blotter that is a courtesy; with a scoped blotter it is a hard
+dependency, because a stateless router cannot recover the association later
+and an execution report has to reach the same blotter its request went to.
 
 ## Two places this reads the spec rather than transcribing it
 
 Both are visible in [`application.yml`](src/main/resources/application.yml) and
 easy to change back if you meant the literal version:
 
-1. **`35=G` and `35=F` route by scope, not always to `sow/parent/*`.** The spec
-   lists the parent topics for D, G and F, but also declares
-   `sow/child/orders{,_audit}` — which nothing would ever write to if amends
-   and cancels on a child slice went to the parent topics. So the route topic
-   is `sow/{scope}/orders`, resolved per message from tag 9000. For a parent
-   order it *is* `sow/parent/orders`, exactly as written.
+1. **One topic family, `sow/fix42/*`, instead of `sow/parent/*` and
+   `sow/child/*`.** The spec declares the orders and audit topics twice, once
+   per scope. Both copies are keyed the same way, and the chaining module
+   already keeps a child's chain separate from its parent's, so the split
+   bought nothing but a second set of SOW files and a dependency on execution
+   reports echoing tag 9000. Five topics do the same job as seven; the
+   `{scope}` placeholder stays available for a deployment that wants two.
 
 2. **Execution reports also carry tags 37 and 17.** The spec's field list for
    `35=8` names 11, 41, 39, 150, 60 (plus the per-variant economics), but the
@@ -106,9 +114,6 @@ easy to change back if you meant the literal version:
    have produced messages the server silently refuses to store. Both tags are
    in every exec route, and `Fix42Properties.validate()` fails startup if a
    route ever drops one again.
-
-Execution reports and cancel rejects go to the parent topics regardless of
-scope, as written — there are no child exec topics to route to.
 
 ## Acked terms vs terms in flight
 
