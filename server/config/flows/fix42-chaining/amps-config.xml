@@ -25,6 +25,10 @@
   will not generate a SOW key, and the message is not processed by AMPS"),
   which is acceptable for a derived blotter and unacceptable for an audit
   trail. So nothing is only ever published to a chained topic.
+
+  Above the blotter, three json views (view/fix42/exposure/*) aggregate it
+  by account, symbol and side: exposure per desk, with the parent and child
+  levels kept apart. Declared at the end of the SOW block.
 -->
 <AMPSConfig>
 
@@ -191,6 +195,107 @@
             <FileName>./sow/fix42-rejects.sow</FileName>
             <Durability>persistent</Durability>
         </Topic>
+
+        <!-- ===== exposure views: account x symbol x side =====
+             Derived from the chained blotter, not from the execs topics. The
+             blotter record already carries account (1), symbol (55) and side
+             (54) from the 35=D next to the venue's absolute CumQty (14),
+             LeavesQty (151), AvgPx (6) and OrderQty (38) from its reports, so
+             a trade bust or correct is absorbed at order level before any
+             view sees it. The execs topics carry no 1/55/54, and execs_audit
+             would need per-ExecID bust logic to reach the same numbers.
+
+             Two levels, split on tag 9000 and never summed together: a child
+             slice's fills are already rolled up into its parent's 14/151, so
+             one view over both levels counts every child share twice. The
+             third view groups the children by their parent's ClOrdID, which
+             is what a reader compares against the parent's own record.
+
+             Cross-type: the blotter is fix-typed and the views are json, so
+             the aggregates come out as numbers and a group with no fills
+             renders its 0/0 AvgPx as null rather than 0. A json view over a
+             fix topic must qualify EVERY reference as [fix].[topic]./tag, in
+             the projection and the grouping alike; the filter may stay
+             unqualified.
+
+             The aggregates are deliberately bare. On this build (5.3.5.135)
+             an aggregate nested in IF(), e.g. IF(SUM(/14) > 0, ..., 0),
+             accumulates add-only on live updates: the old contribution is
+             never subtracted when a record changes, so the value drifts, and
+             only a restart (which rebuilds the view from the SOW) corrects
+             it. The VWAP below is the vendor's own documented form; the 0/0
+             it produces for an unfilled group needs no guard. Recorded, with
+             the measurements, in docs/fix42-view/08-exposure-views.md.
+
+             Views are derived, so they are not journalled, and they take no
+             FileName: AMPS rebuilds them from the underlying topic at startup.
+        -->
+        <View>
+            <Name>view/fix42/exposure/parent</Name>
+            <MessageType>json</MessageType>
+            <UnderlyingTopic>[fix].[sow/fix42/orders]</UnderlyingTopic>
+            <Filter>/9000 IS NULL</Filter>
+            <Projection>
+                <Field>[fix].[sow/fix42/orders]./1 AS /Account</Field>
+                <Field>[fix].[sow/fix42/orders]./55 AS /Symbol</Field>
+                <Field>[fix].[sow/fix42/orders]./54 AS /Side</Field>
+                <Field>COUNT([fix].[sow/fix42/orders]./11) AS /Orders</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./38) AS /OrderQty</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./151) AS /LeavesQty</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./14) AS /CumQty</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./14 * [fix].[sow/fix42/orders]./6) / SUM([fix].[sow/fix42/orders]./14) AS /AvgPx</Field>
+            </Projection>
+            <Grouping>
+                <Field>[fix].[sow/fix42/orders]./1</Field>
+                <Field>[fix].[sow/fix42/orders]./55</Field>
+                <Field>[fix].[sow/fix42/orders]./54</Field>
+            </Grouping>
+        </View>
+
+        <!-- Same shape over the child slices alone. -->
+        <View>
+            <Name>view/fix42/exposure/child</Name>
+            <MessageType>json</MessageType>
+            <UnderlyingTopic>[fix].[sow/fix42/orders]</UnderlyingTopic>
+            <Filter>/9000 IS NOT NULL</Filter>
+            <Projection>
+                <Field>[fix].[sow/fix42/orders]./1 AS /Account</Field>
+                <Field>[fix].[sow/fix42/orders]./55 AS /Symbol</Field>
+                <Field>[fix].[sow/fix42/orders]./54 AS /Side</Field>
+                <Field>COUNT([fix].[sow/fix42/orders]./11) AS /Orders</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./38) AS /OrderQty</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./151) AS /LeavesQty</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./14) AS /CumQty</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./14 * [fix].[sow/fix42/orders]./6) / SUM([fix].[sow/fix42/orders]./14) AS /AvgPx</Field>
+            </Projection>
+            <Grouping>
+                <Field>[fix].[sow/fix42/orders]./1</Field>
+                <Field>[fix].[sow/fix42/orders]./55</Field>
+                <Field>[fix].[sow/fix42/orders]./54</Field>
+            </Grouping>
+        </View>
+
+        <!-- The consistency check: every child slice rolled up under its
+             parent's ClOrdID (tag 9000). A parent whose slices report what it
+             reports has a row here equal to its own blotter record's 38, 14,
+             151 and 6 (the last to the venue's rounding). -->
+        <View>
+            <Name>view/fix42/exposure/children_by_parent</Name>
+            <MessageType>json</MessageType>
+            <UnderlyingTopic>[fix].[sow/fix42/orders]</UnderlyingTopic>
+            <Filter>/9000 IS NOT NULL</Filter>
+            <Projection>
+                <Field>[fix].[sow/fix42/orders]./9000 AS /ParentOrderID</Field>
+                <Field>COUNT([fix].[sow/fix42/orders]./11) AS /Orders</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./38) AS /OrderQty</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./151) AS /LeavesQty</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./14) AS /CumQty</Field>
+                <Field>SUM([fix].[sow/fix42/orders]./14 * [fix].[sow/fix42/orders]./6) / SUM([fix].[sow/fix42/orders]./14) AS /AvgPx</Field>
+            </Projection>
+            <Grouping>
+                <Field>[fix].[sow/fix42/orders]./9000</Field>
+            </Grouping>
+        </View>
 
     </SOW>
 
