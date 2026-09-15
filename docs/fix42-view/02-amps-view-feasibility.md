@@ -337,9 +337,11 @@ views were built for:
 
 (Two practical notes for that stage: aggregate over the JSON-typed derived
 topics, where numeric comparison is unambiguous — the fix-typed ingress topics
-carry text values; and verify view syntax against your AMPS version, a
-recurring caveat in this repo because none of it was written against the docs
-of one pinned release.)
+carry text values; and verify view syntax against your AMPS version. The
+first row of that table has since been built over the chained blotter and
+verified on 5.3.5.135 — [08](08-exposure-views.md) records the cross-type
+syntax that works, and an aggregation trap that only a live, restart-free
+test catches: an aggregate nested in `IF()` drifts on updates.)
 
 ## 7. Verdict — revised for the chaining key generator
 

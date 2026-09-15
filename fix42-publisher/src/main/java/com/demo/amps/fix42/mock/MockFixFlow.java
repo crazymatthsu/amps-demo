@@ -26,7 +26,8 @@ import java.util.stream.Stream;
  *   <tr><td>PARENT-NVDA</td><td>parent</td>
  *       <td>D, ack, partial, done for day -- and an amend rejected by a 35=9</td></tr>
  *   <tr><td>PARENT-TSLA</td><td>parent</td>
- *       <td>D, ack, partials as its children fill, done for day</td></tr>
+ *       <td>D, ack, one partial per child fill (so its totals equal its
+ *       children's), done for day</td></tr>
  *   <tr><td>CHILD-TSLA-A / -B</td><td>child</td>
  *       <td>tag 9000 to the parent; A amends then fills, B is cancelled</td></tr>
  *   <tr><td>PARENT-AMZN</td><td>parent</td>
@@ -120,7 +121,17 @@ public final class MockFixFlow {
                 .doneForDay();
     }
 
-    /** The parent of the two TSLA children: filled by its slices, then closed out. */
+    /**
+     * The parent of the two TSLA children: filled by its slices, then closed
+     * out.
+     *
+     * <p>Its partial fills mirror the children's fills one for one -- A's
+     * 5000, B's 4000, then A's closing 7000 -- so the parent's own 14/151/6
+     * agree with the sum of its children's. That agreement is what the
+     * {@code view/fix42/exposure/children_by_parent} view exists to check,
+     * and the integration suite asserts it holds here: CumQty 16000 on both
+     * sides, AvgPx 242.0931 on both to the venue's four places.
+     */
     private static OrderChain teslaParent() {
         return parent("PARENT-TSLA", Instrument.TSLA, "ACC-INSTL-02", "TRADER-CM", "1",
                 20_000, 242.00, "0")
@@ -128,6 +139,7 @@ public final class MockFixFlow {
                 .ack()
                 .partialFill(5_000, 242.05)
                 .partialFill(4_000, 242.10)
+                .partialFill(7_000, 242.12)
                 .doneForDay();
     }
 

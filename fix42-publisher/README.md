@@ -36,7 +36,8 @@ single record is the chaining key generator resolving `41 → 11`.
 ## The two halves
 
 **Server** — [`server/config/flows/fix42-chaining/amps-config.xml`](../server/config/flows/fix42-chaining/amps-config.xml)
-loads the module and declares five topics, in pairs:
+loads the module and declares five topics, in pairs, and three views above
+them:
 
 | topic | key | one record per |
 | --- | --- | --- |
@@ -45,6 +46,9 @@ loads the module and declares five topics, in pairs:
 | `sow/fix42/execs` | `/37` | order (latest report) |
 | `sow/fix42/execs_audit` | `/17` | execution report |
 | `sow/fix42/rejects` | `/11` | rejected request |
+| `view/fix42/exposure/parent` | view over `sow/fix42/orders`, `/9000 IS NULL` | account × symbol × side, parent orders |
+| `view/fix42/exposure/child` | view over `sow/fix42/orders`, `/9000 IS NOT NULL` | account × symbol × side, child slices |
+| `view/fix42/exposure/children_by_parent` | view over `sow/fix42/orders`, grouped `/9000` | parent ClOrdID: its slices rolled up |
 
 Every stream is a chained/derived topic **paired with an audit topic**, and
 only the audit topics are journalled. The pairing is not decoration: per the
@@ -164,6 +168,40 @@ record) along with 31/32 on a bust (a bust reports no new trade). The change
 record, with the worked SOW examples, is
 [docs/fix42-view/07](../docs/fix42-view/07-trade-busts-and-corrects.md).
 
+## Exposure views
+
+The three `view/fix42/exposure/*` views are json-typed aggregations of the
+blotter by account (1), symbol (55) and side (54): `Orders` (`COUNT(/11)`),
+`OrderQty`, `LeavesQty`, `CumQty` (`SUM` of 38/151/14) and `AvgPx` as the VWAP
+`SUM(/14 * /6) / SUM(/14)`. They read the blotter rather than the execs topics
+because the blotter record already carries the account/symbol/side of the
+`35=D` beside the venue's restated absolutes, so a bust or correct is absorbed
+before a view sees it. Parents and children are split on tag 9000 and never
+summed together — a child's fills are already inside its parent's 14/151 —
+and `children_by_parent` rolls the slices up under their parent's ClOrdID as
+the consistency check against the parent's own record. Being json, the
+views are read over `/amps/json`, on a separate connection from the fix-typed
+blotter.
+
+```
+view/fix42/exposure/parent   {"Account":"ACC-INSTL-02","AvgPx":242.0931,"CumQty":16000.0,"LeavesQty":0.0,
+                              "OrderQty":20000.0,"Orders":1,"Side":"1","Symbol":"TSLA"}
+view/fix42/exposure/child    {"Account":"ACC-INSTL-02","AvgPx":242.0931,"CumQty":16000.0,"LeavesQty":0.0,
+                              "OrderQty":20000.0,"Orders":2,"Side":"1","Symbol":"TSLA"}
+```
+
+(As the server sends them: a `SUM` over the fix topic's text values comes back
+as a double, `COUNT` as an integer, and the grouping fields as the strings
+they were.)
+
+Two things about them are not obvious from the vendor documentation and are
+recorded in [docs/fix42-view/08](../docs/fix42-view/08-exposure-views.md): a
+json view over a fix topic must qualify every reference as
+`[fix].[sow/fix42/orders]./14`, and on this AMPS build an aggregate nested in
+`IF()` drifts on live updates and only corrects itself on restart — so the
+aggregates are bare, an unfilled group's `AvgPx` is simply `null`, and
+`ExposureViewIT` asserts the values without restarting the container.
+
 ## What this still does *not* give you
 
 A stale or duplicate execution report merges unconditionally: nothing here
@@ -182,7 +220,7 @@ measurements behind this section in
 ```bash
 ./gradlew :fix42-publisher:test              # 102 unit tests, no server needed
 AMPS_IMAGE=<your-image> \
-  ./gradlew :fix42-publisher:integrationTest # 32 tests against a real container
+  ./gradlew :fix42-publisher:integrationTest # 38 tests against a real container
 ```
 
 Each integration test class starts its own AMPS instance. They **skip** rather

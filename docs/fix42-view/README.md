@@ -53,7 +53,7 @@ findings in [02, §4.3](02-amps-view-feasibility.md):
 
 | piece | where |
 | --- | --- |
-| the module + seven SOW topics | [`server/config/flows/fix42-chaining/amps-config.xml`](../../server/config/flows/fix42-chaining/amps-config.xml) |
+| the module + five SOW topics + three exposure views | [`server/config/flows/fix42-chaining/amps-config.xml`](../../server/config/flows/fix42-chaining/amps-config.xml) |
 | the FIX 4.2 delta publisher (Spring Boot) | [`fix42-publisher/`](../../fix42-publisher/README.md) |
 | the rulebook: which tags leave, per message type | [`application.yml`](../../fix42-publisher/src/main/resources/application.yml) |
 | end-to-end proof against a real container | `./gradlew :fix42-publisher:integrationTest` |
@@ -72,6 +72,11 @@ record, which a single tag 38 never can — see
 pending-correlation blocker for the common cases; latest-*valid* arbitration
 is what still keeps a state machine outside AMPS.
 
+Above the blotter, the "views are for aggregation" half of the verdict is
+built too: exposure by account, symbol and side, parents and children kept
+apart, asserted live from a container — with the one aggregation trap this
+build has recorded in [08](08-exposure-views.md).
+
 ## Documents
 
 | document | answers |
@@ -83,3 +88,4 @@ is what still keeps a state machine outside AMPS.
 | [05-the-generated-sow-key.md](05-the-generated-sow-key.md) | what a subscriber can do with the key the module generates — and why it is deterministic, but must never be parsed as a long |
 | [06-publish-throughput.md](06-publish-throughput.md) | what is actually slow when publishing — measured, with the 5.3× answer and why transport batching did not help |
 | [07-trade-busts-and-corrects.md](07-trade-busts-and-corrects.md) | how the blotter absorbs a trade bust/correct (20=1/2) with no state machine — and why tag 20 had to become a routing dimension |
+| [08-exposure-views.md](08-exposure-views.md) | exposure by account × symbol × side as AMPS views over the blotter — the verified cross-type syntax, and the `IF()` drift that a restart hides |

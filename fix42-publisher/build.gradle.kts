@@ -58,6 +58,9 @@ dependencies {
     // Testcontainers arrives (or does not) as its implementation detail --
     // nothing here names a Testcontainers type.
     "integrationTestImplementation"(project(":amps-test-harness"))
+    // The exposure views are json-typed, so their records come back as JSON
+    // rather than FIX; Gson is what the other modules already parse it with.
+    "integrationTestImplementation"(libs.gson)
 }
 
 val integrationTestTask = tasks.register<Test>("integrationTest") {
