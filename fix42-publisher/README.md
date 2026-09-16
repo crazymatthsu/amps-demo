@@ -36,7 +36,7 @@ single record is the chaining key generator resolving `41 → 11`.
 ## The two halves
 
 **Server** — [`server/config/flows/fix42-chaining/amps-config.xml`](../server/config/flows/fix42-chaining/amps-config.xml)
-loads the module and declares five topics, in pairs, and three views above
+loads the module and declares five topics, in pairs, and four views above
 them:
 
 | topic | key | one record per |
@@ -49,6 +49,7 @@ them:
 | `view/fix42/exposure/parent` | view over `sow/fix42/orders`, `/9000 IS NULL` | account × symbol × side, parent orders |
 | `view/fix42/exposure/child` | view over `sow/fix42/orders`, `/9000 IS NOT NULL` | account × symbol × side, child slices |
 | `view/fix42/exposure/children_by_parent` | view over `sow/fix42/orders`, grouped `/9000` | parent ClOrdID: its slices rolled up |
+| `view/fix42/recon/parent_vs_child` | join of `exposure/parent` and `exposure/child` on account × symbol × side | parent group: its totals beside its slices', and the difference |
 
 Every stream is a chained/derived topic **paired with an audit topic**, and
 only the audit topics are journalled. The pairing is not decoration: per the
@@ -202,6 +203,35 @@ json view over a fix topic must qualify every reference as
 aggregates are bare, an unfilled group's `AvgPx` is simply `null`, and
 `ExposureViewIT` asserts the values without restarting the container.
 
+### Reconciliation
+
+`view/fix42/recon/parent_vs_child` joins the parent and child exposure views
+on account × symbol × side and projects both sides next to their difference:
+`ParentCumQty`, `ChildCumQty`, `CumQtyDelta`, and the same for `LeavesQty`
+and `Orders`. It is declared last in the config because a join view's
+underlying topics must be defined before it.
+
+```
+view/fix42/recon/parent_vs_child  {"Account":"ACC-INSTL-02","Symbol":"TSLA","Side":"1","ParentOrders":1,"ChildOrders":2,
+                                   "ParentCumQty":16000.0,"ChildCumQty":16000.0,"CumQtyDelta":0.0,
+                                   "ParentLeavesQty":0.0,"ChildLeavesQty":0.0,"LeavesQtyDelta":0.0}
+```
+
+The join is LEFT OUTER from the parent view, so a parent group with no slices
+keeps its row with `null` in every child column and both deltas. And a join
+view takes no `<Filter>`, so the breaks are selected by the reader:
+
+```
+sow view/fix42/recon/parent_vs_child  filter: /ChildCumQty IS NOT NULL AND /CumQtyDelta != 0
+```
+
+is empty on the scripted flow. `ReconViewIT` then publishes one fill on a
+child slice that its parent never mirrors and reads the same query back, live,
+as exactly one row with `CumQtyDelta -1000`. The key is right only when every
+parent in a group is sliced; the per-parent version of this check would need
+the parent's root ClOrdID kept on the blotter, and is not built — see the
+[reconciliation section of docs/fix42-view/08](../docs/fix42-view/08-exposure-views.md#reconciling-the-two-levels-viewfix42reconparent_vs_child).
+
 ## What this still does *not* give you
 
 A stale or duplicate execution report merges unconditionally: nothing here
@@ -218,9 +248,9 @@ measurements behind this section in
 ## Tests
 
 ```bash
-./gradlew :fix42-publisher:test              # 102 unit tests, no server needed
+./gradlew :fix42-publisher:test              # 103 unit tests, no server needed
 AMPS_IMAGE=<your-image> \
-  ./gradlew :fix42-publisher:integrationTest # 38 tests against a real container
+  ./gradlew :fix42-publisher:integrationTest # 40 tests against a real container
 ```
 
 Each integration test class starts its own AMPS instance. They **skip** rather

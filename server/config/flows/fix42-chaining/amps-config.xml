@@ -28,7 +28,10 @@
 
   Above the blotter, three json views (view/fix42/exposure/*) aggregate it
   by account, symbol and side: exposure per desk, with the parent and child
-  levels kept apart. Declared at the end of the SOW block.
+  levels kept apart. A fourth (view/fix42/recon/parent_vs_child) joins the
+  parent level to the child level and projects the difference, so a group
+  whose slices disagree with their parent is one filtered query away.
+  Declared at the end of the SOW block, the join last.
 -->
 <AMPSConfig>
 
@@ -294,6 +297,65 @@
             </Projection>
             <Grouping>
                 <Field>[fix].[sow/fix42/orders]./9000</Field>
+            </Grouping>
+        </View>
+
+        <!-- ===== reconciliation: the parent level against the child level =====
+             A join of the two exposure views on account x symbol x side: one
+             row per parent group, the child group's totals beside the parent's,
+             and the difference projected as /CumQtyDelta and /LeavesQtyDelta.
+             Declared AFTER the views it joins, deliberately: a join view's
+             underlying topics must be defined earlier in the file.
+
+             The join is a LEFT OUTER join from the first topic named. A parent
+             group with no child slices (every mock parent but TSLA) keeps its
+             row, with JSON null in every child column and so in both deltas.
+             A row whose child columns are populated and whose deltas are zero
+             reconciles; a break is a row with
+
+               /ChildCumQty IS NOT NULL AND /CumQtyDelta != 0
+
+             That selection belongs to the READER, not the view: <Filter> is
+             not supported on a multi-topic (join) view on this build, so the
+             view carries every parent group and a sow query with that filter
+             picks out the breaks. ReconViewIT does exactly that, live.
+
+             Account x symbol x side is the right key only when every parent
+             in a group is sliced; a group mixing sliced and unsliced parents
+             breaks by construction. A per-parent reconciliation
+             (children_by_parent against the parent's own record) would need
+             the parent's root ClOrdID kept on the blotter, since tag 11
+             rotates on every amend, and is not built.
+
+             The deltas are plain subtractions with no IF() around them, for
+             the reason the exposure views keep their aggregates bare; null
+             arithmetic already yields null, so there is nothing to guard.
+        -->
+        <View>
+            <Name>view/fix42/recon/parent_vs_child</Name>
+            <MessageType>json</MessageType>
+            <UnderlyingTopic>
+                <Join>[view/fix42/exposure/parent]./Account = [view/fix42/exposure/child]./Account</Join>
+                <Join>[view/fix42/exposure/parent]./Symbol = [view/fix42/exposure/child]./Symbol</Join>
+                <Join>[view/fix42/exposure/parent]./Side = [view/fix42/exposure/child]./Side</Join>
+            </UnderlyingTopic>
+            <Projection>
+                <Field>[view/fix42/exposure/parent]./Account AS /Account</Field>
+                <Field>[view/fix42/exposure/parent]./Symbol AS /Symbol</Field>
+                <Field>[view/fix42/exposure/parent]./Side AS /Side</Field>
+                <Field>[view/fix42/exposure/parent]./Orders AS /ParentOrders</Field>
+                <Field>[view/fix42/exposure/child]./Orders AS /ChildOrders</Field>
+                <Field>[view/fix42/exposure/parent]./CumQty AS /ParentCumQty</Field>
+                <Field>[view/fix42/exposure/child]./CumQty AS /ChildCumQty</Field>
+                <Field>[view/fix42/exposure/parent]./CumQty - [view/fix42/exposure/child]./CumQty AS /CumQtyDelta</Field>
+                <Field>[view/fix42/exposure/parent]./LeavesQty AS /ParentLeavesQty</Field>
+                <Field>[view/fix42/exposure/child]./LeavesQty AS /ChildLeavesQty</Field>
+                <Field>[view/fix42/exposure/parent]./LeavesQty - [view/fix42/exposure/child]./LeavesQty AS /LeavesQtyDelta</Field>
+            </Projection>
+            <Grouping>
+                <Field>[view/fix42/exposure/parent]./Account</Field>
+                <Field>[view/fix42/exposure/parent]./Symbol</Field>
+                <Field>[view/fix42/exposure/parent]./Side</Field>
             </Grouping>
         </View>
 

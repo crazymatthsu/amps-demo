@@ -10,16 +10,20 @@ probe runs each; they are the reason the note exists.
 
 ## What was built
 
-Three json-typed views in
-[`amps-config.xml`](../../server/config/flows/fix42-chaining/amps-config.xml),
-all over `sow/fix42/orders`, read back by
-[`ExposureViewIT`](../../fix42-publisher/src/integrationTest/java/com/demo/amps/fix42/it/ExposureViewIT.java):
+Four json-typed views in
+[`amps-config.xml`](../../server/config/flows/fix42-chaining/amps-config.xml):
+three over `sow/fix42/orders`, read back by
+[`ExposureViewIT`](../../fix42-publisher/src/integrationTest/java/com/demo/amps/fix42/it/ExposureViewIT.java),
+and a join of the first two, read back by
+[`ReconViewIT`](../../fix42-publisher/src/integrationTest/java/com/demo/amps/fix42/it/ReconViewIT.java)
+and described in [its own section](#reconciling-the-two-levels-viewfix42reconparent_vs_child) below:
 
 | view | filter | grouped by | one row per |
 | --- | --- | --- | --- |
 | `view/fix42/exposure/parent` | `/9000 IS NULL` | `/1`, `/55`, `/54` | account × symbol × side, parent orders |
 | `view/fix42/exposure/child` | `/9000 IS NOT NULL` | `/1`, `/55`, `/54` | account × symbol × side, child slices |
 | `view/fix42/exposure/children_by_parent` | `/9000 IS NOT NULL` | `/9000` | parent ClOrdID: its slices rolled up |
+| `view/fix42/recon/parent_vs_child` | none (a join takes no `<Filter>`) | `/Account`, `/Symbol`, `/Side` of the parent view | parent group: its totals beside its slices', and the difference |
 
 Every row projects `/Orders` (`COUNT(/11)`), `/OrderQty` (`SUM(/38)`),
 `/LeavesQty` (`SUM(/151)`), `/CumQty` (`SUM(/14)`) and `/AvgPx` as
@@ -133,3 +137,103 @@ division over the slices' rounded averages.
 
 Side is projected as FIX spells it (`1` buy, `2` sell); the table above
 translates for readability only.
+
+## Reconciling the two levels: `view/fix42/recon/parent_vs_child`
+
+`children_by_parent` gives a reader the numbers to compare against a parent's
+record; it does not do the comparison. The fourth view does, one level up:
+it joins the parent exposure view to the child exposure view on account,
+symbol and side, and projects both sides and their difference.
+
+```xml
+<View>
+    <Name>view/fix42/recon/parent_vs_child</Name>
+    <MessageType>json</MessageType>
+    <UnderlyingTopic>
+        <Join>[view/fix42/exposure/parent]./Account = [view/fix42/exposure/child]./Account</Join>
+        <Join>[view/fix42/exposure/parent]./Symbol = [view/fix42/exposure/child]./Symbol</Join>
+        <Join>[view/fix42/exposure/parent]./Side = [view/fix42/exposure/child]./Side</Join>
+    </UnderlyingTopic>
+    <Projection>
+        <Field>[view/fix42/exposure/parent]./Account AS /Account</Field>
+        ...
+        <Field>[view/fix42/exposure/parent]./CumQty AS /ParentCumQty</Field>
+        <Field>[view/fix42/exposure/child]./CumQty AS /ChildCumQty</Field>
+        <Field>[view/fix42/exposure/parent]./CumQty - [view/fix42/exposure/child]./CumQty AS /CumQtyDelta</Field>
+        ...
+    </Projection>
+    <Grouping>
+        <Field>[view/fix42/exposure/parent]./Account</Field>
+        <Field>[view/fix42/exposure/parent]./Symbol</Field>
+        <Field>[view/fix42/exposure/parent]./Side</Field>
+    </Grouping>
+</View>
+```
+
+Three things about it were established on 5.3.5.135 the same way as the
+findings above, by running it rather than reading about it.
+
+**It must be declared after the views it joins.** A join view's underlying
+topics have to be defined earlier in the file, so it closes the `<SOW>`
+block. Both sides are json, so the references need no `[json].` type
+qualifier, unlike the cross-type views above.
+
+**Finding 4: the join is a LEFT OUTER join from the first topic named.** Every
+parent group has a row. The six parents with no slices (all but TSLA) carry
+JSON `null` in every child column, and a subtraction over a null is null, so
+their deltas are null too. TSLA carries both levels and reconciles with
+`CumQtyDelta` and `LeavesQtyDelta` of `0.0`. That is the right behaviour for
+a reconciliation, because a parent that has lost all its slices should stay
+visible, but it does mean the view cannot by itself say "here are the
+breaks".
+
+**Finding 5: a join view takes no `<Filter>`**, so the break selection belongs
+to the reader. A `sow` query on the view with
+
+```
+/ChildCumQty IS NOT NULL AND /CumQtyDelta != 0
+```
+
+returns the rows whose child level exists and disagrees. `IS NOT NULL` is
+what keeps the unsliced parents out: a null delta is "nothing to reconcile",
+not a break. On the clean scripted flow the query returns no rows.
+
+**What the test pins.** `ReconViewIT` reads the view twice, live and without a
+restart, on the same container. First the clean flow, where the query above
+is empty and the TSLA row reads:
+
+| | Orders | CumQty | LeavesQty |
+| --- | ---: | ---: | ---: |
+| parent | 1 | 16000 | 0 |
+| child | 2 | 16000 | 0 |
+| delta | | 0 | 0 |
+
+Then it publishes, through the publisher's own fix connection, one report the
+mock never sends: a further partial fill on the cancelled slice B, abridged
+to the tags that matter here
+(`35=8|11=CHILD-TSLA-B-2|37=ORD-CHILD-TSLA-B|17=EXEC-CHILD-TSLA-B-99|39=1|150=1|38=8000|14=5000|151=3000|6=242.1|32=1000|31=242.1`),
+with no matching partial on the parent. The `exec-partial-fill` route merges
+it onto slice B's blotter record, the child view's TSLA row moves to 17000,
+and the same query then returns exactly one row:
+
+| | Orders | CumQty | LeavesQty |
+| --- | ---: | ---: | ---: |
+| parent | 1 | 16000 | 0 |
+| child | 2 | 17000 | 3000 |
+| delta | | -1000 | -3000 |
+
+The other six rows are unchanged. A break is a row's columns moving, never a
+row appearing or disappearing.
+
+**What the key does and does not cover.** Account × symbol × side is the
+right reconciliation key only when every parent in a group is sliced. A group
+that mixes a sliced parent with an unsliced one under the same account,
+symbol and side breaks by construction, because the unsliced parent's fills
+have no child counterpart. The finer check, each parent's own record against
+`children_by_parent`, would need the parent's *root* ClOrdID retained on the
+blotter: `children_by_parent` groups on tag 9000, which names the ClOrdID the
+slices were opened under, while the parent record's tag 11 rotates on every
+amend and tag 9014 follows the working id. Neither is stable across the
+chain, so a join between them has nothing to join on. That is a small blotter
+change (one more field stamped from the `35=D` and never rewritten) and is
+not built.

@@ -33,8 +33,24 @@ final class ViewReader {
 
     /** Every record currently held by {@code view}. */
     List<JsonObject> records(String view) throws Exception {
+        return records(view, null);
+    }
+
+    /**
+     * The records of {@code view} matching {@code filter}, or all of them when
+     * it is null.
+     *
+     * <p>This is how a join view is selected from. {@code <Filter>} is not
+     * supported on a multi-topic view, so a view that joins two others carries
+     * every row, and a reader that wants only some of them (the breaks of the
+     * reconciliation view) passes the condition on the query instead.
+     */
+    List<JsonObject> records(String view, String filter) throws Exception {
         List<JsonObject> records = new ArrayList<>();
         Command command = new Command("sow").setTopic(view).setTimeout(timeoutMs);
+        if (filter != null) {
+            command.setFilter(filter);
+        }
         try (MessageStream stream = client.execute(command)) {
             for (Message message : stream) {
                 if (message.getCommand() == Message.Command.GroupEnd) {
@@ -60,6 +76,19 @@ final class ViewReader {
         JsonElement element = record.get(field);
         if (element == null || element.isJsonNull()) {
             throw new AssertionError("no numeric field " + field + " in " + record);
+        }
+        return element.getAsBigDecimal().longValueExact();
+    }
+
+    /**
+     * A whole-number field of a view record, or {@code null} when the view
+     * rendered it as JSON null -- which is what a join view's columns from the
+     * second topic hold for a row the first topic has and the second does not.
+     */
+    static Long quantityOrNull(JsonObject record, String field) {
+        JsonElement element = record.get(field);
+        if (element == null || element.isJsonNull()) {
+            return null;
         }
         return element.getAsBigDecimal().longValueExact();
     }
