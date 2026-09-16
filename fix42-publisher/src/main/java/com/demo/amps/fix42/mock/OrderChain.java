@@ -346,6 +346,55 @@ public final class OrderChain {
     }
 
     /**
+     * 35=8 with 150=C/39=C -- expired: a GTD order past its ExpireTime, or a
+     * day order at the close. The unfilled balance stops working, so
+     * LeavesQty goes to zero while CumQty and AvgPx keep what the fills
+     * established. Terminal.
+     */
+    public OrderChain expire() {
+        leavesQty = 0;
+        closedOut = true;
+        return record("expired",
+                execution(FixTags.ExecType.EXPIRED, FixTags.OrdStatus.EXPIRED).build());
+    }
+
+    /**
+     * 35=8 with 150=D -- the venue restates OrderQty on its own, with no
+     * request from this side, giving {@code reason} in tag 378 (5 = partial
+     * decline of OrderQty, the exchange-initiated partial cancel).
+     *
+     * <p>The report carries the restated 38 and, recomputed against it, the
+     * restated 151; CumQty and AvgPx are untouched because no fill changed.
+     * Tag 39 is the order's status as it now stands -- a restatement is not
+     * itself a status, which is why 150 does not mirror 39 here the way it
+     * does on a bust. Declining to below what has already filled is refused,
+     * and so is restating while an amend is in flight: a real venue may do
+     * either, but the mock would then be guessing which terms the venue meant
+     * to keep, and a fixture that guesses is worse than one that stops.
+     */
+    public OrderChain restateOrderQty(long newOrderQty, String reason) {
+        if (closedOut) {
+            throw new IllegalStateException("chain " + chainId
+                    + ": cannot restate a closed-out order; the stopped balance must not resurrect");
+        }
+        if (stagedOrderQty != orderQty || stagedPrice != price) {
+            throw new IllegalStateException("chain " + chainId
+                    + ": cannot restate while an amend is in flight");
+        }
+        if (newOrderQty < cumQty) {
+            throw new IllegalArgumentException("chain " + chainId + ": cannot restate OrderQty to "
+                    + newOrderQty + " with " + cumQty + " already filled");
+        }
+        orderQty = newOrderQty;
+        stagedOrderQty = newOrderQty;
+        leavesQty = orderQty - cumQty;
+        return record("restated",
+                execution(FixTags.ExecType.RESTATED, restatedStatus())
+                        .set(FixTags.EXEC_RESTATEMENT_REASON, reason)
+                        .build());
+    }
+
+    /**
      * 35=9 OrderCancelReject -- the venue refuses an F or a G.
      *
      * <p>Tag 434 says which: 1 rejects a cancel, 2 rejects a replace. Tag 39

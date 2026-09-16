@@ -9,7 +9,9 @@ import com.demo.amps.fix42.fix.FixMessage;
 import com.demo.amps.fix42.fix.FixTags;
 import com.demo.amps.fix42.fix.Prices;
 import com.demo.amps.fix42.mock.FixEvent;
+import com.demo.amps.fix42.mock.Instrument;
 import com.demo.amps.fix42.mock.MockFixFlow;
+import com.demo.amps.fix42.mock.OrderChain;
 import com.demo.amps.fix42.publish.AmpsDeltaPublisher;
 import com.demo.amps.fix42.publish.PublishPlanner;
 import com.demo.amps.testharness.AmpsFlow;
@@ -22,8 +24,11 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer.OrderAnnotation;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,10 +54,16 @@ import org.slf4j.LoggerFactory;
  *       publisher's {@code /amps/fix}.</li>
  * </ul>
  *
+ * <p>Ordered only so far as one test needs it: the last one publishes a
+ * further order and expires it, which adds a parent group the row counts
+ * above it do not expect. It carries an explicit {@code @Order} beyond
+ * {@code Order.DEFAULT}; the others are unannotated and run first.
+ *
  * <p>Skipped, not failed, when no AMPS image is configured -- see
  * {@link AmpsTestServer#unavailableReason()}.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@TestMethodOrder(OrderAnnotation.class)
 class ExposureViewIT {
 
     private static final Logger log = LoggerFactory.getLogger(ExposureViewIT.class);
@@ -97,6 +108,7 @@ class ExposureViewIT {
     private AmpsTestServer server;
     private Client fixClient;
     private Client jsonClient;
+    private AmpsDeltaPublisher publisher;
     private SowReader sow;
     private ViewReader views;
 
@@ -117,8 +129,7 @@ class ExposureViewIT {
         fixClient.connect(properties.amps().uri());
         fixClient.logon(timeoutMs);
 
-        AmpsDeltaPublisher publisher =
-                new AmpsDeltaPublisher(fixClient, new PublishPlanner(properties), properties);
+        publisher = new AmpsDeltaPublisher(fixClient, new PublishPlanner(properties), properties);
         List<FixEvent> events = MockFixFlow.events();
         for (FixEvent event : events) {
             publisher.send(event.message());
@@ -143,9 +154,11 @@ class ExposureViewIT {
 
     /**
      * A publish is acknowledged once the SOW has it; the views catch up a
-     * moment later. The last message of the flow is META's full fill, so the
-     * META row reading filled is the sign the views have processed everything
-     * ahead of it -- the update stream is ordered.
+     * moment later. The last message of the flow is NFLX's expiry, so the
+     * NFLX row reading nothing working is the sign the views have processed
+     * everything ahead of it -- the update stream is ordered. It is also the
+     * first assertion that the expiry reached the view at all: before the
+     * expiry route projected, this row read 1000 working for good.
      */
     private void awaitViewsCaughtUp() {
         Awaitility.await("exposure views caught up with the published flow")
@@ -153,13 +166,13 @@ class ExposureViewIT {
                 .pollInterval(Duration.ofMillis(250))
                 .untilAsserted(() -> {
                     List<Exposure> parents = exposures(PARENT_VIEW);
-                    assertThat(parents).hasSize(7);
+                    assertThat(parents).hasSize(8);
                     assertThat(parents)
-                            .filteredOn(row -> "META".equals(row.symbol()))
+                            .filteredOn(row -> "NFLX".equals(row.symbol()))
                             .singleElement()
-                            .satisfies(meta -> {
-                                assertThat(meta.cumQty()).isEqualTo(3_000);
-                                assertThat(meta.leavesQty()).isZero();
+                            .satisfies(netflix -> {
+                                assertThat(netflix.cumQty()).isEqualTo(1_000);
+                                assertThat(netflix.leavesQty()).isZero();
                             });
                     assertThat(exposures(CHILD_VIEW)).hasSize(1);
                     assertThat(views.records(CHILDREN_BY_PARENT_VIEW)).hasSize(1);
@@ -201,7 +214,10 @@ class ExposureViewIT {
                 // 3000 filled, first 2000 busted: restated to 1000 working 5000
                 new Exposure("ACC-INSTL-01", "AMZN", BUY, 1, 6_000, 5_000, 1_000, "210.05"),
                 // 1200 corrected to 511.95 before the closing 1800 at 512.00
-                new Exposure("ACC-HEDGE-07", "META", SELL, 1, 3_000, 0, 3_000, "511.98"));
+                new Exposure("ACC-HEDGE-07", "META", SELL, 1, 3_000, 0, 3_000, "511.98"),
+                // placed for 2500, cut to 2000 by the venue after 1000 filled,
+                // then expired: the restated 38, and 151 to zero
+                new Exposure("ACC-INSTL-02", "NFLX", BUY, 1, 2_000, 0, 1_000, "1199.5"));
     }
 
     @Test
@@ -271,11 +287,11 @@ class ExposureViewIT {
         assertThat(children.orders()).isEqualTo(2);
         assertThat(children.cumQty()).isEqualTo(16_000);
 
-        // Which is also visible in the counts: seven parent chains, two
+        // Which is also visible in the counts: eight parent chains, two
         // slices, and every blotter record in exactly one of the two views.
         long parentOrders = exposures(PARENT_VIEW).stream().mapToLong(Exposure::orders).sum();
         long childOrders = exposures(CHILD_VIEW).stream().mapToLong(Exposure::orders).sum();
-        assertThat(parentOrders).isEqualTo(7);
+        assertThat(parentOrders).isEqualTo(8);
         assertThat(childOrders).isEqualTo(2);
         assertThat(parentOrders + childOrders).isEqualTo(sow.records(ORDERS).size());
     }
@@ -311,10 +327,77 @@ class ExposureViewIT {
                 .isEqualTo(Prices.plain(Double.parseDouble(parent.value(FixTags.AVG_PX))));
     }
 
+    // ---- expiry, live ---------------------------------------------------------
+
+    @Test
+    @Order(Integer.MAX_VALUE)
+    @DisplayName("an expiry takes a group's LeavesQty to zero on the live view, with no restart")
+    void expiryDropsLeavesQtyLive() throws Exception {
+        // Runs last: it adds a parent group (ACC-TEST / NFLX) that the row
+        // counts above do not expect. Unannotated methods sort at Order.DEFAULT,
+        // which is Integer.MAX_VALUE / 2, so this one follows all of them.
+        //
+        // The scripted flow already shows the END state of an expiry; this is
+        // the transition. A fresh order is worked and partly filled, the row
+        // is read with its balance live, then the expiry alone is published
+        // and the same row is read again. The drop happens on the live
+        // update path, the one on which an aggregate inside IF() would have
+        // drifted and a restart would have hidden.
+        OrderChain chain = OrderChain.forTest("EXPIRING", Instrument.NFLX, 3_000, 1_200.00)
+                .newOrder()
+                .ack()
+                .partialFill(500, 1_199.00);
+        for (FixEvent event : chain.events()) {
+            publisher.send(event.message());
+        }
+        publisher.flush();
+
+        Awaitility.await("the working order appears in the parent view")
+                .atMost(VIEW_SETTLE_TIMEOUT)
+                .pollInterval(Duration.ofMillis(250))
+                .untilAsserted(() -> assertThat(Exposure.of(row(PARENT_VIEW, "ACC-TEST", "NFLX")))
+                        .isEqualTo(new Exposure("ACC-TEST", "NFLX", BUY, 1, 3_000, 2_500, 500,
+                                "1199")));
+
+        // Only the expiry: one delta onto the blotter, from the expiry route.
+        FixEvent expiry = chain.expire().events().getLast();
+        assertThat(expiry.message().value(FixTags.EXEC_TYPE)).isEqualTo(FixTags.ExecType.EXPIRED);
+        publisher.send(expiry.message());
+        publisher.flush();
+
+        Awaitility.await("the expiry takes the group's LeavesQty to zero")
+                .atMost(VIEW_SETTLE_TIMEOUT)
+                .pollInterval(Duration.ofMillis(250))
+                .untilAsserted(() -> assertThat(Exposure.of(row(PARENT_VIEW, "ACC-TEST", "NFLX")))
+                        .isEqualTo(new Exposure("ACC-TEST", "NFLX", BUY, 1, 3_000, 0, 500,
+                                "1199")));
+
+        // Traced to the record that moved: the blotter's own 151 is zero, and
+        // the chain did not split -- still one record, under the same id.
+        List<FixMessage> records = sow.records(ORDERS).stream()
+                .filter(record -> "EXPIRING-1".equals(record.value(FixTags.CL_ORD_ID)))
+                .toList();
+        assertThat(records).hasSize(1);
+        assertThat(records.getFirst().value(FixTags.LEAVES_QTY)).isEqualTo("0");
+        assertThat(records.getFirst().value(FixTags.ORD_STATUS))
+                .isEqualTo(FixTags.OrdStatus.EXPIRED);
+        assertThat(records.getFirst().value(FixTags.CUM_QTY)).isEqualTo("500");
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private List<Exposure> exposures(String view) throws Exception {
         return views.records(view).stream().map(Exposure::of).toList();
+    }
+
+    /** The single row of {@code view} for {@code account} and {@code symbol}, asserting there is one. */
+    private JsonObject row(String view, String account, String symbol) throws Exception {
+        List<JsonObject> matching = views.records(view).stream()
+                .filter(record -> account.equals(ViewReader.text(record, "Account")))
+                .filter(record -> symbol.equals(ViewReader.text(record, "Symbol")))
+                .toList();
+        assertThat(matching).as("exactly one %s/%s row in %s", account, symbol, view).hasSize(1);
+        return matching.getFirst();
     }
 
     /** The single row of {@code view} for {@code symbol}, asserting there is one. */

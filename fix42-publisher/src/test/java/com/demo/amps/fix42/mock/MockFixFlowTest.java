@@ -41,10 +41,12 @@ class MockFixFlowTest {
             // Busts and corrects need no branch of their own: they are gated
             // off closed-out orders and restate 151 = 38 - 14, so they satisfy
             // the working-report invariant below by construction.
-            // Terminal cancel and done-for-day zero LeavesQty by definition:
-            // the unfilled balance stops working, it is not filled.
+            // Terminal cancel, done-for-day, expiry and reject zero LeavesQty
+            // by definition: the unfilled balance stops working, it is not
+            // filled.
             boolean terminalWithZeroedLeaves = FixTags.ExecType.CANCELED.equals(execType)
                     || FixTags.ExecType.DONE_FOR_DAY.equals(execType)
+                    || FixTags.ExecType.EXPIRED.equals(execType)
                     || FixTags.ExecType.REJECTED.equals(execType);
             if (terminalWithZeroedLeaves) {
                 assertThat(message.value(FixTags.LEAVES_QTY))
@@ -255,8 +257,47 @@ class MockFixFlowTest {
                 FixTags.ExecType.FILL,            // exec-fill
                 FixTags.ExecType.CANCELED,        // exec-cancel-or-done
                 FixTags.ExecType.DONE_FOR_DAY,    // exec-cancel-or-done
-                FixTags.ExecType.REPLACED,        // exec-other
+                FixTags.ExecType.EXPIRED,         // exec-expired-or-rejected
+                FixTags.ExecType.RESTATED,        // exec-restated
+                FixTags.ExecType.REPLACED,        // exec-replace-confirm
                 FixTags.ExecType.PENDING_CANCEL); // exec-other
+    }
+
+    @Test
+    @DisplayName("the NFLX chain is cut down by the venue, then expires with nothing working")
+    void restatedThenExpiredChainEndsClosed() {
+        OrderChain netflix = MockFixFlow.chains().stream()
+                .filter(chain -> chain.chainId().equals("PARENT-NFLX"))
+                .findFirst()
+                .orElseThrow();
+        List<FixEvent> events = netflix.events();
+
+        // A GTD order, so the 35=D carries an ExpireTime for the venue to act on.
+        FixMessage order = events.getFirst().message();
+        assertThat(order.value(FixTags.TIME_IN_FORCE)).isEqualTo("6");
+        assertThat(order.has(FixTags.EXPIRE_TIME)).isTrue();
+        assertThat(order.value(FixTags.ORDER_QTY)).isEqualTo("2500");
+
+        // The restatement: 150=D with its reason, no trade fields, and the
+        // restated 38 with 151 recomputed against it while 14 stands.
+        FixMessage restated = events.get(3).message();
+        assertThat(restated.value(FixTags.EXEC_TYPE)).isEqualTo(FixTags.ExecType.RESTATED);
+        assertThat(restated.value(FixTags.ORD_STATUS))
+                .isEqualTo(FixTags.OrdStatus.PARTIALLY_FILLED);
+        assertThat(restated.value(FixTags.EXEC_RESTATEMENT_REASON)).isEqualTo("5");
+        assertThat(restated.has(FixTags.LAST_SHARES)).isFalse();
+        assertThat(restated.value(FixTags.ORDER_QTY)).isEqualTo("2000");
+        assertThat(restated.value(FixTags.CUM_QTY)).isEqualTo("1000");
+        assertThat(restated.value(FixTags.LEAVES_QTY)).isEqualTo("1000");
+
+        // The expiry: terminal, balance gone, fills kept.
+        FixMessage expired = events.getLast().message();
+        assertThat(expired.value(FixTags.EXEC_TYPE)).isEqualTo(FixTags.ExecType.EXPIRED);
+        assertThat(expired.value(FixTags.ORD_STATUS)).isEqualTo(FixTags.OrdStatus.EXPIRED);
+        assertThat(expired.value(FixTags.LEAVES_QTY)).isEqualTo("0");
+        assertThat(expired.value(FixTags.CUM_QTY)).isEqualTo("1000");
+        assertThat(expired.value(FixTags.AVG_PX)).isEqualTo("1199.5");
+        assertThat(netflix.leavesQty()).isZero();
     }
 
     @Test

@@ -157,8 +157,13 @@ fix42:
     # its key is rejected.
     #
     # The variants that RESOLVE a pending request also project onto the order
-    # blotter to clear it. Fills do not -- a fill changes quantities, not
-    # intent, and the execs topics are where quantities live.
+    # blotter to clear it, and so does every variant that MOVES a quantity or
+    # a term -- fills, restatements, and the terminal reports (cancel, done,
+    # expired, rejected) that take LeavesQty to zero. The exposure views
+    # (view/fix42/exposure/*) aggregate the blotter's 151, so a terminal
+    # report that never reaches it leaves the order counted as working
+    # exposure indefinitely. Only the pending acknowledgements (A/6/E) stay
+    # off the blotter: they change nothing yet.
 
     # Trade bust (20=1) and trade correct (20=2) -- matched on ExecTransType
     # and declared BEFORE the 150-based rules, because a 4.2 bust/correct
@@ -344,20 +349,97 @@ fix42:
       projection:
         # 151 goes to zero here and the blotter has to show it, or a cancelled
         # order still reads as working. 14/6 keep the totals the fills left.
+        #
+        # 151 is BOTH selected and stamped. A projection applies its literals
+        # last, so the stamp wins: a venue that omits LeavesQty on a cancel
+        # (some do -- the balance is gone, so why report it) would otherwise
+        # leave the last fill's 151 on the record, and the exposure views
+        # would keep counting it as working. Listing 151 in tags as well is
+        # not a conflict: the planner applies literals last, and validate()
+        # sees both as produced tags. It stays in the list to say the venue's
+        # value is expected, and to keep the payload shape obvious.
         tags: [11, 41, 39, 150, 60, 14, 151, 6]
         set-tags:
+          "151": "0"
           "9013": "NONE"
           "9010": "0"
           "9011": "0"
           "9012": "NONE"
 
-    # Everything else on a 35=8: pending new (A), pending cancel (6), pending
-    # replace (E), rejected (8), restated (D), expired (C). A catch-all rather
-    # than a gap -- an unrouted message raises at plan time, because a silent
-    # drop looks exactly like an AMPS bug from the far side.
+    # Expired (150=C) and rejected (150=8): terminal in exactly the way a
+    # cancel is. The unfilled balance stops working, so LeavesQty is zero and
+    # any request in flight is moot -- a GTD order past its ExpireTime, a day
+    # order at the close, a 35=D the venue refused (in which case this is the
+    # first and last report of the chain, and 39=8 is what the blotter keeps).
     #
-    # No blotter projection: 150=6 and 150=E ACKNOWLEDGE a pending request
-    # rather than resolving it, so the pending family must stay as it is.
+    # Declared ahead of exec-other on purpose. Before this route existed both
+    # fell into the catch-all, which has no blotter projection: the execs
+    # topics showed 151=0 while sow/fix42/orders kept the last working 151,
+    # and the exposure views summed it as live exposure until something
+    # unrelated happened to overwrite the record. Reproduced on 5.3.5.135
+    # (docs/fix42-view/10).
+    #
+    # 103 (OrdRejReason) and 58 (Text) ride to the exec topics, where a
+    # reader looks for why. Same projection as exec-cancel-or-done, same
+    # forced 151=0, and 11/41 pass through untouched -- they are the chaining
+    # key generator's inputs, so a reject on an amended chain still lands on
+    # the chain's record.
+    - name: exec-expired-or-rejected
+      msg-types: ["8"]
+      exec-types: ["C", "8"]
+      mode: DELTA
+      tags: [35, 11, 41, 37, 17, 39, 150, 60]
+      changeable-tags: [14, 151, 6, 38, 103, 58]
+      topics:
+        - "sow/fix42/execs"
+        - "sow/fix42/execs_audit"
+      projected-topics:
+        - "sow/fix42/orders"
+      projection:
+        tags: [11, 41, 39, 150, 60, 14, 151, 6]
+        set-tags:
+          "151": "0"
+          "9013": "NONE"
+          "9010": "0"
+          "9011": "0"
+          "9012": "NONE"
+
+    # Restated (150=D): the venue changed the order's terms on its own, with
+    # no request from this side -- a GT renewal, a corporate action, an
+    # exchange-initiated partial decline of OrderQty (378 says which). The
+    # report carries the restated terms and quantities as absolutes, so the
+    # blotter adopts them the way it adopts a replace confirm's: 38/44 become
+    # the acked terms, 14/151/6 the restated totals.
+    #
+    # NO pending tags, deliberately. A restatement answers no request, and
+    # an amend may be in flight while the venue restates -- both are true at
+    # once, so the proposal stays where it is until its own 150=5 or 35=9.
+    # 378 goes to the exec topics only: like 19/20 on a bust, it describes
+    # THIS report and would sit stale on the merged record.
+    - name: exec-restated
+      msg-types: ["8"]
+      exec-types: ["D"]
+      mode: DELTA
+      tags: [35, 11, 41, 37, 17, 39, 150, 60]
+      changeable-tags: [38, 44, 14, 151, 6, 378, 58]
+      topics:
+        - "sow/fix42/execs"
+        - "sow/fix42/execs_audit"
+      projected-topics:
+        - "sow/fix42/orders"
+      projection:
+        tags: [11, 41, 39, 150, 60, 38, 44, 14, 151, 6]
+
+    # Everything else on a 35=8: pending new (A), pending cancel (6), pending
+    # replace (E). A catch-all rather than a gap -- an unrouted message raises
+    # at plan time, because a silent drop looks exactly like an AMPS bug from
+    # the far side.
+    #
+    # No blotter projection: these ACKNOWLEDGE a request rather than
+    # resolving it, so the pending family must stay as it is, and they move
+    # no quantity. A new 150 value that lands here by default is worth a
+    # second look -- a terminal or restating report belongs in one of the
+    # projecting routes above, or the blotter keeps stale exposure.
     - name: exec-other
       msg-types: ["8"]
       mode: DELTA
@@ -374,8 +456,8 @@ fix42:
     #
     # On the blotter this is the case the whole pending family exists for.
     # There is nothing to revert, because 38/44 were never overwritten: the
-    # projection just clears the proposal and copies tag 41 back into tag 11,
-    # since after a rejected request the working id is the one it referenced.
+    # projection just clears the proposal. The working id needs no revert
+    # either, because a request never publishes 9014.
     - name: cancel-reject
       msg-types: ["9"]
       mode: DELTA

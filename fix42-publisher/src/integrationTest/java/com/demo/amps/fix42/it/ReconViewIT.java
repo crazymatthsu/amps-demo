@@ -176,10 +176,10 @@ class ReconViewIT {
     /**
      * A publish is acknowledged once the SOW has it; the exposure views catch
      * up a moment later, and the join a moment after that. The last message of
-     * the flow is META's full fill, so META reading filled on the parent side
-     * is the sign the parent level has processed everything ahead of it; the
-     * TSLA row carrying its child level is the sign the child side, and the
-     * join over it, have too.
+     * the flow is NFLX's expiry, so NFLX reading nothing working on the parent
+     * side is the sign the parent level has processed everything ahead of it;
+     * the TSLA row carrying its child level is the sign the child side, and
+     * the join over it, have too.
      */
     private void awaitViewCaughtUp() {
         Awaitility.await("reconciliation view caught up with the published flow")
@@ -187,13 +187,13 @@ class ReconViewIT {
                 .pollInterval(Duration.ofMillis(250))
                 .untilAsserted(() -> {
                     List<Recon> rows = recon();
-                    assertThat(rows).hasSize(7);
+                    assertThat(rows).hasSize(8);
                     assertThat(rows)
-                            .filteredOn(row -> "META".equals(row.symbol()))
+                            .filteredOn(row -> "NFLX".equals(row.symbol()))
                             .singleElement()
-                            .satisfies(meta -> {
-                                assertThat(meta.parentCumQty()).isEqualTo(3_000);
-                                assertThat(meta.parentLeavesQty()).isZero();
+                            .satisfies(netflix -> {
+                                assertThat(netflix.parentCumQty()).isEqualTo(1_000);
+                                assertThat(netflix.parentLeavesQty()).isZero();
                             });
                     assertThat(rows)
                             .filteredOn(row -> "TSLA".equals(row.symbol()))
@@ -220,9 +220,9 @@ class ReconViewIT {
     @DisplayName("the scripted flow reconciles: TSLA agrees at both levels, the rest have no child level")
     void cleanFlowReconciles() throws Exception {
         // One row per parent group, the parent columns from the parent view.
-        // Six of the seven have no slices, and the join being LEFT OUTER from
-        // the parent view keeps their rows with null child columns and null
-        // deltas rather than dropping them. TSLA, the one sliced parent,
+        // Seven of the eight have no slices, and the join being LEFT OUTER
+        // from the parent view keeps their rows with null child columns and
+        // null deltas rather than dropping them. TSLA, the one sliced parent,
         // carries both levels and they agree: its parent reports one partial
         // per child fill, so the deltas are zero.
         assertThat(recon()).containsExactlyInAnyOrder(
@@ -232,7 +232,8 @@ class ReconViewIT {
                 Recon.unsliced("ACC-HEDGE-07", "NVDA", BUY, 1, 1_000, 0),
                 Recon.sliced("ACC-INSTL-02", "TSLA", BUY, 1, 2, 16_000, 16_000, 0, 0),
                 Recon.unsliced("ACC-INSTL-01", "AMZN", BUY, 1, 1_000, 5_000),
-                Recon.unsliced("ACC-HEDGE-07", "META", SELL, 1, 3_000, 0));
+                Recon.unsliced("ACC-HEDGE-07", "META", SELL, 1, 3_000, 0),
+                Recon.unsliced("ACC-INSTL-02", "NFLX", BUY, 1, 1_000, 0));
 
         // And the reader's break query, which is how a desk would watch this
         // view, finds nothing to report.
@@ -297,13 +298,13 @@ class ReconViewIT {
                 .isEqualTo(-1_000);
         assertThat(tesla.leavesQtyDelta()).isEqualTo(-3_000);
 
-        // The other six rows are untouched: still one row each, still nothing
-        // on the child side. The break is a row's columns changing, never a
-        // row appearing or disappearing.
+        // The other seven rows are untouched: still one row each, still
+        // nothing on the child side. The break is a row's columns changing,
+        // never a row appearing or disappearing.
         List<Recon> rows = recon();
-        assertThat(rows).hasSize(7);
+        assertThat(rows).hasSize(8);
         assertThat(rows).filteredOn(row -> !"TSLA".equals(row.symbol()))
-                .hasSize(6)
+                .hasSize(7)
                 .allSatisfy(row -> {
                     assertThat(row.childCumQty()).isNull();
                     assertThat(row.cumQtyDelta()).isNull();

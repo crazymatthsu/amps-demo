@@ -102,12 +102,12 @@ class Fix42DeltaPublishIT {
     void chainCollapsesToOneRecord() throws Exception {
         List<FixMessage> orders = sow.records(ORDERS);
 
-        // Nine chains (seven parents, two child slices) published D/G/F under
-        // fifteen distinct ClOrdIDs; the chaining key generator resolves 11/41
+        // Ten chains (eight parents, two child slices) published D/G/F under
+        // sixteen distinct ClOrdIDs; the chaining key generator resolves 11/41
         // back to one key per chain.
         assertThat(orders)
                 .as("one record per order chain, not one per ClOrdID")
-                .hasSize(9);
+                .hasSize(10);
 
         Map<String, FixMessage> audit = sow.recordsBy(ORDERS_AUDIT, FixTags.CL_ORD_ID);
         assertThat(audit.keySet())
@@ -189,8 +189,8 @@ class Fix42DeltaPublishIT {
         List<FixMessage> orders = sow.records(ORDERS);
 
         assertThat(orders.stream().filter(record -> !record.has(FixTags.PARENT_ORDER_ID)))
-                .as("seven parent chains, none carrying a parent link")
-                .hasSize(7);
+                .as("eight parent chains, none carrying a parent link")
+                .hasSize(8);
         assertThat(orders.stream().filter(record -> record.has(FixTags.PARENT_ORDER_ID)))
                 .as("two child slices, each carrying one")
                 .hasSize(2);
@@ -203,8 +203,8 @@ class Fix42DeltaPublishIT {
     void execsHoldLatestPerOrder() throws Exception {
         Map<String, FixMessage> execs = sow.recordsBy(EXECS, FixTags.ORDER_ID);
 
-        // One per chain that ever reached the venue -- all nine.
-        assertThat(execs).hasSize(9);
+        // One per chain that ever reached the venue -- all ten.
+        assertThat(execs).hasSize(10);
 
         FixMessage apple = execs.get("ORD-PARENT-AAPL");
         assertThat(apple).isNotNull();
@@ -228,6 +228,14 @@ class Fix42DeltaPublishIT {
         assertThat(amazon.value(FixTags.EXEC_REF_ID)).isEqualTo("EXEC-PARENT-AMZN-2");
         assertThat(amazon.value(FixTags.CUM_QTY)).isEqualTo("1000");
         assertThat(amazon.value(FixTags.ORD_STATUS)).isEqualTo(FixTags.OrdStatus.PARTIALLY_FILLED);
+
+        // NFLX's latest report is the expiry. This topic always showed it;
+        // the blotter, until the expiry route projected, did not.
+        FixMessage netflix = execs.get("ORD-PARENT-NFLX");
+        assertThat(netflix.value(FixTags.EXEC_TYPE)).isEqualTo(FixTags.ExecType.EXPIRED);
+        assertThat(netflix.value(FixTags.ORD_STATUS)).isEqualTo(FixTags.OrdStatus.EXPIRED);
+        assertThat(netflix.value(FixTags.LEAVES_QTY)).isEqualTo("0");
+        assertThat(netflix.value(FixTags.CUM_QTY)).isEqualTo("1000");
     }
 
     @Test
@@ -435,6 +443,71 @@ class Fix42DeltaPublishIT {
         assertThat(correct.value(FixTags.LAST_SHARES)).isEqualTo("1200");
         assertThat(correct.value(FixTags.LAST_PX)).isEqualTo("511.95");
         assertThat(correct.value(FixTags.AVG_PX)).isEqualTo("511.95");
+    }
+
+    // ---- expiry and restatement ---------------------------------------------
+
+    @Test
+    @DisplayName("an expired order's blotter record ends with nothing working")
+    void expiredOrderEndsWithNothingWorkingOnTheBlotter() throws Exception {
+        // NFLX filled 1000 and then expired. The expiry (150=C) is the last
+        // report of the chain, and the one the old catch-all never projected:
+        // the record would still read 151=1000 -- the balance the restatement
+        // left working -- and the exposure views over it would carry those
+        // shares as live exposure until something else touched the record.
+        FixMessage netflix = chainRecord(ORDERS, "NFLX");
+
+        assertThat(netflix.value(FixTags.LEAVES_QTY))
+                .as("the expiry projected onto the blotter")
+                .isEqualTo("0");
+        assertThat(netflix.value(FixTags.ORD_STATUS)).isEqualTo(FixTags.OrdStatus.EXPIRED);
+        assertThat(netflix.value(FixTags.EXEC_TYPE)).isEqualTo(FixTags.ExecType.EXPIRED);
+        // The fills are untouched: 1000 done at 1199.50.
+        assertThat(netflix.value(FixTags.CUM_QTY)).isEqualTo("1000");
+        assertThat(netflix.value(FixTags.AVG_PX)).isEqualTo("1199.5");
+        // Terminal, so nothing can be pending.
+        assertThat(netflix.value(FixTags.PENDING_ACTION)).isEqualTo(FixTags.PendingAction.NONE);
+        assertThat(netflix.value(FixTags.PENDING_ORDER_QTY)).isEqualTo("0");
+        assertThat(netflix.value(FixTags.PENDING_CL_ORD_ID)).isEqualTo("NONE");
+        // The working id is what the ack confirmed; an expiry confirms nothing.
+        assertThat(netflix.value(FixTags.WORKING_CL_ORD_ID)).isEqualTo("PARENT-NFLX-1");
+        // And the 35=D's own terms are still there, ExpireTime included.
+        assertThat(netflix.value(FixTags.TIME_IN_FORCE)).isEqualTo("6");
+        assertThat(netflix.has(FixTags.EXPIRE_TIME)).isTrue();
+        assertThat(netflix.value(FixTags.SYMBOL)).isEqualTo("NFLX");
+
+        // The blotter now agrees with the venue's own latest report.
+        FixMessage venueView = sow.recordsBy(EXECS, FixTags.ORDER_ID).get("ORD-PARENT-NFLX");
+        assertThat(venueView.value(FixTags.LEAVES_QTY)).isEqualTo(netflix.value(FixTags.LEAVES_QTY));
+        assertThat(venueView.value(FixTags.ORD_STATUS)).isEqualTo(netflix.value(FixTags.ORD_STATUS));
+    }
+
+    @Test
+    @DisplayName("a venue restatement's terms reach the blotter; its reason stays on the exec topics")
+    void restatedTermsReachTheBlotter() throws Exception {
+        // NFLX was placed for 2500 and the venue cut it to 2000 (150=D, 378=5)
+        // after 1000 had filled. The 35=D wrote 38=2500; only the restated
+        // report can move it, and only if 150=D projects.
+        FixMessage netflix = chainRecord(ORDERS, "NFLX");
+
+        assertThat(netflix.value(FixTags.ORDER_QTY))
+                .as("the restated OrderQty, not the 35=D's")
+                .isEqualTo("2000");
+        assertThat(netflix.value(FixTags.PRICE)).isEqualTo("1200");
+        // The reason describes that report, and would sit stale on the merged
+        // record: it goes to the exec topics only.
+        assertThat(netflix.has(FixTags.EXEC_RESTATEMENT_REASON)).isFalse();
+
+        Map<String, FixMessage> audit = sow.recordsBy(EXECS_AUDIT, FixTags.EXEC_ID);
+        FixMessage restated = audit.get("EXEC-PARENT-NFLX-3");
+        assertThat(restated.value(FixTags.EXEC_TYPE)).isEqualTo(FixTags.ExecType.RESTATED);
+        assertThat(restated.value(FixTags.EXEC_RESTATEMENT_REASON)).isEqualTo("5");
+        assertThat(restated.value(FixTags.ORDER_QTY)).isEqualTo("2000");
+        assertThat(restated.value(FixTags.CUM_QTY)).isEqualTo("1000");
+        assertThat(restated.value(FixTags.LEAVES_QTY)).isEqualTo("1000");
+        assertThat(restated.has(FixTags.LAST_SHARES))
+                .as("a restatement reports no trade")
+                .isFalse();
     }
 
     // ---- the pending-state family -------------------------------------------

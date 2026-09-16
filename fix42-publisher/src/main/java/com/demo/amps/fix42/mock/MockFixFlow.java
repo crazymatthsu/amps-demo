@@ -6,9 +6,10 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * The scripted FIX 4.2 flow this demo publishes: nine order chains covering
+ * The scripted FIX 4.2 flow this demo publishes: ten order chains covering
  * every message type, both order scopes, and every execution outcome the
- * publisher has a routing rule for -- trade busts and corrects included.
+ * publisher has a routing rule for -- trade busts and corrects, an unasked
+ * restatement, and an expiry included.
  *
  * <p>Deterministic by construction -- no randomness, no wall clock -- so the
  * integration test can assert exact stored records, and two runs against a
@@ -34,6 +35,9 @@ import java.util.stream.Stream;
  *       <td>D, ack, two partials, then a trade bust (20=1) of the first</td></tr>
  *   <tr><td>PARENT-META</td><td>parent</td>
  *       <td>D, ack, partial, trade correct (20=2) of its price, full fill</td></tr>
+ *   <tr><td>PARENT-NFLX</td><td>parent</td>
+ *       <td>GTD D, ack, partial, OrderQty restated down by the venue (150=D),
+ *       then expired (150=C)</td></tr>
  * </table>
  */
 public final class MockFixFlow {
@@ -62,7 +66,8 @@ public final class MockFixFlow {
                 teslaChildAmendedAndFilled(),
                 teslaChildCancelled(),
                 amazonFillBusted(),
-                metaFillCorrected());
+                metaFillCorrected(),
+                netflixRestatedThenExpired());
     }
 
     /**
@@ -196,6 +201,28 @@ public final class MockFixFlow {
                 .fill(512.00);
     }
 
+    /**
+     * A good-till-date order the venue first cuts down and then lets expire.
+     *
+     * <p>Two reports the catch-all route used to swallow, each pinned by what
+     * the blotter would show without its projection. The restatement (150=D,
+     * 378=5: partial decline of OrderQty) takes 38 from 2500 to 2000, so
+     * LeavesQty is 1000 against the 1000 filled -- the record would read
+     * 38=2500 and 151=1500 if the restated absolutes never reached it. Then
+     * the expiry (150=C) zeroes LeavesQty; without it the blotter and the
+     * exposure views would carry those 1000 shares as working exposure
+     * indefinitely, while the execs topic showed the order expired.
+     */
+    private static OrderChain netflixRestatedThenExpired() {
+        return parent("PARENT-NFLX", Instrument.NFLX, "ACC-INSTL-02", "TRADER-CM", "1",
+                2_500, 1_200.00, "6")
+                .newOrder()
+                .ack()
+                .partialFill(1_000, 1_199.50)
+                .restateOrderQty(2_000, "5")
+                .expire();
+    }
+
     // ---- chain factories ----------------------------------------------------
 
     private static OrderChain parent(String chainId, Instrument instrument, String account,
@@ -225,6 +252,6 @@ public final class MockFixFlow {
     private static List<String> chainOrder() {
         return Stream.of("PARENT-AAPL", "PARENT-MSFT", "PARENT-GOOG", "PARENT-NVDA",
                 "PARENT-TSLA", "CHILD-TSLA-A", "CHILD-TSLA-B",
-                "PARENT-AMZN", "PARENT-META").toList();
+                "PARENT-AMZN", "PARENT-META", "PARENT-NFLX").toList();
     }
 }

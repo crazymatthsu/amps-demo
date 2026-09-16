@@ -189,6 +189,25 @@ class FillArithmeticTest {
         }
 
         @Test
+        @DisplayName("an expiry behaves like a cancel: history kept, nothing left working")
+        void expiryPreservesHistory() {
+            FixMessage expired = OrderChain
+                    .forTest("LAPSED", Instrument.NFLX, 2_500, 1_200.00)
+                    .newOrder()
+                    .ack()
+                    .partialFill(1_000, 1_199.50)
+                    .expire()
+                    .events().getLast().message();
+
+            assertThat(expired.value(FixTags.EXEC_TYPE)).isEqualTo(FixTags.ExecType.EXPIRED);
+            assertThat(expired.value(FixTags.ORD_STATUS)).isEqualTo(FixTags.OrdStatus.EXPIRED);
+            assertThat(expired.has(FixTags.LAST_SHARES)).isFalse();
+            assertThat(expired.value(FixTags.CUM_QTY)).isEqualTo("1000");
+            assertThat(expired.value(FixTags.LEAVES_QTY)).isEqualTo("0");
+            assertThat(expired.value(FixTags.AVG_PX)).isEqualTo("1199.5");
+        }
+
+        @Test
         @DisplayName("a pending-cancel acknowledgement changes no quantity at all")
         void pendingCancelChangesNothing() {
             List<FixEvent> events = OrderChain
@@ -378,6 +397,84 @@ class FillArithmeticTest {
             assertThatThrownBy(() -> cancelled.bust(1))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("closed out");
+        }
+    }
+
+    /**
+     * A restatement (150=D) changes the order's terms without a fill: the
+     * venue restates OrderQty, and LeavesQty follows from it while CumQty and
+     * AvgPx stand.
+     */
+    @Nested
+    @DisplayName("restatements (ExecType 150=D)")
+    class Restatements {
+
+        @Test
+        @DisplayName("a partial decline of OrderQty restates LeavesQty against the new quantity")
+        void partialDeclineRestatesLeavesQty() {
+            FixMessage restated = OrderChain
+                    .forTest("DECLINED", Instrument.NFLX, 2_500, 1_200.00)
+                    .newOrder()
+                    .ack()
+                    .partialFill(1_000, 1_199.50)
+                    .restateOrderQty(2_000, "5")
+                    .events().getLast().message();
+
+            assertThat(restated.value(FixTags.EXEC_TYPE)).isEqualTo(FixTags.ExecType.RESTATED);
+            assertThat(restated.value(FixTags.EXEC_RESTATEMENT_REASON)).isEqualTo("5");
+            // 39 is the status the order still has; a restatement is not one.
+            assertThat(restated.value(FixTags.ORD_STATUS))
+                    .isEqualTo(FixTags.OrdStatus.PARTIALLY_FILLED);
+            assertThat(restated.value(FixTags.ORDER_QTY)).isEqualTo("2000");
+            assertThat(restated.value(FixTags.CUM_QTY)).isEqualTo("1000");
+            assertThat(restated.value(FixTags.LEAVES_QTY)).isEqualTo("1000");   // 2000 - 1000
+            assertThat(restated.value(FixTags.AVG_PX)).isEqualTo("1199.5");
+            // No trade happened, so no trade fields.
+            assertThat(restated.has(FixTags.LAST_SHARES)).isFalse();
+            assertThat(restated.has(FixTags.LAST_PX)).isFalse();
+        }
+
+        @Test
+        @DisplayName("a fill after a restatement works against the restated balance")
+        void subsequentFillUsesTheRestatedBalance() {
+            OrderChain chain = OrderChain
+                    .forTest("RESTATED-THEN-FILLED", Instrument.NFLX, 2_500, 1_200.00)
+                    .newOrder()
+                    .ack()
+                    .partialFill(1_000, 1_199.50)
+                    .restateOrderQty(2_000, "5");
+
+            assertThatThrownBy(() -> chain.partialFill(1_500, 1_199.00))
+                    .as("only 1000 is working after the decline")
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            FixMessage fill = chain.fill(1_199.00).events().getLast().message();
+            assertThat(fill.value(FixTags.LAST_SHARES)).isEqualTo("1000");
+            assertThat(fill.value(FixTags.CUM_QTY)).isEqualTo("2000");
+            assertThat(fill.value(FixTags.LEAVES_QTY)).isEqualTo("0");
+            assertThat(fill.value(FixTags.ORD_STATUS)).isEqualTo(FixTags.OrdStatus.FILLED);
+        }
+
+        @Test
+        @DisplayName("a restatement the mock cannot make consistent is refused loudly")
+        void restatementGuards() {
+            OrderChain filled = OrderChain.forTest("GUARD-D", Instrument.NFLX, 2_500, 1_200.00)
+                    .newOrder().ack().partialFill(1_000, 1_199.50);
+            assertThatThrownBy(() -> filled.restateOrderQty(900, "5"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("already filled");
+
+            OrderChain amending = OrderChain.forTest("GUARD-E", Instrument.NFLX, 2_500, 1_200.00)
+                    .newOrder().ack().amend(3_000, 1_201.00);
+            assertThatThrownBy(() -> amending.restateOrderQty(2_000, "5"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("amend is in flight");
+
+            OrderChain expired = OrderChain.forTest("GUARD-F", Instrument.NFLX, 2_500, 1_200.00)
+                    .newOrder().ack().expire();
+            assertThatThrownBy(() -> expired.restateOrderQty(2_000, "5"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("closed-out");
         }
     }
 

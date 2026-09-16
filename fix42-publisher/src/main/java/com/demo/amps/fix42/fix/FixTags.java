@@ -145,6 +145,13 @@ public final class FixTags {
     public static final int EXPIRE_TIME = 126;
     public static final int EXEC_TYPE = 150;
     public static final int LEAVES_QTY = 151;
+    /**
+     * ExecRestatementReason: on a {@code 150=D}, why the venue restated the
+     * order on its own -- 0 GT corporate action, 1 GT renewal, 2 verbal
+     * change, 3 repricing, 4 broker option, 5 partial decline of OrderQty.
+     * New in FIX 4.2, alongside ExecType D itself.
+     */
+    public static final int EXEC_RESTATEMENT_REASON = 378;
     public static final int CXL_REJ_RESPONSE_TO = 434;
 
     // ---- the enum values used by the routing rules -------------------------
@@ -175,6 +182,10 @@ public final class FixTags {
         public static final String PENDING_CANCEL = "6";
         public static final String REJECTED = "8";
         public static final String PENDING_NEW = "A";
+        /** The unfilled balance stopped working because time ran out. Terminal. */
+        public static final String EXPIRED = "C";
+        /** The venue changed the order's terms unasked; tag 378 says why. */
+        public static final String RESTATED = "D";
         public static final String PENDING_REPLACE = "E";
     }
 
@@ -212,6 +223,7 @@ public final class FixTags {
         public static final String PENDING_CANCEL = "6";
         public static final String REJECTED = "8";
         public static final String PENDING_NEW = "A";
+        public static final String EXPIRED = "C";
         public static final String PENDING_REPLACE = "E";
     }
 }

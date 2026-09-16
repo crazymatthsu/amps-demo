@@ -27,4 +27,6 @@ public record Instrument(String symbol, String securityId, String securityIdSour
             new Instrument("AMZN", "US0231351067", "4", "USD", "XNAS");
     public static final Instrument META =
             new Instrument("META", "US30303M1027", "4", "USD", "XNAS");
+    public static final Instrument NFLX =
+            new Instrument("NFLX", "US64110L1061", "4", "USD", "XNAS");
 }

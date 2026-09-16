@@ -20,7 +20,7 @@ Then look at the result in the admin SQL console at http://127.0.0.1:8085/.
 
 ## What it demonstrates
 
-Eleven parent ClOrdIDs go in; seven records come out — one per order chain,
+Twelve parent ClOrdIDs go in; eight records come out — one per order chain,
 each carrying the newest amend *and* the original order's untouched terms:
 
 ```
@@ -70,9 +70,10 @@ trail — so nothing is published only to a chained topic.
   `PARENT-AAPL-1`; it sends tags 11 and 41 and lets the server resolve the
   record. That is the whole point of delegating identity to AMPS.
 - [`MockFixFlow`](src/main/java/com/demo/amps/fix42/mock/MockFixFlow.java)
-  generates nine order chains covering D/G/F/8/9, both order scopes, and
-  every execution outcome — trade busts and corrects (ExecTransType 20=1/2)
-  included. Deterministic, and internally consistent by construction —
+  generates ten order chains covering D/G/F/8/9, both order scopes, and
+  every execution outcome — trade busts and corrects (ExecTransType 20=1/2),
+  a venue restatement (150=D) and an expiry (150=C) included. Deterministic,
+  and internally consistent by construction —
   `OrderChain` holds the economic state and derives every report from it, so
   `38 = 14 + 151` and AvgPx matching its own fills are properties of the
   generator rather than numbers someone typed.
@@ -169,6 +170,42 @@ record) along with 31/32 on a bust (a bust reports no new trade). The change
 record, with the worked SOW examples, is
 [docs/fix42-view/07](../docs/fix42-view/07-trade-busts-and-corrects.md).
 
+## Expiry, rejection and restatement
+
+Three more `35=8` variants project onto the blotter, and until
+[docs/fix42-view/10](../docs/fix42-view/10-expired-rejected-restated-reports.md)
+none of them did. `exec-other`, the catch-all at the end of the `35=8` block,
+has no `projected-topics`, so an expired (`150=C`), rejected (`150=8`) or
+restated (`150=D`) report reached `sow/fix42/execs` and
+`sow/fix42/execs_audit` and never `sow/fix42/orders`. The blotter kept the
+last working LeavesQty, and the exposure views, which sum the blotter's 151,
+went on counting an expired order as live exposure. Reproduced on 5.3.5.135:
+after a `150=C` for GOOG, execs read `151=0` while the blotter and
+`view/fix42/exposure/parent` still read 800; projecting the same report onto
+the blotter took the view to 0.
+
+Two routes now sit ahead of the catch-all:
+
+| route | 150 | onto the blotter | pending family |
+| --- | --- | --- | --- |
+| `exec-expired-or-rejected` | `C`, `8` | 11, 41, 39, 150, 60, 14, 151, 6 — with 151 **stamped to 0** | cleared, as a cancel does |
+| `exec-restated` | `D` | 11, 41, 39, 150, 60, 38, 44, 14, 151, 6 — the restated absolutes, 151 as the venue sent it | untouched: a restatement answers no request, and an amend may be in flight at the same time |
+
+The stamp is the other half of the change, and `exec-cancel-or-done` carries
+it too: every terminal projection writes `151=0` whether or not the venue
+sent a LeavesQty. A projection applies its `set-tags` last, so the literal
+wins over a selected 151 — a venue that echoes the last working balance on
+the expiry, or omits the tag on a cancel, can no longer leave stale exposure
+on the record. The audit topics still get the report as sent. 103/58 (reject
+reason and text) and 378 (ExecRestatementReason) go to the exec topics only,
+like 19/20 on a bust: they describe *this* report and would sit stale on the
+merged record. Tags 11/41 pass through untouched, as on every other route.
+
+The catch-all now handles only the pending acknowledgements (`150=A/6/E`),
+which change nothing yet and must not clear a proposal the venue is still
+deciding on. A new 150 value that lands there by default deserves a second
+look, because that is the shape this gap had.
+
 ## Exposure views
 
 The three `view/fix42/exposure/*` views are json-typed aggregations of the
@@ -234,6 +271,14 @@ the parent's root ClOrdID kept on the blotter, and is not built — see the
 
 ## What this still does *not* give you
 
+One thing it did not give you until
+[docs/fix42-view/10](../docs/fix42-view/10-expired-rejected-restated-reports.md)
+was a blotter that noticed an expiry, a reject or a restatement at all. That
+was a rulebook gap rather than a merge limit — the venue states the terminal
+`151=0` and the restated `38`, and the routes only had to be told to carry
+them — which is what separates it from the list below: each of these needs
+*conditional* apply.
+
 A stale or duplicate execution report merges unconditionally: nothing here
 expresses "ignore this message if its CumQty went backwards". Nor do
 per-execution disposition (marking the ExecID named by tag 19 as BUSTED on the
@@ -248,9 +293,9 @@ measurements behind this section in
 ## Tests
 
 ```bash
-./gradlew :fix42-publisher:test              # 103 unit tests, no server needed
+./gradlew :fix42-publisher:test              # 121 unit tests, no server needed
 AMPS_IMAGE=<your-image> \
-  ./gradlew :fix42-publisher:integrationTest # 40 tests against a real container
+  ./gradlew :fix42-publisher:integrationTest # 43 tests against a real container
 ```
 
 Each integration test class starts its own AMPS instance. They **skip** rather
