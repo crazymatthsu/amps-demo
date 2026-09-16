@@ -322,10 +322,122 @@ class Fix42PublisherContextTest {
     }
 
     @Test
-    @DisplayName("a pending acknowledgement (150=6 / 150=E) never touches the blotter")
+    @DisplayName("an expired or rejected report closes the order on the blotter")
+    void expiredOrRejectedReportClosesTheOrderOnTheBlotter() {
+        // Before the exec-expired-or-rejected route these fell into the
+        // catch-all and never reached the blotter, which kept the last working
+        // 151 -- and the exposure views over it counted an expired order as
+        // exposure until something unrelated overwrote the record.
+        for (String execType : List.of(FixTags.ExecType.EXPIRED, FixTags.ExecType.REJECTED)) {
+            FixMessage report = FixMessage.ofType("8")
+                    .set(FixTags.ORDER_ID, "ORD-1")
+                    .set(FixTags.CL_ORD_ID, "C1")
+                    .set(FixTags.EXEC_ID, "E-" + execType)
+                    .set(FixTags.EXEC_TYPE, execType)
+                    .set(FixTags.ORD_STATUS, execType)
+                    .set(FixTags.ORDER_QTY, 800)
+                    .set(FixTags.CUM_QTY, 0)
+                    // A venue that echoes the working balance on the terminal
+                    // report rather than zeroing it.
+                    .set(FixTags.LEAVES_QTY, 800)
+                    .set(FixTags.TRANSACT_TIME, "20260821-14:06:00.000")
+                    .build();
+
+            List<PublishInstruction> plan = planner.plan(report);
+            assertThat(plan).isNotEmpty().allSatisfy(instruction ->
+                    assertThat(instruction.routeName()).isEqualTo("exec-expired-or-rejected"));
+
+            FixMessage blotter = plan.stream()
+                    .filter(instruction -> instruction.topic().endsWith("/orders"))
+                    .findFirst().orElseThrow().payload();
+            assertThat(blotter.value(FixTags.LEAVES_QTY))
+                    .as("150=%s: nothing is working, whatever the venue echoed", execType)
+                    .isEqualTo("0");
+            assertThat(blotter.value(FixTags.ORD_STATUS)).isEqualTo(execType);
+            assertThat(blotter.value(FixTags.EXEC_TYPE)).isEqualTo(execType);
+            assertThat(blotter.value(FixTags.PENDING_ACTION))
+                    .isEqualTo(FixTags.PendingAction.NONE);
+            assertThat(blotter.value(FixTags.PENDING_ORDER_QTY)).isEqualTo("0");
+            assertThat(blotter.value(FixTags.PENDING_CL_ORD_ID)).isEqualTo("NONE");
+            assertThat(blotter.has(FixTags.WORKING_CL_ORD_ID)).isFalse();
+        }
+    }
+
+    @Test
+    @DisplayName("every terminal projection forces 151 to zero, even when the venue omits it")
+    void terminalProjectionsForceLeavesQtyToZero() {
+        // The shipped cancel/done and expiry/reject routes both stamp 151=0.
+        // A cancel confirmation that omits LeavesQty would otherwise publish
+        // no 151, and the merge would keep the last fill's working balance.
+        for (String execType : List.of(FixTags.ExecType.CANCELED, FixTags.ExecType.DONE_FOR_DAY,
+                FixTags.ExecType.EXPIRED, FixTags.ExecType.REJECTED)) {
+            FixMessage report = FixMessage.ofType("8")
+                    .set(FixTags.ORDER_ID, "ORD-1")
+                    .set(FixTags.CL_ORD_ID, "C1")
+                    .set(FixTags.EXEC_ID, "E-" + execType)
+                    .set(FixTags.EXEC_TYPE, execType)
+                    .set(FixTags.ORD_STATUS, execType)
+                    .set(FixTags.CUM_QTY, 300)
+                    .set(FixTags.TRANSACT_TIME, "20260821-14:07:00.000")
+                    .build();
+            assertThat(report.has(FixTags.LEAVES_QTY)).isFalse();
+
+            FixMessage blotter = planner.plan(report).stream()
+                    .filter(instruction -> instruction.topic().endsWith("/orders"))
+                    .findFirst().orElseThrow().payload();
+            assertThat(blotter.value(FixTags.LEAVES_QTY))
+                    .as("150=%s", execType)
+                    .isEqualTo("0");
+            assertThat(blotter.value(FixTags.CUM_QTY)).isEqualTo("300");
+        }
+    }
+
+    @Test
+    @DisplayName("a restated report adopts the venue's terms without touching pending")
+    void restatedReportAdoptsTermsWithoutTouchingPending() {
+        FixMessage restated = FixMessage.ofType("8")
+                .set(FixTags.ORDER_ID, "ORD-1")
+                .set(FixTags.CL_ORD_ID, "C1")
+                .set(FixTags.EXEC_ID, "E7")
+                .set(FixTags.EXEC_TYPE, FixTags.ExecType.RESTATED)
+                .set(FixTags.ORD_STATUS, FixTags.OrdStatus.PARTIALLY_FILLED)
+                .set(FixTags.ORDER_QTY, 2_000)
+                .setDecimal(FixTags.PRICE, 1_200.00)
+                .set(FixTags.CUM_QTY, 1_000)
+                .set(FixTags.LEAVES_QTY, 1_000)
+                .setDecimal(FixTags.AVG_PX, 1_199.50)
+                .set(FixTags.EXEC_RESTATEMENT_REASON, "5")
+                .set(FixTags.TRANSACT_TIME, "20260821-14:08:00.000")
+                .build();
+
+        List<PublishInstruction> plan = planner.plan(restated);
+        assertThat(plan).isNotEmpty().allSatisfy(instruction ->
+                assertThat(instruction.routeName()).isEqualTo("exec-restated"));
+
+        FixMessage blotter = plan.stream()
+                .filter(instruction -> instruction.topic().endsWith("/orders"))
+                .findFirst().orElseThrow().payload();
+        assertThat(blotter.value(FixTags.ORDER_QTY)).isEqualTo("2000");
+        assertThat(blotter.value(FixTags.PRICE)).isEqualTo("1200");
+        assertThat(blotter.value(FixTags.LEAVES_QTY))
+                .as("not terminal: the venue's balance, not a forced zero")
+                .isEqualTo("1000");
+        assertThat(blotter.has(FixTags.PENDING_ACTION)).isFalse();
+        assertThat(blotter.has(FixTags.PENDING_ORDER_QTY)).isFalse();
+        assertThat(blotter.has(FixTags.WORKING_CL_ORD_ID)).isFalse();
+        assertThat(blotter.has(FixTags.EXEC_RESTATEMENT_REASON)).isFalse();
+
+        plan.stream()
+                .filter(instruction -> !instruction.topic().endsWith("/orders"))
+                .forEach(instruction -> assertThat(instruction.payload()
+                        .value(FixTags.EXEC_RESTATEMENT_REASON)).isEqualTo("5"));
+    }
+
+    @Test
+    @DisplayName("a pending acknowledgement (150=A / 150=6 / 150=E) never touches the blotter")
     void pendingAcknowledgementsDoNotReachTheBlotter() {
-        for (String execType : List.of(FixTags.ExecType.PENDING_CANCEL,
-                FixTags.ExecType.PENDING_REPLACE)) {
+        for (String execType : List.of(FixTags.ExecType.PENDING_NEW,
+                FixTags.ExecType.PENDING_CANCEL, FixTags.ExecType.PENDING_REPLACE)) {
             FixMessage report = FixMessage.ofType("8")
                     .set(FixTags.ORDER_ID, "ORD-1")
                     .set(FixTags.CL_ORD_ID, "C1")

@@ -159,7 +159,7 @@ cancels, fills, rejects — into it:
 ./gradlew :fix42-publisher:bootRun
 ```
 
-Eleven ClOrdIDs across seven chains should store as seven records. Look at them in
+Twelve ClOrdIDs across eight chains should store as eight records. Look at them in
 the admin SQL console (<http://127.0.0.1:8085/>) or query `sow/fix42/orders`.
 Record counts accumulate across runs, so reset between them:
 

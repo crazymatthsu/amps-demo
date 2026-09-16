@@ -45,6 +45,28 @@ class Fix42PropertiesTest {
     }
 
     @Test
+    @DisplayName("accepts a set-tag that overrides a tag the projection also selects")
+    void acceptsSetTagOverridingAProjectedTag() {
+        // The terminal routes select 151 from the report AND stamp 151=0. The
+        // key check counts a set-tag as produced, and the planner applies
+        // literals last, so this is a supported shape rather than a conflict.
+        Fix42Properties.Route terminal = new Fix42Properties.Route("exec-expired-or-rejected",
+                List.of("8"), List.of("C", "8"), List.of(), PublishMode.DELTA,
+                List.of(35, 11, 41, 37, 17, 39, 150, 60), List.of(14, 151, 6),
+                List.of("sow/fix42/execs", "sow/fix42/execs_audit"), List.of("sow/fix42/orders"),
+                new Fix42Properties.Projection(List.of(11, 41, 39, 150, 60, 14, 151, 6),
+                        Map.of(), Map.of(151, "0", 9013, "NONE")));
+        Fix42Properties valid = properties(
+                Map.of("sow/fix42/orders", List.of(11), "sow/fix42/execs", List.of(37),
+                        "sow/fix42/execs_audit", List.of(17)),
+                terminal);
+
+        assertThatCode(valid::validate).doesNotThrowAnyException();
+        assertThat(terminal.projection().producedTags())
+                .containsExactlyInAnyOrder(11, 41, 39, 150, 60, 14, 151, 6, 9013);
+    }
+
+    @Test
     @DisplayName("rejects a delta route that omits its destination's SOW key")
     void rejectsRouteMissingTopicKey() {
         // Publishing to an execs topic keyed /37 without sending tag 37: AMPS

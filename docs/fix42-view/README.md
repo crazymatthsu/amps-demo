@@ -58,13 +58,16 @@ findings in [02, §4.3](02-amps-view-feasibility.md):
 | the rulebook: which tags leave, per message type | [`application.yml`](../../fix42-publisher/src/main/resources/application.yml) |
 | end-to-end proof against a real container | `./gradlew :fix42-publisher:integrationTest` |
 
-Headline result: eleven parent ClOrdIDs across seven order chains store as
-**seven records**, each carrying the newest amend merged onto the original
+Headline result: twelve parent ClOrdIDs across eight order chains store as
+**eight records**, each carrying the newest amend merged onto the original
 order's untouched terms — with no chain state anywhere in the publisher.
 Trade busts and corrects — the "fill bust/correct" clause of the question —
 are now absorbed at order level by the same merge, because a 4.2 venue
 restates the cumulative fields as absolutes; see
-[07](07-trade-busts-and-corrects.md).
+[07](07-trade-busts-and-corrects.md). The same merge closes an expired,
+rejected or restated order, once the rulebook routes those reports to the
+blotter at all — it did not, and the exposure views over-counted until
+[10](10-expired-rejected-restated-reports.md).
 
 The blotter also answers "working at what, asked to change to what?" in one
 record, which a single tag 38 never can — see
@@ -90,3 +93,4 @@ build has recorded in [08](08-exposure-views.md).
 | [07-trade-busts-and-corrects.md](07-trade-busts-and-corrects.md) | how the blotter absorbs a trade bust/correct (20=1/2) with no state machine — and why tag 20 had to become a routing dimension |
 | [08-exposure-views.md](08-exposure-views.md) | exposure by account × symbol × side as AMPS views over the blotter — the verified cross-type syntax, the `IF()` drift that a restart hides, and a join view reconciling the parent and child levels (LEFT OUTER, no `<Filter>`, breaks selected by the reader) |
 | [09-parent-child-reconciliation.md](09-parent-child-reconciliation.md) | the analysis behind that join view: snapshot-and-diff vs a live reconciliation topic, the breaks query, the measured break, and why the per-parent key needs a root ClOrdID |
+| [10-expired-rejected-restated-reports.md](10-expired-rejected-restated-reports.md) | the catch-all gap: an expired, rejected or restated report (150=C/8/D) never reached the blotter, so the views of 08/09 over-counted exposure — the two routes that close it, the forced `151=0` on every terminal projection, and the live proof |
