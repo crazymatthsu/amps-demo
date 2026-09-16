@@ -89,3 +89,4 @@ build has recorded in [08](08-exposure-views.md).
 | [06-publish-throughput.md](06-publish-throughput.md) | what is actually slow when publishing — measured, with the 5.3× answer and why transport batching did not help |
 | [07-trade-busts-and-corrects.md](07-trade-busts-and-corrects.md) | how the blotter absorbs a trade bust/correct (20=1/2) with no state machine — and why tag 20 had to become a routing dimension |
 | [08-exposure-views.md](08-exposure-views.md) | exposure by account × symbol × side as AMPS views over the blotter — the verified cross-type syntax, the `IF()` drift that a restart hides, and a join view reconciling the parent and child levels (LEFT OUTER, no `<Filter>`, breaks selected by the reader) |
+| [09-parent-child-reconciliation.md](09-parent-child-reconciliation.md) | the analysis behind that join view: snapshot-and-diff vs a live reconciliation topic, the breaks query, the measured break, and why the per-parent key needs a root ClOrdID |
