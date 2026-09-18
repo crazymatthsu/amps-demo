@@ -35,6 +35,13 @@ public record AmpsFlow(String flow, String shortName, String messageType) {
     /** The FIX sender-sequence recovery demo under fix-pub-seqno. */
     public static final AmpsFlow FIX_PUB_SEQNO = new AmpsFlow("fix-pub-seqno", "seqno", "fix");
 
+    /**
+     * The QuickFIX/J drop-copy engine under quickfixj-v2-demo. The sequence
+     * number checkpoints are JSON; the drop-copy topics are {@code fix}, and
+     * its suite opens a second client for those.
+     */
+    public static final AmpsFlow QUICKFIXJ_DROPCOPY = new AmpsFlow("quickfixj-dropcopy", "qfj2", "json");
+
     /** Where this flow's config lives, relative to the repository root. */
     public String configDir() {
         return "server/config/flows/" + flow;

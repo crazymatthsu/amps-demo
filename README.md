@@ -20,6 +20,7 @@ amps-demo/
 ├── hazelcast-persistent-store/  Hazelcast OSS persisting its IMaps in AMPS (MapStore SPI)
 ├── amps-test-harness/  starts a throwaway AMPS container for the integration suites
 ├── fix-pub-seqno/  FIX publisher sequence recovery: find the last tag 8888 AMPS holds, republish the gap
+├── quickfixj-v2-demo/  QuickFIX/J 2.x drop-copy engine on Spring Boot + Spring Integration, sequence numbers replicated to AMPS for failover
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -132,6 +133,29 @@ for the phases, and
 for the analysis: the prefix invariant that makes one number a sufficient
 answer, what the AMPS client library already does about this, and the failure
 matrix the recovery is checked against.
+
+`quickfixj-v2-demo` is a **QuickFIX/J 2.x drop-copy FIX engine on Spring
+Boot**, in a module of its own. Spring Integration carries every received
+message through a YAML list of enrichment rules and on to AMPS topics and/or
+other FIX sessions; and its QuickFIX/J file store is wrapped so that every
+sequence-number change is also published to AMPS by a write-behind thread.
+An instance starting on an empty disk -- the DR box -- reads that checkpoint
+back, seeds its file store from it, and logs on where the primary left off,
+with no resend request and no manual resequence. A `seqno-admin` profile
+covers the manual case. It ships as a container image with a compose stack
+(AMPS, a venue that invents execution reports, the consumer) and a scripted
+failover.
+
+```bash
+AMPS_FLOW=quickfixj-dropcopy ./server/scripts/amps.sh start
+./gradlew :quickfixj-v2-demo:bootRun -Prole=venue       # acceptor + mock execution feed
+./gradlew :quickfixj-v2-demo:bootRun -Prole=dropcopy    # initiator -> rules -> AMPS
+```
+
+-> [quickfixj-v2-demo/README.md](quickfixj-v2-demo/README.md)
+for the step-by-step run guide (laptop and containers, including the
+failover and a manual resequence), the flow, the store's write-behind and
+recovery semantics, the failover integration test, and the container stack.
 
 ## Operator tools
 

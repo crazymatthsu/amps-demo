@@ -1,0 +1,4 @@
+# Only the jar goes into the build context; config, data and logs are bind
+# mounts at run time, and the sources are not the image's business.
+*
+!build/libs/quickfixj-v2-demo.jar

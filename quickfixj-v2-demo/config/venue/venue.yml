@@ -1,0 +1,35 @@
+# Role "venue": the acceptor that plays the execution venue.
+#
+# Layered over src/main/resources/application.yml (the defaults) by
+#   ./gradlew :quickfixj-v2-demo:bootRun -Prole=venue
+# or, in compose.yml, by the service's command argument.
+#
+# Named venue.yml rather than application.yml on purpose: Spring Boot loads
+# every config/*/application.yml under the working directory by default,
+# which would merge BOTH roles into every run.
+
+qfj:
+  role: venue
+
+  engine:
+    settings: config/venue/quickfixj.cfg
+
+  seqno:
+    # Stamped on every checkpoint this instance publishes, so the AMPS record
+    # says which box wrote it. The compose file sets it per service.
+    source: ${QFJ_SEQNO_SOURCE:venue-primary}
+
+  # The venue has nothing real to send, so it invents execution reports: one
+  # every interval-ms on every logged-on session, count=0 meaning forever.
+  mock:
+    enabled: true
+    interval-ms: ${QFJ_MOCK_INTERVAL_MS:2000}
+    count: ${QFJ_MOCK_COUNT:0}
+
+  # Anything the consumer sends UP this session (it should not) is still
+  # recorded, so nothing arriving on the engine is ever silently dropped.
+  flow:
+    destinations:
+      - name: audit
+        type: amps
+        topic: dropcopy/fix42/audit

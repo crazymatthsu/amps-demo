@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Business flow "quickfixj-dropcopy": a QuickFIX/J drop-copy engine whose
+  session sequence numbers are checkpointed in AMPS, so a DR instance can
+  take over a FIX session without a manual resequence.
+
+  Backs the quickfixj-v2-demo module. Three topics, two message types:
+
+    sow/quickfixj/seqno         json, keyed on the FIX session id. One record
+                                per session holding the NEXT sender and target
+                                MsgSeqNum the engine will use. The engine's
+                                write-behind thread publishes every change;
+                                a starting engine reads its own record back
+                                and seeds its file store from it. Journalled
+                                too, so the history of checkpoints is a
+                                queryable audit trail of the replication.
+
+    sow/dropcopy/fix42/execs    fix, keyed on tag 17 (ExecID). The drop-copy
+                                blotter: one record per execution report. A
+                                resent report (43=Y, same ExecID) overwrites
+                                its own record rather than duplicating it,
+                                which is what makes the engine's at-least-once
+                                delivery harmless here.
+
+    dropcopy/fix42/audit        fix, journal only. Every application message
+                                the engine received, of any type, as it came
+                                off the wire after enrichment.
+
+  The transport is shared: clients pick the message type in the URI
+  (/amps/json for the checkpoint table, /amps/fix for the drop-copy topics),
+  which is why the engine holds two connections.
+-->
+<AMPSConfig>
+
+    <Name>amps-quickfixj-dropcopy</Name>
+
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <SQLTransport>amps-websocket</SQLTransport>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <!--
+      Topic names carry slashes, so %n cannot be used in FileName (it would
+      expand to a nested directory nothing creates); the SOW files are named
+      explicitly, as the other flows in this repository do.
+    -->
+    <SOW>
+        <Topic>
+            <Name>sow/quickfixj/seqno</Name>
+            <MessageType>json</MessageType>
+            <Key>/sessionId</Key>
+            <FileName>./sow/quickfixj-seqno.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>sow/dropcopy/fix42/execs</Name>
+            <MessageType>fix</MessageType>
+            <Key>/17</Key>
+            <FileName>./sow/dropcopy-fix42-execs.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+    </SOW>
+
+    <!--
+      MinJournalSize 10MB is the floor AMPS accepts (verified on 5.3.5.135);
+      production instances use far larger files. Retention has to cover the
+      longest outage after which a subscriber is expected to resume; see
+      docs/src/transaction-log-sizing.md.
+    -->
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
+        <MinJournalSize>10MB</MinJournalSize>
+
+        <Topic>
+            <Name>sow/quickfixj/seqno</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>sow/dropcopy/fix42/execs</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>dropcopy/fix42/audit</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+    </TransactionLog>
+
+</AMPSConfig>

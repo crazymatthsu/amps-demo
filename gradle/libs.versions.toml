@@ -22,6 +22,11 @@ hazelcast = "5.5.0"
 # suite. Needs a Docker-API-compatible socket, which a GitHub runner has by
 # default and an Apple Silicon laptop running podman does not.
 testcontainers = "1.21.3"
+# QuickFIX/J 2.x -- the last major on the pre-Java-17 API line, and the one
+# quickfixj-v2-demo builds its AMPS-replicated sequence-number store against.
+# The FIX 4.2 message classes and the standard FIX42.xml dictionary ship in
+# the messages-fix42 artifact; core alone has no message types in it.
+quickfixj = "2.3.3"
 
 [libraries]
 amps-client = { module = "com.crankuptheamps:amps-client", version.ref = "amps" }
@@ -41,6 +46,10 @@ spring-boot-configuration-processor = { module = "org.springframework.boot:sprin
 awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
 hazelcast = { module = "com.hazelcast:hazelcast", version.ref = "hazelcast" }
 testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
+quickfixj-core = { module = "org.quickfixj:quickfixj-core", version.ref = "quickfixj" }
+quickfixj-messages-fix42 = { module = "org.quickfixj:quickfixj-messages-fix42", version.ref = "quickfixj" }
+# Spring Integration, at the version the Spring Boot BOM pins (6.5.x for Boot 3.5).
+spring-boot-starter-integration = { module = "org.springframework.boot:spring-boot-starter-integration" }
 
 [plugins]
 protobuf = { id = "com.google.protobuf", version.ref = "protobufPlugin" }

@@ -1,0 +1,73 @@
+# Role "dropcopy": the initiator that consumes the venue's drop copy.
+#
+# Layered over src/main/resources/application.yml (the defaults) by
+#   ./gradlew :quickfixj-v2-demo:bootRun -Prole=dropcopy
+# or, in compose.yml, by the service's command argument.
+#
+# Named dropcopy.yml rather than application.yml on purpose: Spring Boot loads
+# every config/*/application.yml under the working directory by default,
+# which would merge BOTH roles into every run.
+#
+# This file IS the data flow: FIX engine -> rules (in order) -> destinations
+# (every one whose msg-types filter matches). A rule is a small, named
+# transformation with its parameters; a destination is an AMPS topic or
+# another FIX session. Both lists are validated at startup and refuse to boot
+# on a typo (unknown rule type, missing parameter, a fix destination naming a
+# session the engine does not have).
+
+qfj:
+  role: dropcopy
+
+  engine:
+    settings: config/dropcopy/quickfixj.cfg
+
+  seqno:
+    source: ${QFJ_SEQNO_SOURCE:dropcopy-primary}
+
+  flow:
+    # DIRECT runs rules and destinations on the QuickFIX/J session thread, so
+    # a destination that fails throws out of fromApp and the message is
+    # redelivered by the counterparty (at-least-once). EXECUTOR hands off to a
+    # single ordered thread instead: faster, but a message in that queue is
+    # lost if the process dies.
+    channel: direct
+
+    rules:
+      # Tag the copy with where it came from ...
+      - type: set-tag
+        tag: 5001
+        value: ${QFJ_DROPCOPY_SOURCE_TAG:VENUE-DROPCOPY}
+      # ... keep the venue's own SenderCompID as a body field, since the
+      # header is rewritten if this message is forwarded to another session ...
+      - type: copy-tag
+        from: 49
+        to: 5002
+      # ... the FIX session it arrived on, and when the engine received it.
+      - type: source-session
+        tag: 5003
+      - type: received-time
+        tag: 5004
+      # A rule can be limited to some message types:
+      # - type: set-tag
+      #   tag: 58
+      #   value: drop copy
+      #   msg-types: ["8"]
+
+    destinations:
+      # Execution reports onto the blotter: a SOW keyed on ExecID (tag 17), so
+      # a resent report overwrites its own record instead of duplicating it.
+      - name: execs-blotter
+        type: amps
+        topic: sow/dropcopy/fix42/execs
+        msg-types: ["8"]
+      # Everything, of any type, onto the journal-only audit topic.
+      - name: audit
+        type: amps
+        topic: dropcopy/fix42/audit
+      # Or on to another FIX engine. The session must be one this engine has
+      # in its quickfixj.cfg; the message is cloned, its header rebuilt for
+      # that session, and sent with Session.sendToTarget.
+      # - name: downstream
+      #   type: fix
+      #   session: "FIX.4.2:DROPCOPY->DOWNSTREAM"
+      #   msg-types: ["8"]

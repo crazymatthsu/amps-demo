@@ -1,0 +1,11 @@
+# Profile "test": what the Spring context tests need -- an engine that is
+# built but never started, no mock feed, and logs kept under build/.
+qfj:
+  engine:
+    auto-start: false
+  mock:
+    enabled: false
+
+logging:
+  file:
+    name: build/test-logs/context-test.log
