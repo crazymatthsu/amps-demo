@@ -1,0 +1,27 @@
+# Profile "seqno-admin": the same jar, the same config folder, but instead of
+# running the engine it inspects or rewrites the sequence numbers -- in the
+# file store, in AMPS, or copies one onto the other -- and exits.
+#
+#   java -jar quickfixj-v2-demo.jar --spring.profiles.active=seqno-admin \
+#       --spring.config.additional-location=file:config/dropcopy/dropcopy.yml \
+#       --seqno.action=show
+#
+# Run it with the engine STOPPED: QuickFIX/J caches the numbers in memory and
+# holds the file open, so an edit under a running engine is overwritten by
+# its next heartbeat.
+
+spring:
+  main:
+    keep-alive: false
+
+logging:
+  level:
+    com.demo.amps.qfj2: WARN
+    quickfixj: WARN
+    org.springframework: WARN
+
+qfj:
+  engine:
+    auto-start: false
+  mock:
+    enabled: false

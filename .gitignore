@@ -17,6 +17,14 @@ server/config/envs/*/*.local.env
 # Client-side bookmark and publish stores.
 build/client-state/
 
+# quickfixj-v2-demo runtime state: QuickFIX/J file stores and session logs
+# from `bootRun`, and the per-service folders its compose script bind-mounts
+# (config copies, data, logs, and the AMPS instance's own state). All of it is
+# the instance's state, none of it is source.
+quickfixj-v2-demo/data/
+quickfixj-v2-demo/log/
+quickfixj-v2-demo/deploy/
+
 # IDE
 .idea/
 *.iml

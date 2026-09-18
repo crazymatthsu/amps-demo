@@ -1,0 +1,91 @@
+# The drop-copy stack, declaratively: AMPS, the venue (an acceptor with the
+# mock execution feed), and the drop-copy consumer (an initiator whose
+# received reports go through the rules onto AMPS).
+#
+# NOT meant to be run with a bare `podman compose up`: every ${VAR} below is
+# resolved from the calling shell, the mounted folders have to exist first,
+# and AMPS has to be ready before the engines start (or they spend their
+# connect budget waiting for it). scripts/dropcopy-compose.sh does all of
+# that; run it and treat this file as its target.
+#
+#   ./quickfixj-v2-demo/scripts/dropcopy-compose.sh build
+#   AMPS_IMAGE=<your image> ./quickfixj-v2-demo/scripts/dropcopy-compose.sh start
+#
+# Mounts, per engine (relative to this file):
+#   ./config                 -> /app/config   read-only: quickfixj.cfg, <role>.yml, the dictionary
+#   ./deploy/<role>/data     -> /app/data     the QuickFIX/J file store (FileStorePath=data/store)
+#   ./deploy/<role>/log      -> /app/log      the FIX session logs and the application log
+# and for AMPS:
+#   ../server/config/flows/quickfixj-dropcopy -> /amps/config
+#   ./deploy/amps                             -> /amps/data
+#
+# The engines reach AMPS and each other by service name on the compose
+# network; the QFJ_* environment below is what the ${NAME:default}
+# placeholders in config/*/quickfixj.cfg and config/*/<role>.yml pick up.
+
+services:
+
+  amps:
+    # No default, on purpose: there is no public AMPS server image. Build one
+    # from server/Containerfile and export AMPS_IMAGE.
+    image: ${AMPS_IMAGE:?AMPS_IMAGE is not set -- build an image from server/Containerfile and export it}
+    platform: ${AMPS_PLATFORM:-linux/amd64}
+    container_name: ${QFJ_STACK:-qfj2}-amps
+    entrypoint: ["${AMPS_BIN:-/opt/amps/bin/ampServer}"]
+    command: ["/amps/config/amps-config.xml"]
+    working_dir: /amps/data
+    ports:
+      - "${QFJ_AMPS_PORT:-9007}:9007"
+      - "${QFJ_AMPS_WS_PORT:-9008}:9008"
+      - "${QFJ_AMPS_ADMIN_PORT:-8085}:8085"
+    volumes:
+      - ../server/config/flows/quickfixj-dropcopy:/amps/config${QFJ_MOUNT_SUFFIX:-}
+      - ./deploy/amps:/amps/data${QFJ_MOUNT_SUFFIX:-}
+    restart: "no"
+
+  venue:
+    image: ${QFJ_IMAGE:-localhost/quickfixj-v2-demo:latest}
+    container_name: ${QFJ_STACK:-qfj2}-venue
+    depends_on:
+      - amps
+    command: ["--spring.config.additional-location=file:/app/config/venue/venue.yml"]
+    environment:
+      QFJ_AMPS_HOST: amps
+      QFJ_AMPS_PORT: "9007"
+      QFJ_VENUE_PORT: "9876"
+      QFJ_SEQNO_SOURCE: ${QFJ_VENUE_SOURCE:-venue-primary}
+      QFJ_MOCK_INTERVAL_MS: ${QFJ_MOCK_INTERVAL_MS:-2000}
+      QFJ_MOCK_COUNT: ${QFJ_MOCK_COUNT:-0}
+    ports:
+      - "${QFJ_VENUE_PORT:-9876}:9876"
+    volumes:
+      - ./config:/app/config${QFJ_MOUNT_RO_SUFFIX:-:ro}
+      - ./deploy/venue/data:/app/data${QFJ_MOUNT_SUFFIX:-}
+      - ./deploy/venue/log:/app/log${QFJ_MOUNT_SUFFIX:-}
+    restart: unless-stopped
+
+  dropcopy:
+    image: ${QFJ_IMAGE:-localhost/quickfixj-v2-demo:latest}
+    container_name: ${QFJ_STACK:-qfj2}-dropcopy
+    depends_on:
+      - amps
+      - venue
+    command: ["--spring.config.additional-location=file:/app/config/dropcopy/dropcopy.yml"]
+    environment:
+      QFJ_AMPS_HOST: amps
+      QFJ_AMPS_PORT: "9007"
+      QFJ_VENUE_HOST: venue
+      QFJ_VENUE_PORT: "9876"
+      # `dropcopy-compose.sh failover` starts the replacement with
+      # QFJ_DROPCOPY_SOURCE=dropcopy-dr, so the checkpoints in AMPS say which
+      # instance wrote them.
+      QFJ_SEQNO_SOURCE: ${QFJ_DROPCOPY_SOURCE:-dropcopy-primary}
+      QFJ_DROPCOPY_SOURCE_TAG: ${QFJ_DROPCOPY_SOURCE_TAG:-VENUE-DROPCOPY}
+      # Where the QuickFIX/J store lives under /app/data. `failover` points the
+      # replacement at a fresh directory and leaves the primary's untouched.
+      QFJ_STORE_DIR: ${QFJ_DROPCOPY_STORE_DIR:-data/store}
+    volumes:
+      - ./config:/app/config${QFJ_MOUNT_RO_SUFFIX:-:ro}
+      - ./deploy/dropcopy/data:/app/data${QFJ_MOUNT_SUFFIX:-}
+      - ./deploy/dropcopy/log:/app/log${QFJ_MOUNT_SUFFIX:-}
+    restart: unless-stopped

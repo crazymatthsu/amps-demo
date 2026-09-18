@@ -1,0 +1,40 @@
+# The quickfixj-v2-demo image: the Spring Boot jar on a JRE, nothing else.
+#
+#   ./gradlew :quickfixj-v2-demo:bootJar
+#   podman build -f quickfixj-v2-demo/Containerfile -t localhost/quickfixj-v2-demo:latest quickfixj-v2-demo
+#
+# or, which does both:
+#
+#   ./quickfixj-v2-demo/scripts/dropcopy-compose.sh build
+#
+# One image serves every role. The role is chosen at run time by a command
+# argument (--spring.config.additional-location=file:/app/config/<role>/<role>.yml),
+# and /app/config, /app/data and /app/log are bind mounts (see compose.yml),
+# so the image holds no configuration, no state and no logs. That is what
+# lets the same image be the primary today and the DR instance tomorrow: the
+# only thing a DR box needs that is not in the image is the AMPS checkpoint.
+#
+# The process runs as the image's default user (root inside the container).
+# Under rootless podman that is the host user the container was started by,
+# which is exactly who owns the bind-mounted data/ and log/ folders -- a
+# dedicated in-container user would need a user-namespace mapping to write
+# to them. A rootful deployment should add one.
+FROM docker.io/library/eclipse-temurin:21-jre-jammy
+
+LABEL org.opencontainers.image.title="quickfixj-v2-demo" \
+      org.opencontainers.image.description="QuickFIX/J 2.x drop-copy engine on Spring Boot with AMPS-replicated sequence numbers"
+
+WORKDIR /app
+RUN mkdir -p /app/config /app/data /app/log
+
+# Built by :quickfixj-v2-demo:bootJar; the name is fixed in build.gradle.kts.
+COPY build/libs/quickfixj-v2-demo.jar /app/app.jar
+
+VOLUME ["/app/config", "/app/data", "/app/log"]
+
+# The acceptor's FIX port (SocketAcceptPort in config/venue/quickfixj.cfg).
+EXPOSE 9876
+
+ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

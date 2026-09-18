@@ -1,0 +1,104 @@
+# quickfixj-v2-demo -- the defaults every role shares.
+#
+# A role (config/venue/venue.yml, config/dropcopy/dropcopy.yml) layers over
+# this with --spring.config.additional-location; the bootRun task does that
+# for -Prole=<name>, compose.yml does it per service. The role files are not
+# named application.yml because Spring Boot would then load every one of
+# them from config/*/ on its own. Anything can
+# also be overridden the usual Spring Boot ways: -Dqfj.seqno.recovery=highest,
+# QFJ_SEQNO_RECOVERY=highest, --qfj.seqno.recovery=highest.
+
+spring:
+  main:
+    banner-mode: off
+    web-application-type: none
+    # The engine is long-lived and has no web server to hold the JVM open.
+    keep-alive: true
+
+logging:
+  level:
+    com.demo.amps.qfj2: INFO
+    # QuickFIX/J's SLF4JLogFactory categories: quickfixj.event, quickfixj.msg.incoming,
+    # quickfixj.msg.outgoing. DEBUG on org.apache.mina is the next step down.
+    quickfixj: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level %-28logger{0} %msg%n"
+  file:
+    # Alongside the FIX session logs (FileLogPath in quickfixj.cfg). In the
+    # container this is /app/log, bind-mounted by compose.yml.
+    name: log/${qfj.role:engine}.log
+
+qfj:
+  role: engine
+
+  engine:
+    # The QuickFIX/J settings file. ConnectionType inside it decides whether
+    # this process is an acceptor or an initiator.
+    settings: config/dropcopy/quickfixj.cfg
+    # false = build the engine but do not start it (the seqno-admin profile,
+    # and the context tests).
+    auto-start: true
+    # true = ThreadedSocketAcceptor/Initiator (a thread per session) instead
+    # of the single-threaded variants.
+    threaded: false
+
+  amps:
+    # The connection the AMPS destinations publish on. The path selects the
+    # message type; every drop-copy topic is <MessageType>fix</MessageType>.
+    uri: tcp://${QFJ_AMPS_HOST:127.0.0.1}:${QFJ_AMPS_PORT:9007}/amps/fix
+    client-name: qfj2-${qfj.role:engine}-fix
+    timeout-ms: 10000
+    # How long a starting engine keeps retrying an AMPS that is not up yet.
+    connect-wait-ms: 60000
+    # After a failed publish the connection is dropped and reopened on the
+    # next delivery; that reopen runs on the FIX session thread, so it is
+    # given only this long before the delivery fails (and the session drops).
+    reconnect-wait-ms: 5000
+    # publishFlush after every publish: the FIX message is only acknowledged
+    # (its sequence number consumed) once AMPS has confirmed it. Costs a round
+    # trip per message; turn off for throughput over delivery guarantees.
+    flush-each: true
+
+  seqno:
+    # The AMPS-replicated sequence-number store. false = plain QuickFIX/J
+    # FileStore, nothing replicated.
+    enabled: true
+    # Its own connection, on the json message type: the checkpoint is a JSON
+    # record on a SOW keyed by session id.
+    uri: tcp://${QFJ_AMPS_HOST:127.0.0.1}:${QFJ_AMPS_PORT:9007}/amps/json
+    topic: sow/quickfixj/seqno
+    client-name: qfj2-${qfj.role:engine}-seqno
+    timeout-ms: 10000
+    # What a starting engine does when the file and AMPS disagree:
+    #   amps-wins  take AMPS's numbers (a DR box with an empty disk; the
+    #              normal failover). The default.
+    #   file-wins  trust the file, publish it to AMPS (a primary that knows
+    #              its disk is right).
+    #   highest    take the higher of each number (a primary restarting after
+    #              a crash that may have lost the last replication).
+    recovery: amps-wins
+    # Refuse to start if AMPS cannot be read (unless recovery is file-wins):
+    # starting on a stale file is exactly the failure this store exists to
+    # prevent.
+    require-amps: true
+    # Write-behind pacing. 0 = publish as soon as the previous publish has
+    # been acknowledged, coalescing whatever changed meanwhile.
+    min-interval-ms: 0
+    retry-backoff-ms: 1000
+    # Written into every checkpoint; defaults to the host name.
+    source: ${QFJ_SEQNO_SOURCE:}
+
+  flow:
+    channel: direct
+    include-outbound: false
+    # Drop the session when a destination fails, so the counterparty holds
+    # its messages until this engine reconnects and requests the gap once.
+    disconnect-on-delivery-failure: true
+    rules: []
+    destinations: []
+
+  mock:
+    enabled: false
+    interval-ms: 2000
+    count: 0
+    symbols: [AAPL, MSFT, TSLA, NVDA, AMZN]
