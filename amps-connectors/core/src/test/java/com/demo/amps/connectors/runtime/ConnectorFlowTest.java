@@ -22,14 +22,19 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.test.annotation.DirtiesContext;
 
 /**
- * The whole flow in a real application context: two connectors, a source the test pushes
+ * The whole flow in a real application context: three connectors, a source the test pushes
  * records into, and a publisher that records instead of connecting.
  *
  * <p>This is the test that covers what the unit tests cannot -- that Spring Integration is
- * wired the way the design says. One connector releases its batches by <em>size</em> and the
- * other by <em>idle time</em>, which are the two halves of the batching contract, and both are
- * asserted through the same publisher the production code uses: the commands it received, the
- * single flush per batch, and the acknowledgments that followed it.
+ * wired the way the design says. One connector releases its batches by <em>size</em> and
+ * another by <em>idle time</em>, which are the two halves of the batching contract, and both
+ * are asserted through the same publisher the production code uses: the commands it received,
+ * the single flush per batch, and the acknowledgments that followed it.
+ *
+ * <p>The third connector's publisher is <em>slow</em>: every flush blocks for as long as a real
+ * {@code publishFlush} waits for the persisted ack. It exists for one case, the starvation that
+ * a shared scheduler hides until production: a connector whose deadline releases run on a
+ * thread another connector's flush is sitting on never meets its flush-interval.
  *
  * <p>The last case is the one that is easy to get wrong and expensive to discover later: when
  * the application stops, the records already read but not yet batched have to be published,
@@ -59,7 +64,19 @@ import org.springframework.test.annotation.DirtiesContext;
         "amps-connectors.connectors[1].amps.key.mode=PUBLISHER",
         "amps-connectors.connectors[1].amps.key.fields[0]=id",
         "amps-connectors.connectors[1].amps.batch.max-messages=500",
-        "amps-connectors.connectors[1].amps.batch.flush-interval=150ms"
+        "amps-connectors.connectors[1].amps.batch.flush-interval=150ms",
+        // Released by the timer too, as fast as the timer allows -- and its publisher takes
+        // SLOW_FLUSH per batch, so its deadline releases keep a scheduler thread busy.
+        "amps-connectors.connectors[2].name=slow",
+        "amps-connectors.connectors[2].format=JSON",
+        "amps-connectors.connectors[2].source.tcp.mode=LISTEN",
+        "amps-connectors.connectors[2].source.tcp.port=15003",
+        "amps-connectors.connectors[2].amps.topic=sow/test/slow",
+        "amps-connectors.connectors[2].amps.message-type=json",
+        "amps-connectors.connectors[2].amps.key.mode=PUBLISHER",
+        "amps-connectors.connectors[2].amps.key.fields[0]=id",
+        "amps-connectors.connectors[2].amps.batch.max-messages=500",
+        "amps-connectors.connectors[2].amps.batch.flush-interval=20ms"
 })
 // Each case drives the connectors and one of them stops them, so every method gets its own
 // context rather than inheriting whatever the last one left running.
@@ -67,6 +84,9 @@ import org.springframework.test.annotation.DirtiesContext;
 class ConnectorFlowTest {
 
     private static final Duration PATIENCE = Duration.ofSeconds(5);
+
+    /** How long the {@code slow} connector's publisher blocks in every flush. */
+    private static final Duration SLOW_FLUSH = Duration.ofMillis(400);
 
     @Autowired
     private Fakes fakes;
@@ -80,6 +100,7 @@ class ConnectorFlowTest {
 
         private final FakeRecordSource bySize = new FakeRecordSource();
         private final FakeRecordSource byTimeout = new FakeRecordSource();
+        private final FakeRecordSource slow = new FakeRecordSource();
         private final Map<String, RecordingAmpsPublisher> publishers = new ConcurrentHashMap<>();
 
         @Bean
@@ -93,11 +114,21 @@ class ConnectorFlowTest {
                     byTimeout, connector -> "bytimeout".equals(connector.getName()));
         }
 
-        /** One recording publisher per connector, exactly as the real factory does it. */
+        @Bean
+        FakeSourceFactory slowFactory() {
+            return new FakeSourceFactory(slow, connector -> "slow".equals(connector.getName()));
+        }
+
+        /**
+         * One recording publisher per connector, exactly as the real factory does it; the
+         * {@code slow} connector's is the one whose flushes take as long as a real ack wait.
+         */
         @Bean
         AmpsPublisherFactory recordingPublishers() {
             return connector -> publishers.computeIfAbsent(
-                    connector.getName(), name -> new RecordingAmpsPublisher());
+                    connector.getName(), name -> "slow".equals(name)
+                            ? new RecordingAmpsPublisher().slowFlushes(SLOW_FLUSH)
+                            : new RecordingAmpsPublisher());
         }
 
         RecordingAmpsPublisher publisher(String connector) {
@@ -126,11 +157,44 @@ class ConnectorFlowTest {
         return SourceRecord.of("{\"id\":\"" + id + "\"}", id).withAck(acks::incrementAndGet);
     }
 
+    /**
+     * A feed on its own thread: one record into {@code source} every {@code intervalMillis}
+     * until stopped. A real source reads on its own thread and blocks in the flow while its
+     * batch publishes, and so does this one.
+     */
+    private static final class Feeder {
+
+        private final Thread thread;
+        private volatile boolean running = true;
+
+        Feeder(FakeRecordSource source, String prefix, long intervalMillis) {
+            AtomicInteger acks = new AtomicInteger();
+            thread = new Thread(() -> {
+                for (int i = 0; running; i++) {
+                    source.emit(record(prefix + i, acks));
+                    try {
+                        Thread.sleep(intervalMillis);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }, prefix + "feeder");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        void stop() throws InterruptedException {
+            running = false;
+            thread.join(PATIENCE.toMillis());
+            assertThat(thread.isAlive()).as("feeder stopped").isFalse();
+        }
+    }
+
     @Test
     @DisplayName("every configured connector starts, connects and subscribes")
     void startsEveryConnector() {
         assertThat(manager.connectors()).extracting(Connector::name)
-                .containsExactly("bysize", "bytimeout");
+                .containsExactly("bysize", "bytimeout", "slow");
         assertThat(manager.connectors()).allMatch(Connector::isStarted);
         assertThat(fakes.publisher("bysize").isConnected()).isTrue();
         assertThat(fakes.bySize.startCount()).isEqualTo(1);
@@ -204,6 +268,40 @@ class ConnectorFlowTest {
         });
         // ~800ms of records at 150ms per batch: at least four batches, and never one of 20.
         assertThat(publisher.flushCount()).isGreaterThanOrEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("a connector whose flushes are slow does not delay another connector's deadline releases")
+    void aSlowConnectorDoesNotStarveAnothersTimer() throws InterruptedException {
+        AtomicInteger acks = new AtomicInteger();
+        RecordingAmpsPublisher trickle = fakes.publisher("bytimeout");
+        RecordingAmpsPublisher slow = fakes.publisher("slow");
+
+        // The feeder keeps the slow connector's timer firing: every record starts a batch that
+        // its 20ms deadline releases on the scheduler, where the publisher then blocks for
+        // SLOW_FLUSH. Released on a scheduler shared by every connector, that is the thread the
+        // trickling connector's deadline needs too -- and each of the trickle's records
+        // re-arms its timer, so a deadline that fires late, behind a slow flush, finds the
+        // group changed and does nothing. The trickle would then only ever go out when a slow
+        // flush happens to end between two of its records: about once per SLOW_FLUSH.
+        Feeder feeder = new Feeder(fakes.slow, "slow-", 50);
+        try {
+            for (int i = 0; i < 30; i++) {
+                fakes.byTimeout.emit(record("N-" + i, acks));
+                Thread.sleep(40);
+            }
+            Awaitility.await().atMost(PATIENCE).untilAsserted(() -> {
+                assertThat(trickle.calls()).hasSize(30);
+                assertThat(acks.get()).isEqualTo(30);
+            });
+        } finally {
+            feeder.stop();
+        }
+
+        // ~1200ms of records at 150ms per batch is eight deadlines; starved, it was three.
+        assertThat(trickle.flushCount()).isGreaterThanOrEqualTo(6);
+        // ...and the slow connector really was blocking a thread the whole time.
+        assertThat(slow.flushCount()).isGreaterThanOrEqualTo(2);
     }
 
     @Test

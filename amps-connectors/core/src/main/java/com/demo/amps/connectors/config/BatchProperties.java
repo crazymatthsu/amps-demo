@@ -16,8 +16,9 @@ import java.time.Duration;
  *   <li>{@link #getMaxMessages()} -- a full batch is published on the source thread, which is
  *       where the back-pressure comes from: a source that outruns AMPS ends up waiting in its
  *       own reader loop rather than growing a queue</li>
- *   <li>{@link #getFlushInterval()} -- a partial batch is published by the scheduler after this
- *       much idle time, so a quiet feed's last record does not sit unsent</li>
+ *   <li>{@link #getFlushInterval()} -- a partial batch is published on the connector's own
+ *       deadline thread this long after its first record, so a quiet feed's last record does
+ *       not sit unsent</li>
  * </ul>
  */
 public class BatchProperties {

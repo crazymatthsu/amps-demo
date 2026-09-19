@@ -17,6 +17,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * the at-least-once contract: nothing is acknowledged, the sources re-read, and the connector
  * carries on. Reproducing that against a live AMPS means unplugging something; here it is a
  * counter.
+ *
+ * <p>{@link #slowFlushes(Duration)} makes a flush <em>take time</em>, which a real one always
+ * does: {@code publishFlush} waits for the server's persisted ack. A flush that returns
+ * instantly hides every scheduling problem a slow one would expose, and the shared-scheduler
+ * starvation in {@code ConnectorFlowTest} is exactly such a problem.
  */
 public class RecordingAmpsPublisher implements AmpsPublisher {
 
@@ -35,6 +40,8 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
     private final List<Call> calls = java.util.Collections.synchronizedList(new ArrayList<>());
     private final AtomicInteger flushes = new AtomicInteger();
     private final AtomicInteger flushFailures = new AtomicInteger();
+
+    private volatile Duration flushDelay = Duration.ZERO;
 
     private volatile boolean connected;
 
@@ -76,6 +83,15 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
     @Override
     public boolean flush(Duration timeout) {
         flushes.incrementAndGet();
+        Duration delay = flushDelay;
+        if (!delay.isZero()) {
+            try {
+                Thread.sleep(delay.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
         return flushFailures.getAndUpdate(remaining -> Math.max(0, remaining - 1)) == 0;
     }
 
@@ -87,6 +103,12 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
     /** Make the next {@code count} flushes fail, as a timeout or a disconnect would. */
     public RecordingAmpsPublisher failFlushes(int count) {
         flushFailures.set(count);
+        return this;
+    }
+
+    /** Make every flush block for {@code delay}, as the wait for the persisted ack does. */
+    public RecordingAmpsPublisher slowFlushes(Duration delay) {
+        this.flushDelay = delay;
         return this;
     }
 

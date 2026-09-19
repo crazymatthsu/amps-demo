@@ -23,9 +23,9 @@ import org.slf4j.LoggerFactory;
  * from their last committed position, so the failure mode is duplicates rather than gaps.
  * That is the at-least-once contract, and this method is where it is kept.
  *
- * <p>Nothing escapes: this runs on a timer thread as often as on the source's, and an
- * exception out of a timer-triggered release would kill the scheduler for every connector in
- * the application.
+ * <p>Nothing escapes: this runs on the connector's deadline thread as often as on the
+ * source's, and an exception out of a timer-triggered release would reach that scheduler's
+ * error handler rather than anyone who knows which batch it was.
  */
 public final class BatchPublisher {
 

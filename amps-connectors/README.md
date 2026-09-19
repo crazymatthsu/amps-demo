@@ -95,7 +95,7 @@ flowchart LR
 
     ENC["PayloadEncoder — amps.message-type:<br/>json / fix / nvfix, chosen by the TARGET not the source<br/>passthrough AUTO: the original bytes when the formats<br/>match and nothing touched the record"]
 
-    BAT["Spring Integration aggregator + BatchPublisher<br/>release by amps.batch.max-messages (on the SOURCE<br/>thread — the back-pressure) or flush-interval<br/>(on the scheduler — the quiet feed's insurance)<br/>every command in order, then ONE flush"]
+    BAT["Spring Integration aggregator + BatchPublisher<br/>release by amps.batch.max-messages (on the SOURCE<br/>thread — the back-pressure) or flush-interval<br/>(on the connector's own deadline thread — the quiet<br/>feed's insurance) every command in order, then ONE flush"]
 
     PUB["HaAmpsPublisher — one HAClient per connector<br/>URI tcp://host:port/amps/&lt;message-type&gt;<br/>publish store replays what a reconnect left in doubt"]
 
@@ -175,8 +175,9 @@ of durability:
 2. A Spring Integration **aggregator** holds the results. It releases when
    `amps.batch.max-messages` have accumulated — on that same source thread, which is where the
    back-pressure comes from: a source that outruns AMPS ends up waiting in its own reader loop
-   instead of growing a queue — or when `amps.batch.flush-interval` of idle time passes, on the
-   scheduler, so a quiet feed's last record does not sit unsent.
+   instead of growing a queue — or when `amps.batch.flush-interval` has passed since the
+   batch's first record, on a deadline thread that is **this connector's own**, so a quiet
+   feed's last record does not sit unsent and a busy neighbour cannot make it wait.
 3. `BatchPublisher` issues every command of the batch in order (publish, delta_publish,
    sow_delete — order is preserved, because a delete and the publish beside it are not
    commutative), and then waits **once** on `publishFlush` for `amps.flush-timeout`.
@@ -402,7 +403,7 @@ per-record surprise.
         passthrough: AUTO                 # AUTO | ALWAYS | NEVER
         batch:
           max-messages: 500               # a full batch publishes on the source thread
-          flush-interval: 250ms           # a partial batch publishes on the scheduler
+          flush-interval: 250ms           # a partial batch publishes on the connector's own thread
 ```
 
 `passthrough: AUTO` publishes the **original payload bytes** when the source format matches the
@@ -575,6 +576,9 @@ Spring Integration earns its place for exactly one job — the **batch**:
 - keeping the aggregator's `SimpleMessageStore` gives `stop()` a **forced release**
   (`expireMessageGroups(0)`), which is how the last partial batch reaches AMPS at shutdown
   rather than being dropped;
+- the aggregator's **deadline runs on a scheduler of the connector's own** — one thread, created
+  and shut down with the flow — rather than on the application's shared `taskScheduler`. See
+  below for why that is not optional;
 - flows are registered at runtime through `IntegrationFlowContext` under the connector's name,
   so connectors stay **config-driven** — fifty connectors are fifty registrations, not fifty
   beans.
@@ -582,6 +586,30 @@ Spring Integration earns its place for exactly one job — the **batch**:
 The pipeline itself (`RecordPipeline`) is a plain function — `SourceRecord` in, `PublishRequest`
 or `null` out — so everything interesting about decoding, filtering, transforming and keying is
 unit-tested with no framework at all.
+
+**Why every connector has its own deadline thread.** The flush-interval release is not just a
+timer firing: it runs the whole publish, and a publish ends in `publishFlush`, which waits for
+the server's persisted ack — half a second and more against a real AMPS. Spring Boot builds
+Spring Integration's shared `taskScheduler` with `spring.task.scheduling.pool.size` threads,
+**one** by default, so on it every connector's deadline queues behind whichever connector is
+mid-flush. Late would be tolerable; what actually happens is worse. The aggregator re-arms the
+deadline on every record and discards a timer that fires after its group has changed, so a feed
+fast enough to add a record while the thread is busy keeps invalidating its own release and
+only ever goes out by size. Measured on the demo profile against a real AMPS: `ticks-tcp`
+(40 msg/s, `max-messages: 2000`, `flush-interval: 250ms`) released **six batches in three
+minutes**, of ~1,000 records each, with 40–70 dead timers queued on the one scheduler thread —
+and every counter read healthy. The unit tests never saw it because `RecordingAmpsPublisher`
+flushes instantly; `ConnectorFlowTest` now has a publisher that sleeps.
+
+The alternative — sizing the shared pool from the auto-configuration — was rejected because
+the right size is *the number of connectors*, a number that lives in the mounted configuration
+and changes when it does: the next connector added to an application quietly brings the bug
+back. It would also mean the library reaching into the application's own scheduling
+configuration, which any `@Scheduled` method the application declares runs on too. A thread
+per connector makes the isolation structural: a connector's deadline can only ever wait on
+that connector's own publish, and during that publish its source thread is blocked behind the
+same group lock, so nothing re-arms the timer meanwhile. The cost is one parked thread per
+connector, which is what a correctly sized pool would hold anyway.
 
 **Swapping the `DirectChannel` for a `QueueChannel`** is the one change to reach for if a source
 must never block: put a bounded `QueueChannel` in front of the aggregator, give the flow a
