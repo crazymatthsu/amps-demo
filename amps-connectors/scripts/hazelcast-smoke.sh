@@ -20,6 +20,11 @@
 #   AMPS_PLATFORM     default linux/amd64 -- the AMPS distribution is x86_64 only
 #   AMPS_BIN          the server binary in the image (default /opt/amps/bin/ampServer)
 #   HZ_IMAGE          default docker.io/hazelcast/hazelcast:5.5.0
+#   MC_IMAGE          default docker.io/hazelcast/management-center:5.5.0 -- Hazelcast's own
+#                     web UI, started beside the member so the cache can be browsed too:
+#                     http://localhost:28080 after `up` (SMOKE_HZ_MC_PORT), Cluster -> Maps
+#                     -> positions for the map, and the SQL Browser for its entries. Free for
+#                     a cluster this size (no licence needed); SMOKE_HZ_MC=0 leaves it out
 #   SMOKE_AMPS_PORT   host port for AMPS      (default 29007 -- never the demo's own 9007)
 #   SMOKE_AMPS_ADMIN_PORT  host port for the AMPS admin web UI, Galvanometer (default 28085):
 #                     http://localhost:28085 after `up`, to browse topics, the SOW and stats
@@ -58,6 +63,10 @@ APP_CONTAINER="amps-connectors-smoke-connector"
 AMPS_PLATFORM="${AMPS_PLATFORM:-linux/amd64}"
 AMPS_BIN="${AMPS_BIN:-/opt/amps/bin/ampServer}"
 HZ_IMAGE="${HZ_IMAGE:-docker.io/hazelcast/hazelcast:5.5.0}"
+MC_CONTAINER="amps-connectors-smoke-mc"
+MC_IMAGE="${MC_IMAGE:-docker.io/hazelcast/management-center:5.5.0}"
+SMOKE_HZ_MC="${SMOKE_HZ_MC:-1}"
+SMOKE_HZ_MC_PORT="${SMOKE_HZ_MC_PORT:-28080}"
 APP_IMAGE="localhost/amps-connector-app:local"
 SMOKE_AMPS_PORT="${SMOKE_AMPS_PORT:-29007}"
 SMOKE_AMPS_ADMIN_PORT="${SMOKE_AMPS_ADMIN_PORT:-28085}"
@@ -193,6 +202,47 @@ wait_for_hazelcast() {
     die "Hazelcast did not report STARTED within 120s"
 }
 
+# Management Center on the same network, pre-pointed at the member: MC_DEFAULT_CLUSTER and
+# MC_DEFAULT_CLUSTER_MEMBERS are the image's own knobs for "connect to this cluster on start",
+# so the UI opens on the cluster rather than on a connection form. A fresh Management Center
+# first asks which security provider to use; MC_INIT_CMD runs its own configuration tool
+# before the web app starts, and "dev-mode configure" answers that question with the
+# no-login mode meant for a throwaway cluster like this one (verified: the page then lands
+# on the cluster directly). It is a browsing aid for a person, nothing in feed/verify depends
+# on it, hence SMOKE_HZ_MC=0 to leave it out.
+start_mc() {
+    "$PODMAN" run -d \
+        --name "$MC_CONTAINER" \
+        --network "$NETWORK" --network-alias mc \
+        -p "${SMOKE_HZ_MC_PORT}:8080" \
+        -e MC_DEFAULT_CLUSTER=dev \
+        -e MC_DEFAULT_CLUSTER_MEMBERS=hazelcast:5701 \
+        -e MC_INIT_CMD='./bin/mc-conf.sh dev-mode configure' \
+        "$MC_IMAGE" >/dev/null
+}
+
+# Readiness is the UI answering on its port: the log has no single marker worth keying on,
+# and a person is the only consumer, so "the page loads" is exactly the right test.
+wait_for_mc() {
+    local deadline=$(( SECONDS + 180 ))
+    echo -n "waiting for Management Center ($MC_CONTAINER) "
+    while (( SECONDS < deadline )); do
+        if curl -s -o /dev/null "http://localhost:${SMOKE_HZ_MC_PORT}/"; then
+            echo " ready on http://localhost:${SMOKE_HZ_MC_PORT}"
+            return 0
+        fi
+        if ! container_running "$MC_CONTAINER"; then
+            echo
+            "$PODMAN" logs "$MC_CONTAINER" 2>&1 | tail -20
+            die "the Management Center container exited; see the log above"
+        fi
+        echo -n "."
+        sleep 3
+    done
+    echo
+    die "Management Center did not answer on ${SMOKE_HZ_MC_PORT} within 180s"
+}
+
 ensure_app_image() {
     if [[ "${SMOKE_REBUILD:-0}" != "1" ]] && "$PODMAN" image exists "$APP_IMAGE" 2>/dev/null; then
         echo "image    $APP_IMAGE (already built; SMOKE_REBUILD=1 to rebuild)"
@@ -268,6 +318,10 @@ cmd_up() {
 
     start_hazelcast
     wait_for_hazelcast
+    if [ "$SMOKE_HZ_MC" = 1 ]; then
+        start_mc
+        wait_for_mc
+    fi
 
     ensure_app_image
     start_connector
@@ -276,6 +330,9 @@ cmd_up() {
     echo
     echo "up: AMPS on localhost:${SMOKE_AMPS_PORT}, Hazelcast on localhost:${SMOKE_HZ_PORT},"
     echo "    connector 'positions-hazelcast' bridging map positions -> sow/connectors/positions"
+    if [ "$SMOKE_HZ_MC" = 1 ]; then
+        echo "    Hazelcast Management Center: http://localhost:${SMOKE_HZ_MC_PORT}"
+    fi
     echo "    AMPS admin web UI: http://localhost:${SMOKE_AMPS_ADMIN_PORT}"
     if [ "$SMOKE_AMPS_WS_PORT" = 9008 ]; then
         echo "    (websocket published on 9008, so the UI's SQL page can query the SOW)"
@@ -324,7 +381,7 @@ cmd_dump() {
 
 cmd_down() {
     local name
-    for name in "$APP_CONTAINER" "$HZ_CONTAINER" "$AMPS_CONTAINER"; do
+    for name in "$APP_CONTAINER" "$MC_CONTAINER" "$HZ_CONTAINER" "$AMPS_CONTAINER"; do
         "$PODMAN" rm -f "$name" >/dev/null 2>&1 || true
     done
     "$PODMAN" network rm "$NETWORK" >/dev/null 2>&1 || true

@@ -529,9 +529,11 @@ AMPS_IMAGE=localhost/amps-demo:5.3.5.135 amps-connectors/scripts/hazelcast-smoke
 
 `run` is `up` → `feed` → `verify` → `dump` → `down`, and `down` runs on failure too, so a
 broken run leaves nothing behind; the subcommands also work one at a time while poking at a
-live stack. It publishes **29007** (AMPS) and **25701** (Hazelcast) rather than 9007/5701, so
-it cannot collide with a demo server or a local member — override with `SMOKE_AMPS_PORT` and
-`SMOKE_HZ_PORT`. The image is built with `dockerBuildLocal` unless it already exists
+live stack. It publishes **29007** (AMPS), **25701** (Hazelcast), **28085** (the AMPS admin
+UI) and **28080** (Management Center) rather than 9007/5701/8085/8080, so it cannot collide
+with a demo server, a local member or anything else already holding a round number — override
+with `SMOKE_AMPS_PORT`, `SMOKE_HZ_PORT`, `SMOKE_AMPS_ADMIN_PORT` and `SMOKE_HZ_MC_PORT`.
+The image is built with `dockerBuildLocal` unless it already exists
 (`SMOKE_REBUILD=1` forces it). `feed` puts three positions, updates one and removes one;
 `verify` polls `sow/connectors/positions` until it holds exactly the two survivors with the
 updated value, printing a record-by-record diff and exiting non-zero if it never does; `dump`
@@ -547,6 +549,24 @@ catch, measured: the SQL page opens its websocket at `ws://<page host>:9008` —
 transport on **9008** when nothing on the host listens there, and on 29008 with a warning when
 something does (the demo's own `amps-demo` container, usually). Everything else in the UI
 works either way; only the SQL page needs the real port. `SMOKE_AMPS_WS_PORT` overrides it.
+
+Hazelcast's own **Management Center** is published on **28080** (`SMOKE_HZ_MC_PORT`), so the
+*other* end of the bridge can be browsed the same way. It starts pointed at the member
+(`MC_DEFAULT_CLUSTER` / `MC_DEFAULT_CLUSTER_MEMBERS`), so <http://localhost:28080> opens on
+the `dev` cluster rather than on a connection form: one member, the connector under
+**Clients**, and **Storage → Maps → positions** with its entry count, memory and
+operations/s. **MAP BROWSER** on that page fetches a single entry by key — `ACC-1|AAPL`
+(Key Type `String`) returns its `HazelcastJsonValue` payload, the owning member and the TTL.
+The **SQL** page in the left rail runs `SELECT * FROM positions` and returns the two
+survivors, `ACC-1|AAPL` at qty 175 and `ACC-3|TSLA` at qty 40. That last one needs a SQL
+*mapping*: Hazelcast's engine does not see an `IMap` until something declares its shape, and
+without one the SQL Browser answers every query with a connector wizard. So `feed` issues a
+`CREATE OR REPLACE MAPPING` before its puts — `HazelcastSmoke.MAPPING`, purely a browsing
+aid, read by nothing in `feed`, `verify` or the connector itself. A fresh Management Center
+would also stop on a "choose a security provider" page, so the container is started with
+`MC_INIT_CMD='./bin/mc-conf.sh dev-mode configure'`, which runs the config tool before the
+web app and bakes in **Dev Mode** — no login, no first-run question. Management Center is
+free for a cluster this size, and `SMOKE_HZ_MC=0` leaves the container out altogether.
 
 Two things about the network are worth knowing before something looks broken. The
 **connector** reaches the member at `hazelcast:5701` over the shared network, so no

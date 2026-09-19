@@ -10,6 +10,7 @@ import com.hazelcast.client.config.ClientConnectionStrategyConfig;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.core.HazelcastJsonValue;
 import com.hazelcast.map.IMap;
+import com.hazelcast.sql.SqlResult;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -56,6 +57,37 @@ public final class HazelcastSmoke {
     /** The topic that instance publishes into -- declared with NO {@code <Key>}. */
     private static final String TOPIC = "sow/connectors/positions";
 
+    /**
+     * A SQL mapping over {@link #MAP}, created for one reason: so that a <em>person</em> can
+     * run {@code SELECT * FROM positions} in Hazelcast Management Center's SQL Browser.
+     *
+     * <p>Hazelcast's SQL engine does not see an {@code IMap} until something declares its
+     * shape, so without this the SQL Browser answers every query with "Before you can query
+     * data in SQL, you need to create a mapping" and a connector wizard. Nothing in
+     * {@link #feed} or {@link #verify} reads it, and the connector does not either -- it
+     * subscribes to the map itself. Deleting this would change no assertion, only what the
+     * browser can show.
+     *
+     * <p>The columns mirror {@link #position}: {@code json-flat} projects the stored JSON
+     * object's own fields, so each name and type here is that payload's. {@code "avgCost"} is
+     * quoted to keep the column spelled exactly as the JSON field is. {@code CREATE OR
+     * REPLACE} rather than {@code CREATE}, because {@code feed} is meant to be re-runnable.
+     *
+     * <p>{@code DOUBLE} and not {@code DECIMAL} for {@code avgCost}, which is the one column
+     * where the choice shows. Hazelcast's JSON reader turns an unquoted number into a
+     * {@code double}, and declaring {@code DECIMAL} converts that double to its exact decimal
+     * value: {@code 242.10} comes back as {@code 242.099999999999994315658113919198513...} in
+     * the SQL Browser (measured). {@code DOUBLE} names what is actually stored, and the same
+     * row reads {@code 242.1}.
+     */
+    private static final String MAPPING = """
+            CREATE OR REPLACE MAPPING positions (
+                account VARCHAR,
+                symbol VARCHAR,
+                qty INT,
+                "avgCost" DOUBLE
+            ) TYPE IMap OPTIONS ('keyFormat'='varchar', 'valueFormat'='json-flat')""";
+
     /** Long enough for a container's batch flush and a podman-machine hiccup. */
     private static final Duration PATIENCE = Duration.ofSeconds(60);
 
@@ -98,11 +130,22 @@ public final class HazelcastSmoke {
      * a second upsert that replaces rather than adds, and a removal that has no payload left
      * to be addressed by anything except that same key.
      *
+     * <p>{@link #MAPPING} goes in ahead of them, purely so the same entries can be read in
+     * Management Center's SQL Browser afterwards -- see that constant.
+     *
      * @param hazelcast the published {@code host:port} of the member container
      */
     private static void feed(String hazelcast) {
         HazelcastInstance client = HazelcastClient.newHazelcastClient(clientConfig(hazelcast));
         try {
+            // Only so a person can SELECT * FROM positions in Management Center; the feed
+            // and the connector both go through the map itself and ignore this entirely.
+            // DDL yields no rows, so closing the result is the whole of reading it.
+            SqlResult mapping = client.getSql().execute(MAPPING);
+            mapping.close();
+            System.out.println("mapping positions: account, symbol, qty, \"avgCost\" over "
+                    + "IMap json-flat -- for Management Center's SQL Browser only");
+
             IMap<String, HazelcastJsonValue> positions = client.getMap(MAP);
             positions.put("ACC-1|AAPL", position("ACC-1", "AAPL", 100, "101.50"));
             positions.put("ACC-2|MSFT", position("ACC-2", "MSFT", 250, "330.25"));
