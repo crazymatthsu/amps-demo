@@ -538,6 +538,16 @@ updated value, printing a record-by-record diff and exiting non-zero if it never
 runs 60East's own `amps_sow_dump` inside the AMPS container, which prints the SOW file as the
 server wrote it (`spark` is in the image but the image carries no JVM, so it cannot run there).
 
+The AMPS **admin web UI** (Galvanometer) is published too, on **28085**
+(`SMOKE_AMPS_ADMIN_PORT`): after `up` and `feed`, open <http://localhost:28085>, pick **SQL**,
+type `sow/connectors/positions` as the topic and Execute to see the records with their
+publisher SowKeys; the SOW and Transaction Log pages show the topics and the journal. One
+catch, measured: the SQL page opens its websocket at `ws://<page host>:9008` — the port the
+*server config* names, whatever the host mapping — so the script publishes the websocket
+transport on **9008** when nothing on the host listens there, and on 29008 with a warning when
+something does (the demo's own `amps-demo` container, usually). Everything else in the UI
+works either way; only the SQL page needs the real port. `SMOKE_AMPS_WS_PORT` overrides it.
+
 Two things about the network are worth knowing before something looks broken. The
 **connector** reaches the member at `hazelcast:5701` over the shared network, so no
 `HZ_NETWORK_PUBLICADDRESS` is needed and none is set — the member advertising its container

@@ -21,6 +21,15 @@
 #   AMPS_BIN          the server binary in the image (default /opt/amps/bin/ampServer)
 #   HZ_IMAGE          default docker.io/hazelcast/hazelcast:5.5.0
 #   SMOKE_AMPS_PORT   host port for AMPS      (default 29007 -- never the demo's own 9007)
+#   SMOKE_AMPS_ADMIN_PORT  host port for the AMPS admin web UI, Galvanometer (default 28085):
+#                     http://localhost:28085 after `up`, to browse topics, the SOW and stats
+#   SMOKE_AMPS_WS_PORT  host port for the AMPS websocket transport. The web UI's SQL page
+#                     opens ws://<page host>:9008 -- the port number the SERVER config names,
+#                     whatever the host mapping is (verified: any other host port shows
+#                     "Error: Connection Failed" on that page). So the default is 9008 when
+#                     nothing on this host listens there, and 29008 with a warning when
+#                     something does (the demo's own amps-demo container, usually); the rest
+#                     of the UI works either way, only the SQL page needs the real port
 #   SMOKE_HZ_PORT     host port for Hazelcast (default 25701 -- never a member's own 5701)
 #   SMOKE_REBUILD     1 to rebuild localhost/amps-connector-app:local even when it exists
 #   PODMAN            container tool (default podman)
@@ -51,6 +60,18 @@ AMPS_BIN="${AMPS_BIN:-/opt/amps/bin/ampServer}"
 HZ_IMAGE="${HZ_IMAGE:-docker.io/hazelcast/hazelcast:5.5.0}"
 APP_IMAGE="localhost/amps-connector-app:local"
 SMOKE_AMPS_PORT="${SMOKE_AMPS_PORT:-29007}"
+SMOKE_AMPS_ADMIN_PORT="${SMOKE_AMPS_ADMIN_PORT:-28085}"
+# 9008 if it is free, because that is the only port the web UI's SQL page will dial; see the
+# header. bash's /dev/tcp is the probe, so the script needs neither nc nor lsof.
+ws_port_default() {
+    if (exec 3<>/dev/tcp/127.0.0.1/9008) 2>/dev/null; then
+        exec 3>&-
+        echo 29008
+    else
+        echo 9008
+    fi
+}
+SMOKE_AMPS_WS_PORT="${SMOKE_AMPS_WS_PORT:-$(ws_port_default)}"
 SMOKE_HZ_PORT="${SMOKE_HZ_PORT:-25701}"
 
 SMOKE_DIR="$ROOT/build/smoke"
@@ -109,6 +130,8 @@ start_amps() {
         --platform "$AMPS_PLATFORM" \
         --network "$NETWORK" --network-alias amps \
         -p "${SMOKE_AMPS_PORT}:9007" \
+        -p "${SMOKE_AMPS_ADMIN_PORT}:8085" \
+        -p "${SMOKE_AMPS_WS_PORT}:9008" \
         -v "${FLOW_DIR}:/amps/config${MOUNT_SUFFIX}" \
         -v "${AMPS_DATA}:/amps/data${MOUNT_SUFFIX}" \
         -w /amps/data \
@@ -253,6 +276,14 @@ cmd_up() {
     echo
     echo "up: AMPS on localhost:${SMOKE_AMPS_PORT}, Hazelcast on localhost:${SMOKE_HZ_PORT},"
     echo "    connector 'positions-hazelcast' bridging map positions -> sow/connectors/positions"
+    echo "    AMPS admin web UI: http://localhost:${SMOKE_AMPS_ADMIN_PORT}"
+    if [ "$SMOKE_AMPS_WS_PORT" = 9008 ]; then
+        echo "    (websocket published on 9008, so the UI's SQL page can query the SOW)"
+    else
+        echo "    WARNING: websocket published on ${SMOKE_AMPS_WS_PORT}, not 9008, because 9008 is"
+        echo "    taken on this host: the UI's SQL page will report 'Connection Failed'. Free"
+        echo "    9008 (stop whatever holds it) and rerun, or use 'dump' / 'verify' instead."
+    fi
 }
 
 # ---- feed / verify / dump ------------------------------------------------------
