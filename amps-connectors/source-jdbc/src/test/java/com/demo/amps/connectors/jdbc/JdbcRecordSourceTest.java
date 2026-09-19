@@ -201,13 +201,18 @@ class JdbcRecordSourceTest {
             source.start(received::add);
             awaitRecords(received, 2);
 
+            // A copy, not a sub-list view: the poll thread keeps re-emitting the snapshot
+            // into the live list, and a CopyOnWriteArrayList sub-list throws
+            // ConcurrentModificationException the moment the backing array moves under it.
+            List<SourceRecord> firstPoll = List.copyOf(received).subList(0, 2);
+
             // Joined here rather than in the operator's SQL, so the payload carries the
             // columns themselves and not a synthetic key column AMPS would have to store.
-            assertThat(received.subList(0, 2)).extracting(SourceRecord::key)
+            assertThat(firstPoll).extracting(SourceRecord::key)
                     .containsExactly("ACC-1|AAPL", "ACC-1|MSFT");
-            assertThat(received.subList(0, 2)).extracting(SourceRecord::action)
+            assertThat(firstPoll).extracting(SourceRecord::action)
                     .containsOnly(SourceRecord.Action.UPSERT);
-            assertThat(payload(received.get(0)).has("account")).isTrue();
+            assertThat(payload(firstPoll.get(0)).has("account")).isTrue();
         }
     }
 
