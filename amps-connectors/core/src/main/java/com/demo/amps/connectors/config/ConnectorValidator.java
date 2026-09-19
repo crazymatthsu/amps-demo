@@ -99,6 +99,67 @@ public final class ConnectorValidator {
                     + "the topic from scratch on every restart");
         }
         errors.addAll(validateJdbc(id, connector));
+        errors.addAll(validateHazelcast(id, connector));
+        return errors;
+    }
+
+    /**
+     * The {@code source.hazelcast} rules: which structure is read, and the settings that only
+     * one of them can mean anything to.
+     *
+     * <p>A topic and a map are not two spellings of one feed. A topic is a stream of payloads
+     * with no key and no removal; a map is keyed state whose entries can also stop existing.
+     * Configuring both would leave the driver to pick one, and a connector whose feed depends
+     * on which field the driver looks at first is a connector nobody can reason about -- so
+     * exactly one, checked here rather than resolved silently at runtime.
+     *
+     * <p>The rest are settings written where they cannot apply. {@code reliable} on a map and
+     * {@code snapshot} on a topic are each someone's reasonable guess about how the other
+     * structure recovers, and a guess that is quietly ignored is a connector that does not do
+     * what its configuration says.
+     *
+     * <p>The two families are judged differently, because they can be. {@code snapshot} and
+     * {@code predicate} are unset until written, so their mere <em>presence</em> under a topic
+     * is the mistake. {@code reliable} and {@code reliable-from} have had real defaults since
+     * before a map was readable here, so what is refused is a <em>value</em> that would have
+     * changed a topic's behaviour -- {@code reliable: false} under a map says nothing the
+     * driver was not already going to do, and failing an application over it would be pedantry
+     * rather than a caught mistake.
+     */
+    private static List<String> validateHazelcast(String id, ConnectorProperties connector) {
+        HazelcastSourceProperties hazelcast = connector.getSource().getHazelcast();
+        if (hazelcast == null) {
+            return List.of();
+        }
+        List<String> errors = new ArrayList<>();
+        boolean topic = !isBlank(hazelcast.getTopic());
+        boolean map = !isBlank(hazelcast.getMap());
+        if (topic == map) {
+            errors.add(id + "source.hazelcast needs exactly one of topic/map, and has "
+                    + (topic ? "both: a topic is a stream of payloads with no key and no "
+                            + "removal, a map is keyed state whose entries can also stop "
+                            + "existing -- they are different feeds"
+                            : "neither: name the topic to subscribe to, or the IMap to mirror"));
+        }
+        if (map) {
+            if (hazelcast.isReliable()
+                    || hazelcast.getReliableFrom() != HazelcastSourceProperties.ReliableFrom.NEWEST) {
+                errors.add(id + "source.hazelcast.reliable/reliable-from are only meaningful "
+                        + "for a topic -- they name a ringbuffer's replay, and a map recovers "
+                        + "by being read: that is what snapshot does");
+            }
+        } else if (topic) {
+            if (hazelcast.getSnapshot() != null) {
+                errors.add(id + "source.hazelcast.snapshot is only meaningful for a map -- a "
+                        + "topic has no contents to read, so what a restart sees is "
+                        + "reliable/reliable-from's business");
+            }
+            if (hazelcast.getPredicate() != null) {
+                errors.add(id + "source.hazelcast.predicate is only meaningful for a map: it "
+                        + "is evaluated against an entry's attributes, and a topic message has "
+                        + "none -- filter the payload with this connector's own filter: block");
+            }
+        }
         return errors;
     }
 
@@ -279,7 +340,8 @@ public final class ConnectorValidator {
         if (key.getMode() == KeyProperties.Mode.PUBLISHER && key.getFields().isEmpty()
                 && !sourceSuppliesKeys(connector.getSource())) {
             errors.add(id + "amps.key.mode: PUBLISHER with no amps.key.fields needs a source "
-                    + "that keys its own messages (kafka, or jdbc with key-columns), and "
+                    + "that keys its own messages (kafka, hazelcast with a map, or jdbc with "
+                    + "key-columns), and "
                     + connector.getSource().describe() + " does not. AMPS accepts a publish "
                     + "with no SowKey onto an unkeyed SOW topic and files it under a sentinel "
                     + "key, so every record would overwrite the one before it");
@@ -302,6 +364,11 @@ public final class ConnectorValidator {
     /** Whether the configured transport attaches a key to each record it delivers. */
     private static boolean sourceSuppliesKeys(SourceProperties source) {
         if (source.getKafka() != null) {
+            return true;
+        }
+        // A Hazelcast MAP entry is a key and a value; a Hazelcast TOPIC message is a payload
+        // and nothing more, which is why the structure and not the transport is the question.
+        if (source.getHazelcast() != null && source.getHazelcast().getMap() != null) {
             return true;
         }
         return source.getJdbc() != null && !source.getJdbc().getKeyColumns().isEmpty();

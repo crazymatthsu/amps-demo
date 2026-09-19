@@ -1,10 +1,10 @@
 # `amps-connectors`
 
-A **multi-source connector framework** — raw framed TCP feeds, Kafka topics, database queries
-and Hazelcast topics — that decodes, filters, reshapes, keys and publishes records into
-[60East AMPS](https://www.crankuptheamps.com/) topics, plus the **Spring Boot applications**
-built on it. One application runs one or more connectors; everything is driven from
-configuration.
+A **multi-source connector framework** — raw framed TCP feeds, Kafka topics, database queries,
+Hazelcast topics and Hazelcast caches — that decodes, filters, reshapes, keys and publishes
+records into [60East AMPS](https://www.crankuptheamps.com/) topics, plus the **Spring Boot
+applications** built on it. One application runs one or more connectors; everything is driven
+from configuration.
 
 The transport is one block in the connector's configuration. Everything after it — decoding,
 the filter, the transforms, the key, the encoder, batching and the publish — is shared, so a
@@ -43,7 +43,7 @@ amps-connectors/
 │   │   ├── common/   AMPS endpoint. Adding application #51 = mkdir + one application.yml.
 │   │   ├── streams/{ticks-tcp,orders-kafka}/
 │   │   ├── db/{positions-jdbc}/
-│   │   └── cache/{events-hazelcast}/
+│   │   └── cache/{events-hazelcast,positions-hazelcast}/
 │   └── dev/common/   the same shape, pointed at the dev servers
 ├── docker/           ONE shared spring-boot.Containerfile for every app image
 └── scripts/          amps-connectors-compose.sh — generates + drives podman compose
@@ -79,11 +79,11 @@ asked to do with it — so any source can feed any format can feed any topic sha
 flowchart LR
     subgraph SRC["source: — exactly one of tcp / kafka / jdbc / hazelcast"]
         direction TB
-        STATE["STATEFUL feed (jdbc.mode=SNAPSHOT, a compacted<br/>Kafka topic, a reliable Hazelcast topic from OLDEST)<br/>state, or a log that can be replayed into state:<br/>the whole query re-run (a vanished key DELETES),<br/>a tombstone (null value → DELETE), a ringbuffer<br/>replayed from its oldest retained message"]
+        STATE["STATEFUL feed (jdbc.mode=SNAPSHOT, a compacted<br/>Kafka topic, a reliable Hazelcast topic from OLDEST,<br/>a Hazelcast IMap)<br/>state, or a log that can be replayed into state:<br/>the whole query re-run (a vanished key DELETES),<br/>a tombstone (null value → DELETE), a ringbuffer<br/>replayed from its oldest retained message, a cache<br/>re-read on every connect (an entry removed DELETES)"]
         STREAM["STREAMING feed (a socket, an INCREMENTAL query,<br/>a plain Hazelcast topic)<br/>a log, and often not even that: a socket replays<br/>nothing at all and never deletes"]
     end
 
-    SUB["RecordSource → SourceRecord(data, key, UPSERT / DELETE, ack)<br/>TcpRecordSource (LISTEN binds and accepts N feeds;<br/>CONNECT redials) · KafkaRecordSource (group offsets<br/>committed only for ACKNOWLEDGED records) ·<br/>JdbcRecordSource (polls; rows → JSON; a key that<br/>stopped appearing → DELETE) · HazelcastRecordSource<br/>(client, plain or reliable topic) · SimulatedSource<br/>(driver: SIMULATED — the demo profile)"]
+    SUB["RecordSource → SourceRecord(data, key, UPSERT / DELETE, ack)<br/>TcpRecordSource (LISTEN binds and accepts N feeds;<br/>CONNECT redials) · KafkaRecordSource (group offsets<br/>committed only for ACKNOWLEDGED records) ·<br/>JdbcRecordSource (polls; rows → JSON; a key that<br/>stopped appearing → DELETE) · HazelcastRecordSource<br/>(client; a plain or reliable TOPIC, or an IMap whose<br/>entry events key and delete) · SimulatedSource<br/>(driver: SIMULATED — the demo profile)"]
 
     DEC["RecordDecoder — format:<br/>JSON (nesting and types kept: a price stays a<br/>BigDecimal, so 185.50 survives) · FIX / NVFIX<br/>(tag=value on field-separator; a repeated tag<br/>becomes tag#2, so groups survive) · TEXT<br/>malformed input → IllegalArgumentException → rejected"]
 
@@ -128,6 +128,22 @@ Reading the two ends against each other:
 - **The acknowledgment travels backwards.** It is the batch's flush, not the publish, that
   tells a source a record is safe — which is why Kafka's offsets and a JDBC watermark move on
   a batch boundary and not a record boundary.
+
+**A Hazelcast map is the one source already shaped like a SOW.** `source.hazelcast` names a
+`topic:` *or* a `map:`, never both, and the two are different feeds: a topic message is a
+payload with no key and no way to say that something stopped existing, while an `IMap` entry
+has identity and can cease to exist. A map connector registers **one entry listener** and then
+reads the **whole map** — listener first, snapshot second, so a write during the read is
+delivered twice (a duplicate upsert, which a SOW absorbs) rather than not at all — and every
+row of that snapshot is an upsert keyed by `String.valueOf(key)`. Added and updated are
+upserts; removed, evicted and expired are **deletes with an empty body**, which is exactly
+what a PUBLISHER-keyed topic needs and all a removal can be sure of. The caveat is worth
+knowing before it bites: entry events are **at-most-once and unordered across partitions** —
+Hazelcast neither queues them for a client that is away nor replays them — so the snapshot on
+every (re)connect is not an optimisation but the repair, and `snapshot: false` gives it up on
+purpose. The one gap a snapshot cannot close is a *missed delete*: a map that no longer holds a
+key says nothing about a SOW record that still does. `clear()` and a map-wide eviction name no
+keys at all, so they are counted and logged rather than turned into guessed deletes.
 
 ## The pipeline, stage by stage
 
@@ -204,8 +220,9 @@ without a `<Key>`. Measured against 5.3.5.135: the record is filed under a senti
 A whole feed can therefore collapse onto one SOW row while every log line and every counter
 says the connector is healthy, and nothing downstream can tell. So it is refused at both ends:
 `ConnectorValidator` will not accept PUBLISHER mode unless `key.fields` or a key-bearing source
-(kafka, or jdbc with `key-columns`) can supply a key, and at runtime `KeyExtractor` throws
-rather than publishing unkeyed — the record is counted as `rejected` and never sent.
+(kafka, hazelcast with a `map`, or jdbc with `key-columns`) can supply a key, and at runtime
+`KeyExtractor` throws rather than publishing unkeyed — the record is counted as `rejected` and
+never sent.
 
 The mirror-image mistake belongs to SERVER mode and is just as quiet: a payload AMPS cannot
 parse. A FIX connector with `field-separator: "|"` publishes pipe-delimited FIX, because the
@@ -309,12 +326,18 @@ rather than from a generated id.
           poll-interval: 5s
           reconnect-delay: 5s
           fetch-size: 1000
-        hazelcast:                        # ── a Hazelcast topic (always a CLIENT) ──────
+        hazelcast:                        # ── a Hazelcast topic or map (a CLIENT) ──────
           cluster-name: dev
           members: [ "${HAZELCAST_HOST:localhost}:5701" ]
-          topic: connector.events
-          reliable: true                  # ringbuffer-backed, so there is something to replay
-          reliable-from: OLDEST           # NEWEST | OLDEST (reliable only)
+          topic: connector.events         # EXACTLY ONE of topic / map
+          reliable: true                  # topic only: ringbuffer-backed, so there is
+          reliable-from: OLDEST           #   something to replay. NEWEST | OLDEST
+          # map: positions                # ...or a cache: the entry key IS the record's key
+          # snapshot: true                #   map only: re-read the whole map on every
+          #                               #   (re)connect. Default true, and the only thing
+          #                               #   that repairs an entry event nobody received
+          # predicate: "quantity > 0"     #   map only: a Hazelcast SQL predicate narrowing
+          #                               #   the listener AND the snapshot, cluster-side
           connection-timeout: 5s
           reconnect-delay: 5s
 ```
@@ -329,7 +352,11 @@ template writes `|` between its fields and the generator swaps it for the connec
 A **JDBC** row has no wire format, so the source synthesises one — a flat JSON object keyed by
 result-set column *label*, aliases included, numbers left as numbers — which is why
 `format: JSON` is required there. A **Kafka** null value is a tombstone and becomes a DELETE;
-the message key becomes the record's key. **TCP** frames carry no key and never delete.
+the message key becomes the record's key. **TCP** frames carry no key and never delete. A
+**Hazelcast map** value reaches the pipeline as text — a `String` passes through unchanged, a
+`HazelcastJsonValue` contributes its JSON, and a `Map`, a `List` or a POJO is serialised to
+JSON — so `format: JSON` is the setting that matches a cache of objects; its **topic** half
+bridges each message's `toString()` and never keys or deletes anything.
 
 ### `filter:` and `transforms:`
 
@@ -433,7 +460,7 @@ file from `config/<env>/` — one service per application directory, each flow a
 amps-connectors/scripts/amps-connectors-compose.sh local build          # gradle → podman images
 amps-connectors/scripts/amps-connectors-compose.sh local up streams     # the tcp + kafka apps
 amps-connectors/scripts/amps-connectors-compose.sh local up db          # the jdbc app
-amps-connectors/scripts/amps-connectors-compose.sh local up cache       # the hazelcast app
+amps-connectors/scripts/amps-connectors-compose.sh local up cache       # the hazelcast apps
 amps-connectors/scripts/amps-connectors-compose.sh local up             # every flow
 amps-connectors/scripts/amps-connectors-compose.sh local ps
 amps-connectors/scripts/amps-connectors-compose.sh local logs ticks-tcp

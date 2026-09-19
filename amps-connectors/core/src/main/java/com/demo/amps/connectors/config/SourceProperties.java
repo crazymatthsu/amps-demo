@@ -87,7 +87,7 @@ public class SourceProperties {
      * calls the thing being read.
      *
      * @return e.g. {@code kafka:orders}, {@code tcp:0.0.0.0:5001}, {@code jdbc:snapshot},
-     *     {@code hazelcast:events}
+     *     {@code hazelcast:topic:events}, {@code hazelcast:map:positions}
      */
     public String describe() {
         if (tcp != null) {
@@ -102,7 +102,12 @@ public class SourceProperties {
             return "jdbc:" + jdbc.getMode().name().toLowerCase(Locale.ROOT);
         }
         if (hazelcast != null) {
-            return "hazelcast:" + hazelcast.getTopic();
+            // Which structure, not just which name: a topic and a map of the same name are
+            // different feeds with different keys and different deletes, and the label is
+            // what a "PUBLISHER mode needs a key" message points at.
+            return hazelcast.getMap() != null
+                    ? "hazelcast:map:" + hazelcast.getMap()
+                    : "hazelcast:topic:" + hazelcast.getTopic();
         }
         return "<no source>";
     }

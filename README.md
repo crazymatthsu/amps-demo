@@ -160,9 +160,9 @@ recovery semantics, the failover integration test, and the container stack.
 
 `amps-connectors` is the **other direction**: a connector framework that
 brings feeds that are not AMPS -- a framed TCP socket, a Kafka topic, a
-polled database query, a Hazelcast topic -- into AMPS topics, with the
-decode, filter, transform, key and encode steps between them written as
-YAML rather than code. Its interesting half is the part AMPS makes
+polled database query, a Hazelcast topic or cache -- into AMPS topics,
+with the decode, filter, transform, key and encode steps between them
+written as YAML rather than code. Its interesting half is what AMPS makes
 non-obvious: which end computes the SOW key (the topic's `<Key>`, or a
 SowKey header the publisher sends -- and AMPS quietly files a keyless
 publish under a sentinel key, collapsing a whole feed onto one record), and

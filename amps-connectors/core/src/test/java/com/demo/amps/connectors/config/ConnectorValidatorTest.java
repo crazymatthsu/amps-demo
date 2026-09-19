@@ -168,6 +168,66 @@ class ConnectorValidatorTest {
     }
 
     @Test
+    @DisplayName("a topic and a map are different feeds, so hazelcast names exactly one")
+    void refusesHazelcastWithBothStructuresOrNeither() {
+        ConnectorProperties both = TestConnectors.hazelcast("events", "connector.events");
+        both.getSource().getHazelcast().setMap("positions");
+        assertThat(ConnectorValidator.validate(both))
+                .anySatisfy(error -> assertThat(error).contains("exactly one of topic/map"))
+                .anySatisfy(error -> assertThat(error).contains("both"));
+
+        ConnectorProperties neither = TestConnectors.hazelcast("events", "connector.events");
+        neither.getSource().getHazelcast().setTopic("  ");
+        assertThat(ConnectorValidator.validate(neither))
+                .anySatisfy(error -> assertThat(error).contains("neither"));
+    }
+
+    @Test
+    @DisplayName("reliable/reliable-from name a ringbuffer's replay, which a map does not have")
+    void refusesReliableSettingsOnAHazelcastMap() {
+        ConnectorProperties connector = TestConnectors.hazelcastMap("positions", "positions");
+        connector.getSource().getHazelcast().setReliable(true);
+        assertThat(ConnectorValidator.validate(connector))
+                .anySatisfy(error -> assertThat(error).contains("reliable/reliable-from"));
+
+        connector.getSource().getHazelcast().setReliable(false);
+        connector.getSource().getHazelcast()
+                .setReliableFrom(HazelcastSourceProperties.ReliableFrom.OLDEST);
+        assertThat(ConnectorValidator.validate(connector))
+                .anySatisfy(error -> assertThat(error).contains("a map recovers by being read"));
+    }
+
+    @Test
+    @DisplayName("snapshot and predicate read a map's contents, and a topic has none")
+    void refusesMapSettingsOnAHazelcastTopic() {
+        ConnectorProperties snapshot = TestConnectors.hazelcast("events", "connector.events");
+        snapshot.getSource().getHazelcast().setSnapshot(true);
+        assertThat(ConnectorValidator.validate(snapshot))
+                .anySatisfy(error -> assertThat(error).contains("snapshot is only meaningful"));
+
+        ConnectorProperties predicate = TestConnectors.hazelcast("events", "connector.events");
+        predicate.getSource().getHazelcast().setPredicate("status = 'OPEN'");
+        assertThat(ConnectorValidator.validate(predicate))
+                .anySatisfy(error -> assertThat(error).contains("predicate is only meaningful"));
+    }
+
+    @Test
+    @DisplayName("a map entry has a key of its own, so PUBLISHER mode needs no key fields")
+    void acceptsAHazelcastMapAsItsOwnKeySource() {
+        ConnectorProperties map = TestConnectors.withKey(
+                TestConnectors.hazelcastMap("positions", "positions"),
+                KeyProperties.Mode.PUBLISHER);
+        assertThat(ConnectorValidator.validate(map)).isEmpty();
+
+        // The topic half of the same driver keys nothing: a message is a payload and no more.
+        ConnectorProperties topic = TestConnectors.withKey(
+                TestConnectors.hazelcast("events", "connector.events"),
+                KeyProperties.Mode.PUBLISHER);
+        assertThat(ConnectorValidator.validate(topic))
+                .anySatisfy(error -> assertThat(error).contains("hazelcast:topic:connector.events"));
+    }
+
+    @Test
     void refusesKafkaWithNoGroupId() {
         ConnectorProperties connector = TestConnectors.kafka("orders", "orders", "g");
         connector.getSource().getKafka().setGroupId("  ");
