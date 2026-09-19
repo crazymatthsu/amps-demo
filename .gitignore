@@ -1,6 +1,8 @@
 # Gradle
 .gradle/
 build/
+# Kotlin compiler error logs from the build-logic included build.
+.kotlin/
 !gradle/wrapper/gradle-wrapper.jar
 
 # AMPS runtime state: SOW files, transaction log, admin stats. Created by

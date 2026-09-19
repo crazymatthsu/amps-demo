@@ -77,6 +77,15 @@ public final class TestConnectors {
         return connector;
     }
 
+    /** A Hazelcast connector on an {@code IMap} of the default {@code dev} cluster. */
+    public static ConnectorProperties hazelcastMap(String name, String map) {
+        ConnectorProperties connector = base(name);
+        HazelcastSourceProperties hazelcast = new HazelcastSourceProperties();
+        hazelcast.setMap(map);
+        connector.getSource().setHazelcast(hazelcast);
+        return connector;
+    }
+
     /**
      * A connector with no transport at all, driven by the in-process generator: the cheapest
      * way to put real records through the whole pipeline.
