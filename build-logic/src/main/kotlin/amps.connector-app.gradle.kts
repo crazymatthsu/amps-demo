@@ -164,10 +164,16 @@ tasks.register<Exec>("dockerBuildLocal") {
     description = "Builds this app's image into podman as localhost/amps-<app>:local."
     dependsOn(stageDockerContext)
     workingDir = layout.buildDirectory.dir("docker").get().asFile
+    // An Exec task resolves its binary against the GRADLE DAEMON's PATH, not the shell's,
+    // and a daemon started from a launcher with a minimal PATH cannot find a podman
+    // installed under /opt/podman/bin -- "A problem occurred starting process 'command
+    // 'podman''", from a shell where podman works perfectly. CONTAINER_ENGINE (the same
+    // variable amps-test-harness reads) names it; an absolute path always works.
+    val engine = providers.environmentVariable("CONTAINER_ENGINE").orElse("podman")
     // --format docker keeps the Containerfile HEALTHCHECK; the default OCI format
     // drops it.
     commandLine(
-        "podman", "build", "--format", "docker",
+        engine.get(), "build", "--format", "docker",
         "-t", "localhost/amps-${project.name}:local", "."
     )
 }

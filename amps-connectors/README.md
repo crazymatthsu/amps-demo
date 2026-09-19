@@ -503,8 +503,58 @@ collapse looks *fine* from the connector's side), a filtered line and a malforme
 SOW alone while the feed carries on, a journal topic replays every record from the `epoch`
 bookmark, and a FIX `35=G` replaces the record its `35=D` created. `JdbcToAmpsIT` polls an H2
 table and watches an insert, an update and — the one that is not a message at all — a **delete**
-reach the SOW. Both skip rather than fail when `AMPS_IMAGE` is unset, so a green build is not by
-itself proof they ran: check for `SKIPPED` if it matters.
+reach the SOW. `HazelcastToAmpsIT` runs a real embedded Hazelcast member in the test JVM and
+mirrors an `IMap` into the SOW: entries written **before the application existed** arrive
+anyway (only the snapshot can deliver them — entry events are at-most-once and are never
+replayed), a put and a re-put become one record rather than two, `map.remove` becomes a
+`sow_delete` by the map's own key, a `Map` value reaches AMPS as JSON with its numbers still
+numbers (so `/qty > 100` matches server-side), and a second connector's `predicate` keeps the
+entries that do not match off the topic entirely. All three skip rather than fail when
+`AMPS_IMAGE` is unset, so a green build is not by itself proof they ran: check for `SKIPPED`
+if it matters.
+
+### Smoke test on podman
+
+The integration tests run the application *in the test's own JVM*. The image, the two mounted
+configuration directories, the `${AMPS_HOST}` / `${HAZELCAST_HOST}` placeholders and the
+container's own healthcheck are a different claim, and
+[`scripts/hazelcast-smoke.sh`](scripts/hazelcast-smoke.sh) is the one that checks it — three
+containers on a private network (AMPS, a Hazelcast member, and
+`localhost/amps-connector-app:local` running `config/local/cache/positions-hazelcast`), plus a
+host-side driver that writes the cache and reads the SOW back:
+
+```bash
+AMPS_IMAGE=localhost/amps-demo:5.3.5.135 amps-connectors/scripts/hazelcast-smoke.sh run
+```
+
+`run` is `up` → `feed` → `verify` → `dump` → `down`, and `down` runs on failure too, so a
+broken run leaves nothing behind; the subcommands also work one at a time while poking at a
+live stack. It publishes **29007** (AMPS) and **25701** (Hazelcast) rather than 9007/5701, so
+it cannot collide with a demo server or a local member — override with `SMOKE_AMPS_PORT` and
+`SMOKE_HZ_PORT`. The image is built with `dockerBuildLocal` unless it already exists
+(`SMOKE_REBUILD=1` forces it). `feed` puts three positions, updates one and removes one;
+`verify` polls `sow/connectors/positions` until it holds exactly the two survivors with the
+updated value, printing a record-by-record diff and exiting non-zero if it never does; `dump`
+runs 60East's own `amps_sow_dump` inside the AMPS container, which prints the SOW file as the
+server wrote it (`spark` is in the image but the image carries no JVM, so it cannot run there).
+
+The AMPS **admin web UI** (Galvanometer) is published too, on **28085**
+(`SMOKE_AMPS_ADMIN_PORT`): after `up` and `feed`, open <http://localhost:28085>, pick **SQL**,
+type `sow/connectors/positions` as the topic and Execute to see the records with their
+publisher SowKeys; the SOW and Transaction Log pages show the topics and the journal. One
+catch, measured: the SQL page opens its websocket at `ws://<page host>:9008` — the port the
+*server config* names, whatever the host mapping — so the script publishes the websocket
+transport on **9008** when nothing on the host listens there, and on 29008 with a warning when
+something does (the demo's own `amps-demo` container, usually). Everything else in the UI
+works either way; only the SQL page needs the real port. `SMOKE_AMPS_WS_PORT` overrides it.
+
+Two things about the network are worth knowing before something looks broken. The
+**connector** reaches the member at `hazelcast:5701` over the shared network, so no
+`HZ_NETWORK_PUBLICADDRESS` is needed and none is set — the member advertising its container
+address is exactly right for everything on that network. The **host** is not on that network,
+so the driver's Hazelcast client runs **unisocket** (smart routing off): a smart client would
+connect to the published port, ask for the member list, learn a `10.89.x.y:5701` it cannot
+route to, and hang.
 
 ## Why Spring Integration, and only for the pipeline
 
