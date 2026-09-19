@@ -1,0 +1,43 @@
+# ticks-tcp (local/streams) -- a raw newline-delimited JSON tick feed off a socket, appended to a JOURNAL topic.
+#
+# A socket carries no history and no message key, and it never deletes: there is nothing
+# to replay on a redial and nothing a removal could address. connectors/ticks is declared
+# with no SOW at all for exactly that reason -- every record goes to the transaction log,
+# and a consumer reads it back with a bookmark subscription rather than a SOW query. So
+# this connector has no `key:` block, and `on-delete: IGNORE` says the removal path is
+# unreachable rather than leaving a default configured that can never fire.
+#
+# This is also the connector that is LISTENED to rather than dialled: `mode: LISTEN` binds
+# the port and accepts any number of feeds, one reader thread each. It is the only kind of
+# connector whose port the compose generator publishes (TCP_LISTEN_PORT).
+#
+# Layered over the baked defaults and config/local/common/ at runtime; this file owns the
+# connector list. Reference examples with commentary: application-demo.yml.
+amps-connectors:
+  connectors:
+    - name: ticks-tcp
+      enabled: true
+      format: JSON
+      source:
+        driver: ${source-driver:REAL}
+        tcp:
+          mode: LISTEN
+          host: 0.0.0.0            # LISTEN: the bind address (CONNECT: the peer to dial)
+          port: 5001
+          framing: DELIMITED       # DELIMITED | LENGTH_PREFIXED (4-byte big-endian)
+          # The YAML escape for the separator's code point, never the byte itself: a
+          # literal control character does not survive an editor, a diff or a paste.
+          delimiter: "\n"
+          charset: UTF-8
+          connect-timeout: 5s
+          reconnect-delay: 5s
+      amps:
+        topic: connectors/ticks
+        message-type: json
+        command: PUBLISH
+        on-delete: IGNORE          # a journal topic has nothing to delete from
+        # JSON in, json out, no transforms: the source's own bytes reach AMPS unchanged.
+        passthrough: AUTO
+        batch:
+          max-messages: 2000       # small messages at high rates: batch wide
+          flush-interval: 250ms    # ...but never leave a quiet feed's last tick unsent

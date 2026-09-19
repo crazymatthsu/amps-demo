@@ -1,0 +1,27 @@
+# Shared by every connector application in the `local` environment. Mounted at
+# /app/config/common/ ahead of the instance directory, so an instance file wins
+# any overlap.
+#
+# NEVER define `amps-connectors.connectors` here: two lists merge BY INDEX, so a common
+# entry would bleed through underneath every app's own list -- the file would still
+# parse, the app would still start, and connector [0] would quietly not be the one the
+# instance file defines. ConfigTreeTest enforces this.
+amps-connectors:
+  amps:
+    # In a container the compose generator sets AMPS_HOST=host.containers.internal;
+    # from the IDE the default reaches the same server on localhost:9007.
+    host: ${AMPS_HOST:localhost}
+    port: ${AMPS_PORT:9007}
+    transport: tcp
+    # Client names are <prefix>-<connector name>, and the name is the identity AMPS and
+    # the publish store correlate across runs -- so it comes from configuration, never
+    # from a generated id.
+    client-name-prefix: amps-connectors
+    logon-timeout: 10s
+    reconnect-delay: 5s
+    # In the client's heap: survives a reconnect, not a restart, which is the right trade
+    # for connectors whose sources can replay (Kafka's group, a JDBC snapshot). FILE buys
+    # restart durability for a synchronous write per publish.
+    publish-store: MEMORY
+    publish-store-dir: build/client-state/amps-connectors
+    flush-timeout: 10s

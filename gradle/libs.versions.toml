@@ -50,6 +50,24 @@ quickfixj-core = { module = "org.quickfixj:quickfixj-core", version.ref = "quick
 quickfixj-messages-fix42 = { module = "org.quickfixj:quickfixj-messages-fix42", version.ref = "quickfixj" }
 # Spring Integration, at the version the Spring Boot BOM pins (6.5.x for Boot 3.5).
 spring-boot-starter-integration = { module = "org.springframework.boot:spring-boot-starter-integration" }
+# Hibernate Validator: @Validated @ConfigurationProperties silently skips @NotBlank
+# unless a validator is on the classpath, and amps-connectors is configuration first.
+spring-boot-starter-validation = { module = "org.springframework.boot:spring-boot-starter-validation" }
+# Jackson, for the JSON record decoder/encoder -- the starter, not the web server.
+spring-boot-starter-json = { module = "org.springframework.boot:spring-boot-starter-json" }
+# The web server a connector application runs only so that actuator has somewhere
+# to live; connectors themselves are outbound clients.
+spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web" }
+# /actuator/health/readiness is what the container HEALTHCHECK and compose probes call.
+spring-boot-starter-actuator = { module = "org.springframework.boot:spring-boot-starter-actuator" }
+# Kafka consumer for :amps-connectors:source-kafka, at the version the Boot BOM pins.
+kafka-clients = { module = "org.apache.kafka:kafka-clients" }
+# A real database in-process for :amps-connectors:source-jdbc's tests: DDL, DML and
+# result-set typing are what that source is made of, and none of it is worth mocking.
+h2 = { module = "com.h2database:h2" }
+# The one JDBC driver the generic runner image carries, so a config-only connector
+# can dial a real database without a rebuild. Version from the Boot BOM.
+postgresql = { module = "org.postgresql:postgresql" }
 
 [plugins]
 protobuf = { id = "com.google.protobuf", version.ref = "protobufPlugin" }

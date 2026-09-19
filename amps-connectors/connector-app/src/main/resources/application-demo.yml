@@ -1,0 +1,213 @@
+# `demo` profile -- run the whole pipeline against nothing but an AMPS server, with four
+# documented example connectors (one per transport block, one per shape of target topic).
+#
+#   AMPS_FLOW=amps-connectors ./server/scripts/amps.sh start
+#   ./gradlew :amps-connectors:connector-app:bootRun --args="--spring.profiles.active=demo"
+#
+# Every source switches to the in-process simulator, which renders each connector's own
+# `simulated.template` in that connector's own format. Decode, filter, transforms, key
+# extraction, encoding, batching and the AMPS publish all run exactly as they do against a
+# real broker -- only the bytes' origin differs. That is what makes this profile a demo of
+# the framework rather than a demo of Kafka: no broker, no database and no Hazelcast cluster
+# have to exist for all four connectors to publish.
+#
+# These definitions double as the reference examples for amps-connectors/README.md; the
+# deployable per-application configuration lives in amps-connectors/config/<env>/<flow>/<app>/
+# instead. Do not combine this profile with a mounted instance configuration: two
+# `amps-connectors.connectors` lists merge by index, not by name.
+source-driver: SIMULATED
+
+amps-connectors:
+  connectors:
+
+    # ---------------------------------------------------------------------------------
+    # A raw socket feed of JSON ticks -> a JOURNAL topic.
+    #
+    # connectors/ticks has no SOW at all, so there is no key to compute and nothing a
+    # removal could address: every record is appended to the transaction log and read
+    # back with a bookmark subscription. `on-delete: IGNORE` says so out loud -- a socket
+    # never produces a DELETE, and leaving the default would be configuring a removal
+    # path that cannot be reached.
+    #
+    # passthrough: the format (JSON) matches the message type (json) and no transform
+    # touches the record, so AUTO publishes the source's own bytes unchanged. Decoding
+    # still happens -- the filter and the counters need the fields -- but nothing is
+    # re-encoded, so a tick reaches AMPS byte for byte as the feed wrote it.
+    # ---------------------------------------------------------------------------------
+    - name: ticks-tcp
+      enabled: true
+      format: JSON
+      source:
+        driver: ${source-driver:REAL}
+        simulated:
+          rate: 40
+          keys: 50
+          template: '{"symbol":"SYM-{{key}}","bid":101.25,"ask":101.30,"last":101.28,"size":{{seq}},"tickTime":"{{ts}}"}'
+        tcp:
+          mode: LISTEN             # the feed dials US; CONNECT is the other way round
+          host: 0.0.0.0
+          port: 5001
+          framing: DELIMITED
+          # The YAML escape for the separator's code point, never the byte itself: a
+          # literal control character does not survive an editor, a diff or a paste.
+          delimiter: "\n"
+          charset: UTF-8
+          connect-timeout: 5s
+          reconnect-delay: 5s
+      amps:
+        topic: connectors/ticks
+        message-type: json
+        command: PUBLISH
+        on-delete: IGNORE          # a journal topic has nothing to delete from
+        passthrough: AUTO
+        batch:
+          max-messages: 2000       # a tick feed is small messages at high rates
+          flush-interval: 250ms
+
+    # ---------------------------------------------------------------------------------
+    # A Kafka topic of FIX orders -> a SOW topic AMPS keys itself.
+    #
+    # sow/connectors/orders is declared `<Key>/11</Key>`, so the SERVER derives the key
+    # from the payload and the connector sends no SowKey. What it must do instead is
+    # guarantee tag 11 is *there*: `key.fields: ["11"]` is not a key to send, it is the
+    # list KeyExtractor checks, and a record missing tag 11 is rejected rather than
+    # published under whatever the server would make of it.
+    #
+    # The filter is the declarative half of "which records are worth publishing": only
+    # the three message types that carry order state (new, replace, cancel) reach the
+    # blotter. It runs BEFORE the transforms, so it addresses tags as the feed sends them.
+    # ---------------------------------------------------------------------------------
+    - name: orders-kafka
+      enabled: true
+      format: FIX
+      # field-separator is NOT set: it defaults to SOH, which is what a FIX feed puts on
+      # the wire. The template below writes `|` because a literal SOH does not survive a
+      # YAML file, and the simulator swaps it for the connector's separator on the way out.
+      source:
+        driver: ${source-driver:REAL}
+        simulated:
+          rate: 20
+          keys: 25
+          template: "35=D|11=ORD-{{key}}|55=SYM-{{key}}|54=1|38={{seq}}|44=101.25|60={{ts}}|10=000"
+        kafka:
+          bootstrap-servers: "${KAFKA_HOST:localhost}:9092"
+          topic: orders.fix
+          group-id: amps-connectors-demo   # where this connector's position lives
+          from: EARLIEST
+          poll-timeout: 500ms
+          max-poll-records: 500
+          reconnect-delay: 5s
+          properties: {}           # raw consumer properties (SSL, SASL, fetch sizing)
+      filter:
+        match: ALL
+        rules:
+          - { field: "35", in: [D, G, F] }
+      amps:
+        topic: sow/connectors/orders
+        message-type: fix          # selects the encoder AND the client URI (/amps/fix)
+        command: PUBLISH
+        key:
+          fields: [ "11" ]
+          mode: SERVER             # the topic's <Key> derives it; these are the fields to check
+        on-delete: SOW_DELETE
+        passthrough: AUTO
+        batch:
+          max-messages: 500
+          flush-interval: 250ms
+
+    # ---------------------------------------------------------------------------------
+    # A polled positions query -> a SOW topic the PUBLISHER keys.
+    #
+    # sow/connectors/positions is declared WITHOUT a <Key>, so AMPS expects a SowKey
+    # header on every publish. That is the mode with the trap: a publish with no SowKey
+    # onto such a topic is NOT rejected -- AMPS files it under a sentinel key and every
+    # later keyless publish overwrites that same record, so a whole feed collapses onto
+    # one SOW row while the logs stay clean. Here the key is built from the payload
+    # (account + symbol, joined by `separator`), and a record missing either field is
+    # counted as rejected instead of being published unkeyed.
+    #
+    # `derive` computes a field the feed does not carry, in the same namespace the rest
+    # of the configuration addresses: the SpEL result keeps its type, so notional is
+    # written into the JSON as a number rather than a quoted string. Any transform at all
+    # disables passthrough -- once the field map is edited, the original bytes are no
+    # longer what the connector means to publish.
+    # ---------------------------------------------------------------------------------
+    - name: positions-jdbc
+      enabled: true
+      format: JSON                 # required by source.jdbc: the source synthesises the JSON
+      source:
+        driver: ${source-driver:REAL}
+        simulated:
+          rate: 10
+          keys: 12
+          template: '{"account":"ACC-{{key}}","symbol":"SYM-{{key}}","quantity":{{seq}},"avgCost":101.25,"updatedAt":"{{ts}}"}'
+        jdbc:
+          url: "jdbc:postgresql://${JDBC_HOST:localhost}:5432/trading"
+          username: trading_ro     # read-only: this connector only ever SELECTs
+          # Named here, never written: these files ship in the jar and in git, so a
+          # credential key carries one ${...} placeholder and nothing else.
+          password: "${JDBC_PASSWORD:}"
+          mode: SNAPSHOT           # the whole query every poll: the result set IS the state
+          query: >-
+            SELECT account, symbol, quantity, avg_cost, updated_at FROM positions
+          key-columns: [account, symbol]   # what makes a vanished row a DELETE
+          key-separator: "|"
+          poll-interval: 5s
+          reconnect-delay: 5s
+          fetch-size: 1000
+      transforms:
+        - derive: { notional: "#num(#f['quantity']) * #num(#f['avgCost'])" }
+      amps:
+        topic: sow/connectors/positions
+        message-type: json
+        command: PUBLISH
+        key:
+          fields: [ account, symbol ]
+          separator: "|"
+          mode: PUBLISHER          # the topic has no <Key>; the SowKey header is the key
+        on-delete: SOW_DELETE      # a key that stopped appearing leaves the SOW
+        passthrough: AUTO          # ...which the derive above turns into "encode", in fact
+        batch:
+          max-messages: 5000
+          flush-interval: 500ms
+
+    # ---------------------------------------------------------------------------------
+    # A Hazelcast reliable topic of JSON events -> a SOW topic keyed on /id.
+    #
+    # The plain case, and the one to copy first: a feed whose records carry their own
+    # identity, a topic declared `<Key>/id</Key>`, and a projection that publishes four
+    # fields out of six. `keep` is an allowlist -- anything not listed never reaches AMPS
+    # -- and it has to include every key field, which the validator checks rather than
+    # letting the connector reject every record at runtime.
+    # ---------------------------------------------------------------------------------
+    - name: events-hazelcast
+      enabled: true
+      format: JSON
+      source:
+        driver: ${source-driver:REAL}
+        simulated:
+          rate: 8
+          keys: 6
+          template: '{"id":"EV-{{key}}","kind":"heartbeat","severity":"INFO","detail":"simulated event {{seq}}","source":"demo","ts":"{{ts}}"}'
+        hazelcast:
+          cluster-name: dev
+          members: [ "${HAZELCAST_HOST:localhost}:5701" ]
+          topic: connector.events
+          reliable: true           # ringbuffer-backed, so a restart can replay
+          reliable-from: OLDEST    # ...and OLDEST is what actually replays it
+          connection-timeout: 5s
+          reconnect-delay: 5s
+      transforms:
+        - keep: [ id, kind, severity, ts ]
+      amps:
+        topic: sow/connectors/events
+        message-type: json
+        command: PUBLISH
+        key:
+          fields: [ id ]
+          mode: SERVER             # /id in the topic's definition derives the key
+        on-delete: SOW_DELETE
+        passthrough: AUTO
+        batch:
+          max-messages: 500
+          flush-interval: 250ms

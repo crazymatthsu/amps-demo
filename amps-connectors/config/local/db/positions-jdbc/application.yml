@@ -1,0 +1,66 @@
+# positions-jdbc (local/db) -- the positions table of a trading database, polled as a snapshot.
+#
+# A query is a snapshot, not a stream, so this source re-runs the whole query every
+# poll-interval and upserts every row. `key-columns` is what lets it also express a
+# REMOVAL: the source remembers the key set between polls and emits a DELETE for every key
+# that stopped appearing, carrying just those columns as JSON -- the SQL spelling of an
+# out-of-focus message.
+#
+# The keys travel end to end. sow/connectors/positions is declared WITHOUT a <Key>, so
+# AMPS expects the PUBLISHER to name each record: with `key.fields` left empty, the SowKey
+# is the source's own key (account|symbol, as joined by key-separator below), and the
+# vanished-row DELETE becomes a sow_delete by that same key. That is the one combination
+# where a removal needs no payload at all, which matters because a deleted row has none.
+#
+# Never publish here without a key. AMPS does not reject a keyless publish onto an unkeyed
+# SOW topic -- it files the record under a sentinel key and every later keyless publish
+# overwrites it -- so the connector rejects what it cannot key instead.
+#
+# A result-set row has no wire format, so the source builds one: each row arrives as a
+# JSON object keyed by result-set column LABEL (an `AS` alias included), which is why
+# `format: JSON` is required here and why the key columns below are the query's own column
+# names.
+#
+# Layered over the baked defaults and config/local/common/ at runtime; this file owns the
+# connector list. Reference examples with commentary: application-demo.yml.
+amps-connectors:
+  connectors:
+    - name: positions-jdbc
+      enabled: true
+      format: JSON                 # required by source.jdbc: the source synthesises the JSON
+      source:
+        driver: ${source-driver:REAL}
+        jdbc:
+          url: "jdbc:postgresql://${JDBC_HOST:localhost}:5432/trading"
+          username: trading_ro     # read-only: this connector only ever SELECTs
+          # Named here, never written: these files are plaintext in git, so ConfigTreeTest
+          # allows a credential key to carry one ${...} placeholder and nothing else. The
+          # container sets JDBC_PASSWORD; unset, it resolves to blank and the driver is
+          # handed whatever authentication the URL itself carries.
+          password: "${JDBC_PASSWORD:}"
+          mode: SNAPSHOT           # the whole query every poll: state, so the SOW converges
+          # Run verbatim -- the source never rewrites it, not even to apply a watermark.
+          query: >-
+            SELECT account, symbol, quantity, avg_cost, updated_at
+            FROM positions
+          # A position is an account AND a symbol. The list spares the query a synthetic
+          # concatenated column that AMPS would then have to carry.
+          key-columns: [account, symbol]
+          key-separator: "|"
+          poll-interval: 5s
+          reconnect-delay: 5s
+          fetch-size: 1000         # rows per round trip; bounds the driver's buffering
+      amps:
+        topic: sow/connectors/positions
+        message-type: json
+        command: PUBLISH
+        key:
+          # Empty on purpose: the SOURCE supplies the key (the key-columns above, joined),
+          # which is the only key a vanished row still has once its payload is gone.
+          fields: []
+          mode: PUBLISHER
+        on-delete: SOW_DELETE      # by key, in PUBLISHER mode: sow_delete with that SowKey
+        passthrough: AUTO
+        batch:
+          max-messages: 5000       # a snapshot poll arrives all at once
+          flush-interval: 500ms

@@ -21,6 +21,7 @@ amps-demo/
 ├── amps-test-harness/  starts a throwaway AMPS container for the integration suites
 ├── fix-pub-seqno/  FIX publisher sequence recovery: find the last tag 8888 AMPS holds, republish the gap
 ├── quickfixj-v2-demo/  QuickFIX/J 2.x drop-copy engine on Spring Boot + Spring Integration, sequence numbers replicated to AMPS for failover
+├── amps-connectors/  source -> AMPS connector framework (TCP, Kafka, JDBC, Hazelcast) + the generic Spring Boot runner its config tree deploys
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -156,6 +157,31 @@ AMPS_FLOW=quickfixj-dropcopy ./server/scripts/amps.sh start
 for the step-by-step run guide (laptop and containers, including the
 failover and a manual resequence), the flow, the store's write-behind and
 recovery semantics, the failover integration test, and the container stack.
+
+`amps-connectors` is the **other direction**: a connector framework that
+brings feeds that are not AMPS -- a framed TCP socket, a Kafka topic, a
+polled database query, a Hazelcast topic -- into AMPS topics, with the
+decode, filter, transform, key and encode steps between them written as
+YAML rather than code. Its interesting half is the part AMPS makes
+non-obvious: which end computes the SOW key (the topic's `<Key>`, or a
+SowKey header the publisher sends -- and AMPS quietly files a keyless
+publish under a sentinel key, collapsing a whole feed onto one record), and
+what a delete is when the source has no such message. Batching is a Spring
+Integration aggregator, and its single flush per batch is what makes the
+acknowledgment back to Kafka or a JDBC watermark honest. One generic runner
+image deploys N times, each instance made a different application by the
+configuration directory it mounts.
+
+```bash
+AMPS_FLOW=amps-connectors ./server/scripts/amps.sh start
+./gradlew :amps-connectors:connector-app:bootRun --args="--spring.profiles.active=demo"
+```
+
+-> [amps-connectors/README.md](amps-connectors/README.md)
+for the pipeline stages, the batch and acknowledgment contract, the two key
+modes and their traps, the configuration reference for every block, the
+config tree and its compose generator, and why Spring Integration is used
+for the batch and nothing else.
 
 ## Operator tools
 

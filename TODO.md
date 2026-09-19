@@ -43,3 +43,16 @@
 - use slf4j logging in java code 
 - create integration test to verify the delta publish works correctly and the SOW topics are updated as expected
 - use local podman container for AMPS server for integration testing
+
+#### 2026.09.18 
+- add a new submodule 'amps-connectors' 
+- mimic the package structure of '/Users/maojenhsu/ai-code/deephaven-fix42-dashboard/claude-code/dh-connectors' 
+- under 'amps-connectors', add below sources  
+  - 'source-tcp' : subscribe to a tcp port, read line by line string msg and publish to a AMPS topic. 
+  - 'source-kafka' : subscribe to a kafka topic, configure deserializer to string , either json or FIX message, and publish to AMPS.
+  - 'source-jdbc' : based on sql select query, publish json results to AMPS topic ( sow with key, or non-sow with transaction log topic)
+  - 'source-hazelcast' : subscribe to a hazelcast topic, read line by line string msg and publish to a AMPS topic.
+- after receiving messages from source, it needs to be able to transform the messages before publishing to AMPS topic. 
+- it needs to be able to parse and extract fields from the messages and use the fields as key for SOW topic, or use the fields to filter messages before publishing to AMPS topic.
+- instead of receive one message and send one message to AMPS, should we introduce spring integration to allow batch processing of messages from source and publish to AMPS topic in batch?
+

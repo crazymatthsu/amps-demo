@@ -1,0 +1,53 @@
+# events-hazelcast (local/cache) -- a Hazelcast reliable topic of JSON events onto a SOW topic keyed on /id.
+#
+# The plain case, and the one to copy first: a feed whose records carry their own identity,
+# a topic declared `<Key>/id</Key>`, and nothing between them but a projection. `keep` is
+# an allowlist -- a field absent from it never reaches AMPS -- and it has to include every
+# key field, which the validator checks rather than letting the connector reject every
+# record at runtime.
+#
+# `reliable: true` is what makes a restart survivable. A plain Hazelcast topic is
+# fire-and-forget: a subscriber only ever sees what is published after it subscribed, so
+# everything published while the connector was down is gone. A reliable topic is backed by
+# a ringbuffer, and `reliable-from: OLDEST` replays whatever the buffer still holds before
+# going live -- the Hazelcast spelling of the AMPS `epoch` bookmark, bounded by the
+# ringbuffer's capacity rather than by a journal's retention.
+#
+# The connector is always a Hazelcast CLIENT, never an embedded member: a member would own
+# a share of the cluster's partitions, so restarting the connector would migrate data and
+# a connector bug would become a cluster bug.
+#
+# Layered over the baked defaults and config/local/common/ at runtime; this file owns the
+# connector list. Reference examples with commentary: application-demo.yml.
+amps-connectors:
+  connectors:
+    - name: events-hazelcast
+      enabled: true
+      format: JSON
+      source:
+        driver: ${source-driver:REAL}
+        hazelcast:
+          cluster-name: dev        # must match the members'
+          members: [ "${HAZELCAST_HOST:localhost}:5701" ]
+          topic: connector.events
+          reliable: true           # ringbuffer-backed, so there is something to replay
+          reliable-from: OLDEST    # NEWEST | OLDEST -- and OLDEST is what replays it
+          connection-timeout: 5s
+          reconnect-delay: 5s
+      transforms:
+        # An allowlist: `detail` and `source` are the feed's own bookkeeping and have no
+        # business on a shared topic. `id` is here because it is the key field -- a keep
+        # that dropped it would leave every record unkeyable.
+        - keep: [ id, kind, severity, ts ]
+      amps:
+        topic: sow/connectors/events
+        message-type: json
+        command: PUBLISH
+        key:
+          fields: [ id ]           # what the topic's <Key>/id</Key> reads
+          mode: SERVER
+        on-delete: SOW_DELETE      # SERVER mode: a sow_delete filtered on /id
+        passthrough: AUTO          # ...defeated by the keep above, so the map is re-encoded
+        batch:
+          max-messages: 500
+          flush-interval: 250ms
