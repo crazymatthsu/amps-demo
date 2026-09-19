@@ -566,7 +566,7 @@ aid, read by nothing in `feed`, `verify` or the connector itself. A fresh Manage
 would also stop on a "choose a security provider" page, so the container is started with
 `MC_INIT_CMD='./bin/mc-conf.sh dev-mode configure'`, which runs the config tool before the
 web app and bakes in **Dev Mode** — no login, no first-run question. Management Center is
-free for a cluster this size, and `SMOKE_HZ_MC=0` leaves the container out altogether.
+free for a cluster this size, and `SMOKE_HZ_MC=0` leaves the container out altogether. One more measured thing: Management Center keeps a session and CSRF token per instance, so a browser tab left open across a restart of the `-mc` container (a `down`/`up`, or replacing just that container) gets `403 Invalid CSRF Token` on every API call and shows it as "Failed to get SQL DDL mapping for map positions"; a page reload of <http://localhost:28080> fixes it.
 
 Two things about the network are worth knowing before something looks broken. The
 **connector** reaches the member at `hazelcast:5701` over the shared network, so no
