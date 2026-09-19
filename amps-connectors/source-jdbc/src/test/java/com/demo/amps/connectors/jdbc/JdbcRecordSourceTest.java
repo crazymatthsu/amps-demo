@@ -203,9 +203,12 @@ class JdbcRecordSourceTest {
 
             // Joined here rather than in the operator's SQL, so the payload carries the
             // columns themselves and not a synthetic key column AMPS would have to store.
-            assertThat(received.subList(0, 2)).extracting(SourceRecord::key)
+            // A copy, because the poll thread keeps appending to `received` and a subList
+            // view of a live CopyOnWriteArrayList throws on the next append.
+            List<SourceRecord> firstPoll = List.copyOf(received).subList(0, 2);
+            assertThat(firstPoll).extracting(SourceRecord::key)
                     .containsExactly("ACC-1|AAPL", "ACC-1|MSFT");
-            assertThat(received.subList(0, 2)).extracting(SourceRecord::action)
+            assertThat(firstPoll).extracting(SourceRecord::action)
                     .containsOnly(SourceRecord.Action.UPSERT);
             assertThat(payload(received.get(0)).has("account")).isTrue();
         }

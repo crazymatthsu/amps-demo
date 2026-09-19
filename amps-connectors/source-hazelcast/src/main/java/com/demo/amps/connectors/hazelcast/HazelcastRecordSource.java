@@ -4,7 +4,6 @@ import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.HazelcastSourceProperties;
 import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.SourceRecord;
 import com.hazelcast.client.HazelcastClient;
 import com.hazelcast.client.config.ClientConfig;
 import com.hazelcast.client.config.ClientConnectionStrategyConfig;
@@ -12,52 +11,44 @@ import com.hazelcast.cluster.Address;
 import com.hazelcast.cluster.Member;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.core.LifecycleEvent;
-import com.hazelcast.topic.ITopic;
-import com.hazelcast.topic.Message;
-import com.hazelcast.topic.ReliableMessageListener;
 import java.time.Duration;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * {@link RecordSource} over a Hazelcast topic.
+ * {@link RecordSource} over a Hazelcast topic or a Hazelcast map.
  *
  * <p>Always a Hazelcast <em>client</em> ({@link HazelcastClient#newHazelcastClient}), never an
  * embedded member. A connector that joined the cluster would own a share of its partitions, so
  * restarting the connector would migrate data and a connector bug would become a cluster bug;
  * a client is a subscriber the cluster can lose without noticing.
  *
- * <h2>Fire-and-forget, unless the topic is reliable</h2>
- *
- * <p>Which structure is read follows {@code reliable}, and the two differ in exactly the way
- * that matters to a bridge:
+ * <h2>Two structures, and they are not two spellings of one feed</h2>
  *
  * <table border="1">
- *   <caption>Topic kinds</caption>
- *   <tr><th>{@code reliable}</th><th>structure</th><th>what a restart sees</th></tr>
- *   <tr><td>{@code false}</td><td>{@code getTopic}</td>
- *       <td>nothing published before the listener was registered -- a plain topic keeps no
- *           history at all</td></tr>
- *   <tr><td>{@code true}</td><td>{@code getReliableTopic}</td>
- *       <td>with {@code reliable-from: OLDEST}, whatever the backing ringbuffer still holds;
- *           with {@code NEWEST}, only what comes next</td></tr>
+ *   <caption>What each structure gives the pipeline</caption>
+ *   <tr><th></th><th>{@code topic:} ({@link TopicSubscription})</th>
+ *       <th>{@code map:} ({@link MapSubscription})</th></tr>
+ *   <tr><td>a record is</td><td>one published message</td>
+ *       <td>one entry event, or one row of the snapshot</td></tr>
+ *   <tr><td>the key</td><td>none: a keyed AMPS topic keys on the payload</td>
+ *       <td>the entry key, as {@code String.valueOf(key)}</td></tr>
+ *   <tr><td>removals</td><td>none -- a topic cannot say a thing stopped existing</td>
+ *       <td>remove / evict / expire become a {@code DELETE} with an empty body</td></tr>
+ *   <tr><td>what a (re)connect sees</td>
+ *       <td>nothing, unless {@code reliable: true} replays a ringbuffer</td>
+ *       <td>the whole map, unless {@code snapshot: false}</td></tr>
+ *   <tr><td>delivery</td><td>at-most-once (plain) / ringbuffer-bounded (reliable)</td>
+ *       <td>at-most-once events, unordered across partitions, repaired by the snapshot</td></tr>
+ *   <tr><td>attributes</td><td>{@code publishTime}, {@code member}</td>
+ *       <td>{@code map}, {@code event}, {@code member}</td></tr>
+ *   <tr><td>acknowledgment</td><td colspan="2">none: neither structure has a position the
+ *       connector could ask Hazelcast to go back to</td></tr>
  * </table>
  *
- * <p>So a plain topic loses every message published while the connector was down, and that is
- * a property of the transport rather than of this driver: a feed that must survive a restart
- * is configured {@code reliable: true} (and sized by the cluster's ringbuffer capacity), or it
- * does not survive one.
- *
- * <p>Either way there is <strong>nothing to acknowledge</strong>. A plain topic has no
- * position, and a reliable one is read through a listener whose sequence Hazelcast itself
- * advances as it delivers -- there is no point the connector could ask it to go back to once
- * AMPS has confirmed a batch. Records therefore carry no
- * {@link com.demo.amps.connectors.source.Acknowledgment}, and no key either: a topic message
- * is a payload and nothing more, so a keyed AMPS topic gets its key from the payload.
+ * <p>Exactly one of them is configured -- the validator refuses both and neither -- and the
+ * choice is made once, here, when the source is built.
  *
  * <h2>Connecting is this source's own job</h2>
  *
@@ -67,16 +58,32 @@ import org.slf4j.LoggerFactory;
  * {@code reconnect-delay} -- the same treatment {@code TcpRecordSource} gives a peer that is
  * not listening yet. Once connected, Hazelcast's own {@code ReconnectMode.ON} rides out a
  * blip and re-registers the listener; only a client that actually stops is rebuilt here.
+ *
+ * <p>A blip is invisible to this loop but not to a map feed, because the entry events raised
+ * while the client was away were never queued for it. So a reconnect the client handles by
+ * itself still wakes the source thread, which asks the subscription to
+ * {@link HazelcastSubscription#refresh} -- for a map, that is the snapshot again, which is the
+ * whole reason a lost event costs accuracy only until the next connect. A topic has nothing to
+ * re-read and does nothing.
  */
 public class HazelcastRecordSource implements RecordSource {
 
     private static final Logger log = LoggerFactory.getLogger(HazelcastRecordSource.class);
 
-    /** Attribute carrying the cluster-side publish timestamp, in epoch milliseconds. */
+    /** Attribute carrying the cluster-side publish timestamp, in epoch milliseconds. Topics only. */
     public static final String ATTRIBUTE_PUBLISH_TIME = "publishTime";
 
-    /** Attribute carrying the member that published the message, as {@code host:port}. */
+    /** Attribute carrying the member the record came from, as {@code host:port}. */
     public static final String ATTRIBUTE_MEMBER = "member";
+
+    /** Attribute carrying the map the entry belongs to. Maps only. */
+    public static final String ATTRIBUTE_MAP = "map";
+
+    /**
+     * Attribute carrying what happened to the entry: {@code ADDED}, {@code UPDATED},
+     * {@code REMOVED}, {@code EVICTED}, {@code EXPIRED} or {@code SNAPSHOT}. Maps only.
+     */
+    public static final String ATTRIBUTE_EVENT = "event";
 
     /** How long {@link #close()} waits for the source thread before giving up on it. */
     private static final long CLOSE_JOIN_MILLIS = 5_000;
@@ -89,31 +96,35 @@ public class HazelcastRecordSource implements RecordSource {
 
     private final ConnectorProperties connector;
     private final HazelcastSourceProperties source;
+    private final HazelcastSubscription subscription;
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean connected = new AtomicBoolean(false);
 
-    /** One WARN per source for non-String payloads: the second one says nothing new. */
-    private final AtomicBoolean warnedAboutPayloadType = new AtomicBoolean(false);
+    /** Set by the lifecycle listener when Hazelcast reconnects a client this loop kept. */
+    private final AtomicBoolean reconnected = new AtomicBoolean(false);
 
     /** Monitor the reconnect backoff and the connected watch wait on, so {@code close()} cuts them short. */
     private final Object backoff = new Object();
 
     private volatile HazelcastInstance client;
-    private volatile ITopic<Object> topic;
-    private volatile UUID listener;
     private volatile Thread thread;
 
     public HazelcastRecordSource(ConnectorProperties connector) {
         this.connector = connector;
         this.source = connector.getSource().getHazelcast();
+        // Once, here: which structure a connector reads is configuration, not something to
+        // re-decide per event or per reconnect.
+        this.subscription = source.getMap() != null
+                ? new MapSubscription(connector)
+                : new TopicSubscription(connector);
     }
 
     @Override
     public void start(RecordHandler handler) {
-        log.info("[{}] starting Hazelcast source: {} topic '{}' on cluster '{}' at {}",
-                connector.getName(), source.isReliable() ? "reliable" : "plain",
-                source.getTopic(), source.getClusterName(), source.getMembers());
+        log.info("[{}] starting Hazelcast source: {} on cluster '{}' at {}",
+                connector.getName(), subscription.describe(), source.getClusterName(),
+                source.getMembers());
         Thread runner = new Thread(() -> run(handler), connector.getName() + "-hazelcast");
         runner.setDaemon(true);
         this.thread = runner;
@@ -132,7 +143,7 @@ public class HazelcastRecordSource implements RecordSource {
         while (!closed.get()) {
             try {
                 connect(handler);
-                watch();
+                watch(handler);
             } catch (RuntimeException e) {
                 if (!closed.get()) {
                     // A cluster that is not up yet is the normal case here, and its stack
@@ -159,7 +170,13 @@ public class HazelcastRecordSource implements RecordSource {
         log.info("[{}] Hazelcast source stopped", connector.getName());
     }
 
-    /** Build the client, subscribe, and only then report connected. */
+    /**
+     * Build the client, subscribe, and only then report connected.
+     *
+     * <p>A map subscription reads the whole map before this returns, on this thread, so
+     * {@link #isConnected()} turns true when the connector is genuinely caught up rather than
+     * when its socket opened.
+     */
     private void connect(RecordHandler handler) {
         HazelcastInstance connecting = HazelcastClient.newHazelcastClient(clientConfig());
         this.client = connecting;
@@ -168,19 +185,14 @@ public class HazelcastRecordSource implements RecordSource {
             // way round, so between the two at least one of us sees the other.
             return;
         }
+        // Added after the client is logged on, so the CLIENT_CONNECTED of this first connect
+        // has already been and gone: any event this listener sees is a genuine reconnect.
         connecting.getLifecycleService().addLifecycleListener(this::onLifecycleEvent);
-        ITopic<Object> subscribed = source.isReliable()
-                ? connecting.getReliableTopic(source.getTopic())
-                : connecting.getTopic(source.getTopic());
-        this.topic = subscribed;
-        this.listener = source.isReliable()
-                ? subscribed.addMessageListener(new ReplayingListener(handler))
-                : subscribed.addMessageListener(message -> deliver(message, handler));
+        reconnected.set(false);
+        subscription.subscribe(connecting, handler);
         connected.set(true);
-        log.info("[{}] subscribed to {} topic '{}' on cluster '{}'{}", connector.getName(),
-                source.isReliable() ? "reliable" : "plain", source.getTopic(),
-                source.getClusterName(),
-                source.isReliable() ? " from " + source.getReliableFrom() : "");
+        log.info("[{}] subscribed to {} on cluster '{}'",
+                connector.getName(), subscription.describe(), source.getClusterName());
     }
 
     /**
@@ -216,14 +228,28 @@ public class HazelcastRecordSource implements RecordSource {
         return config;
     }
 
-    /** Park until the client stops running or {@link #close()} says to stop. */
-    private void watch() {
+    /**
+     * Park until the client stops running or {@link #close()} says to stop, refreshing the
+     * subscription whenever Hazelcast reconnected the client underneath it.
+     *
+     * @param handler where a refresh's records go
+     */
+    private void watch(RecordHandler handler) {
         HazelcastInstance running = this.client;
         if (running == null) {
             return;
         }
-        synchronized (backoff) {
-            while (!closed.get() && running.getLifecycleService().isRunning()) {
+        while (!closed.get() && running.getLifecycleService().isRunning()) {
+            if (reconnected.compareAndSet(true, false)) {
+                // Outside the monitor: re-reading a large map takes a while, and close() must
+                // not queue behind it.
+                subscription.refresh(running, handler);
+                continue;
+            }
+            synchronized (backoff) {
+                if (closed.get() || reconnected.get()) {
+                    continue;
+                }
                 try {
                     backoff.wait(WATCH_POLL_MILLIS);
                 } catch (InterruptedException e) {
@@ -242,7 +268,13 @@ public class HazelcastRecordSource implements RecordSource {
         switch (event.getState()) {
             case CLIENT_CONNECTED -> {
                 connected.set(true);
-                log.info("[{}] Hazelcast client connected", connector.getName());
+                // This client was already logged on when the listener was added, so this is a
+                // reconnect: whatever the feed raised while it was away was raised to nobody.
+                reconnected.set(true);
+                synchronized (backoff) {
+                    backoff.notifyAll();
+                }
+                log.info("[{}] Hazelcast client reconnected", connector.getName());
             }
             case CLIENT_DISCONNECTED -> {
                 connected.set(false);
@@ -262,112 +294,24 @@ public class HazelcastRecordSource implements RecordSource {
         }
     }
 
-    // ---- delivery ---------------------------------------------------------------------
-
-    /**
-     * A reliable-topic listener: same delivery, plus the ringbuffer position that makes
-     * {@code reliable-from} mean something.
-     */
-    private final class ReplayingListener implements ReliableMessageListener<Object> {
-
-        private final RecordHandler handler;
-
-        /** Last sequence Hazelcast handed us; kept so a restarted listener could resume. */
-        private volatile long sequence = -1;
-
-        private ReplayingListener(RecordHandler handler) {
-            this.handler = handler;
-        }
-
-        @Override
-        public void onMessage(Message<Object> message) {
-            deliver(message, handler);
-        }
-
-        /**
-         * {@code -1} is Hazelcast's "start at the next message published"; {@code 0} is the
-         * head of the ringbuffer, which is what replays a backlog.
-         */
-        @Override
-        public long retrieveInitialSequence() {
-            return source.getReliableFrom() == HazelcastSourceProperties.ReliableFrom.OLDEST
-                    ? 0
-                    : -1;
-        }
-
-        @Override
-        public void storeSequence(long sequence) {
-            this.sequence = sequence;
-        }
-
-        /**
-         * Tolerant: a connector that fell so far behind that the ringbuffer overwrote its
-         * position should jump to the head and keep bridging. The alternative -- cancelling
-         * the listener -- turns a slow patch into a silent outage.
-         */
-        @Override
-        public boolean isLossTolerant() {
-            return true;
-        }
-
-        /**
-         * Never terminal. The handler already swallows its own failures, so anything arriving
-         * here is Hazelcast's, and dropping the subscription over it would leave a connector
-         * that looks healthy and delivers nothing.
-         */
-        @Override
-        public boolean isTerminal(Throwable failure) {
-            log.error("[{}] reliable topic '{}' listener failed at sequence {}",
-                    connector.getName(), source.getTopic(), sequence, failure);
-            return false;
-        }
-    }
-
-    /**
-     * Turn one topic message into a record.
-     *
-     * <p>Runs on a Hazelcast event thread, and the pipeline runs inside
-     * {@link RecordHandler#onRecord}: a handler that blocks blocks this subscription, which is
-     * the back-pressure the framework wants. Nothing is read ahead onto another thread.
-     */
-    private void deliver(Message<Object> message, RecordHandler handler) {
-        try {
-            Object payload = message.getMessageObject();
-            if (!(payload instanceof String) && warnedAboutPayloadType.compareAndSet(false, true)) {
-                // Still published -- a bridge that silently dropped a feed's messages because
-                // they were published as objects would be worse than one that publishes their
-                // rendering. But say so once: toString() is the publisher's, not a contract.
-                log.warn("[{}] Hazelcast topic '{}' publishes {} rather than String; "
-                                + "bridging its toString() -- decoding may fail",
-                        connector.getName(), source.getTopic(), payload.getClass().getName());
-            }
-            handler.onRecord(SourceRecord.of(String.valueOf(payload))
-                    .withAttributes(attributesOf(message)));
-        } catch (RuntimeException e) {
-            // One bad record is not a reason to drop the subscription.
-            log.error("[{}] failed to handle Hazelcast message", connector.getName(), e);
-        }
-    }
-
-    /** Publish time and publisher: the only transport metadata a topic message carries. */
-    private static Map<String, String> attributesOf(Message<Object> message) {
-        Map<String, String> attributes = new LinkedHashMap<>(4);
-        attributes.put(ATTRIBUTE_PUBLISH_TIME, Long.toString(message.getPublishTime()));
-        Member publisher = message.getPublishingMember();
-        if (publisher != null) {
-            Address address = publisher.getAddress();
-            attributes.put(ATTRIBUTE_MEMBER, address == null
-                    ? publisher.getUuid().toString()
-                    : address.getHost() + ":" + address.getPort());
-        }
-        return attributes;
-    }
-
     // ---- lifecycle ---------------------------------------------------------------------
 
     @Override
     public boolean isConnected() {
         return connected.get();
+    }
+
+    /**
+     * How many times the whole map was cleared or evicted under this source.
+     *
+     * <p>Those are the events that remove entries without naming one of them, so they publish
+     * no deletes and the SOW keeps records the map no longer has. Always {@code 0} for a topic
+     * connector, which has no such event.
+     *
+     * @return the count of map-wide clears and evictions
+     */
+    public long mapWideEvents() {
+        return subscription instanceof MapSubscription map ? map.mapWideEvents() : 0;
     }
 
     @Override
@@ -402,18 +346,7 @@ public class HazelcastRecordSource implements RecordSource {
      * first does the work.
      */
     private void disconnect() {
-        ITopic<Object> subscribed = this.topic;
-        UUID registration = this.listener;
-        this.topic = null;
-        this.listener = null;
-        if (subscribed != null && registration != null) {
-            try {
-                subscribed.removeMessageListener(registration);
-            } catch (RuntimeException e) {
-                // The client may already be down, which removes the listener anyway.
-                log.debug("[{}] removing the Hazelcast listener failed", connector.getName(), e);
-            }
-        }
+        subscription.unsubscribe();
         HazelcastInstance running = this.client;
         this.client = null;
         if (running != null) {
@@ -444,5 +377,21 @@ public class HazelcastRecordSource implements RecordSource {
             }
         }
         return !closed.get();
+    }
+
+    /**
+     * A cluster member as {@code host:port}, which is what both subscriptions report.
+     *
+     * @param member the member, possibly {@code null} for a local publish
+     * @return the address, its UUID when the member has no address, or {@code null}
+     */
+    static String addressOf(Member member) {
+        if (member == null) {
+            return null;
+        }
+        Address address = member.getAddress();
+        return address == null
+                ? member.getUuid().toString()
+                : address.getHost() + ":" + address.getPort();
     }
 }

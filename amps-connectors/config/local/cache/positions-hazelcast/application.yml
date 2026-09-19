@@ -1,0 +1,59 @@
+# positions-hazelcast (local/cache) -- a Hazelcast IMap of positions mirrored into an unkeyed SOW topic.
+#
+# The cache case, and the one that needs the least help from the pipeline: a map entry
+# already has everything a SOW row needs. Its key is the record's identity, so nothing has
+# to be dug out of the payload; its value is the record; and an entry that stops existing
+# is a removal the source can state rather than infer. `key.fields: []` with
+# `mode: PUBLISHER` is what says so -- the SowKey IS the map key, and a remove, an eviction
+# or an expiry becomes a sow_delete by that same key, payload or no payload.
+#
+# `snapshot: true` is not an optimisation, it is the repair. Hazelcast entry events are
+# at-most-once: an event raised while this connector was disconnected was raised to nobody
+# and is never replayed, so the only thing that makes the SOW converge again is reading the
+# map. The source registers its listener FIRST and reads the map SECOND, so a write during
+# the read is delivered twice (a duplicate upsert, which a SOW absorbs) rather than not at
+# all. The one removal a snapshot cannot repair is a missed delete: a map that no longer
+# holds a key says nothing about a SOW record that still does.
+#
+# The values are stored as objects or as HazelcastJsonValue, and the source hands the
+# pipeline their JSON -- a String value passes through untouched -- which is why
+# `format: JSON` is the setting that matches the cache.
+#
+# The connector is always a Hazelcast CLIENT, never an embedded member: a member would own
+# a share of the cluster's partitions, so restarting the connector would migrate data and
+# a connector bug would become a cluster bug.
+#
+# Layered over the baked defaults and config/local/common/ at runtime; this file owns the
+# connector list. Reference examples with commentary: application-demo.yml.
+amps-connectors:
+  connectors:
+    - name: positions-hazelcast
+      enabled: true
+      format: JSON               # the source renders a map value as JSON unless it is text
+      source:
+        driver: ${source-driver:REAL}
+        hazelcast:
+          cluster-name: dev      # must match the members'
+          members: [ "${HAZELCAST_HOST:localhost}:5701" ]
+          map: positions         # an IMap, not a topic: exactly one of the two, ever
+          snapshot: true         # read the whole map on every (re)connect -- see above
+          # predicate: "quantity > 0"   # optional: the cluster narrows BOTH the listener
+          #                             # and the snapshot, so the live feed and the replay
+          #                             # agree on what this connector is bridging
+          connection-timeout: 5s
+          reconnect-delay: 5s
+      amps:
+        topic: sow/connectors/positions
+        message-type: json
+        command: PUBLISH
+        key:
+          # Empty on purpose: the SOURCE supplies the key. sow/connectors/positions is
+          # declared WITHOUT a <Key>, so the publisher names each record, and the map's own
+          # entry key is the only identity a removed entry still has.
+          fields: []
+          mode: PUBLISHER
+        on-delete: SOW_DELETE    # removed / evicted / expired -> sow_delete by that SowKey
+        passthrough: AUTO        # nothing transforms the record, so the value's own bytes go
+        batch:
+          max-messages: 1000     # a snapshot on connect arrives in a burst
+          flush-interval: 250ms
