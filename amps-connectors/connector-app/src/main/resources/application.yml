@@ -1,0 +1,84 @@
+# connector-app -- baked SAFE DEFAULTS only. The jar knows no environment.
+#
+# This application becomes a particular connector application through configuration
+# layered on top of this file, later sources winning:
+#
+#   1. this file                  boots anywhere; defines no connectors
+#   2. profile `demo`             the simulated example connectors (application-demo.yml)
+#   3. mounted instance config    amps-connectors/config/<env>/<flow>/<app-name>/ from the
+#                                 repo, arriving in the container as
+#                                 SPRING_CONFIG_ADDITIONAL_LOCATION=
+#                                   file:/app/config/common/,file:/app/config/instance/
+#
+# Endpoints are ${VAR:default} placeholders so the SAME instance files serve an IDE run
+# (defaults: localhost) and a container (the compose stack sets AMPS_HOST to
+# host.containers.internal).
+#
+# Never bake a connector list here: two `amps-connectors.connectors` lists merge BY INDEX,
+# so a baked entry would bleed through under any mounted list that is shorter.
+
+spring:
+  application:
+    # Deployments override this with SPRING_APPLICATION_NAME=<app-name> so each of the N
+    # instances of this one image identifies itself -- in its logs and in its AMPS client
+    # name.
+    name: amps-connector
+  main:
+    banner-mode: "off"
+
+server:
+  # Serves only the actuator; connectors are outbound clients. Not published to the host
+  # by the compose stack -- healthchecks run inside the container network.
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      # /actuator/health/{liveness,readiness}, which the image HEALTHCHECK and any
+      # orchestrator probe. Auto-enabled only on kubernetes; podman needs it spelled out.
+      probes:
+        enabled: true
+
+logging:
+  level:
+    com.demo.amps.connectors: INFO
+
+# Source driver for every connector. The `demo` profile flips this to SIMULATED; instance
+# files reference it as ${source-driver:REAL} so one switch simulates a whole application.
+source-driver: REAL
+
+amps-connectors:
+  enabled: true
+
+  # The AMPS instance every connector in this application publishes into. One server,
+  # but one client per connector: the message type belongs to the connection URI
+  # (/amps/fix vs /amps/json), so a FIX connector and a JSON connector cannot share one.
+  amps:
+    host: ${AMPS_HOST:localhost}
+    port: ${AMPS_PORT:9007}
+    transport: tcp
+    client-name-prefix: amps-connectors
+    logon-timeout: 10s
+    reconnect-delay: 5s
+    # In the client's heap: survives a reconnect, not a restart, which is the right trade
+    # for a connector whose source can replay. FILE buys restart durability for a
+    # synchronous write per publish.
+    publish-store: MEMORY
+    publish-store-dir: build/client-state/amps-connectors
+    flush-timeout: 10s
+    # 0 sends each publish as it is made. Raise it (with publish-batch-delay) for a
+    # high-rate feed of small messages, where coalescing measurably wins.
+    publish-batch-bytes: 0
+    publish-batch-delay: 10ms
+
+  # How often each connector logs its counters: the only routine evidence that a quiet
+  # connector is quiet because the feed is quiet.
+  status-interval: 60s
+
+  # No connectors baked in: they arrive from the demo profile or the mounted instance
+  # configuration. See the note on list merging at the top of this file.
+  connectors: []

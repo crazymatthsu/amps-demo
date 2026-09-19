@@ -42,6 +42,13 @@ public record AmpsFlow(String flow, String shortName, String messageType) {
      */
     public static final AmpsFlow QUICKFIXJ_DROPCOPY = new AmpsFlow("quickfixj-dropcopy", "qfj2", "json");
 
+    /**
+     * The source-to-AMPS connector applications under amps-connectors. Its
+     * example topics are JSON except the FIX order blotter; a suite that
+     * needs that one opens a second client on {@code /amps/fix}.
+     */
+    public static final AmpsFlow AMPS_CONNECTORS = new AmpsFlow("amps-connectors", "conn", "json");
+
     /** Where this flow's config lives, relative to the repository root. */
     public String configDir() {
         return "server/config/flows/" + flow;

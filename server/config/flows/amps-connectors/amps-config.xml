@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Business flow "amps-connectors": the topics behind the amps-connectors
+  module: source (TCP, Kafka, JDBC, Hazelcast) to AMPS connector
+  applications. One topic per shape of target the connectors can be pointed
+  at, so every example configuration under amps-connectors/config/ and every
+  integration test has somewhere real to publish.
+
+    sow/connectors/orders      fix, keyed on tag 11 (ClOrdID). The SERVER
+                               derives the key from the payload, so the
+                               connector only has to make sure tag 11
+                               survives its transforms (key.mode: SERVER).
+
+    sow/connectors/positions   json, NO <Key>. AMPS then expects the
+                               PUBLISHER to supply a SowKey with every
+                               publish (key.mode: PUBLISHER): the connector
+                               extracts the key fields itself, or forwards
+                               the source's own key (a Kafka message key, a
+                               JDBC key column). A sow_delete by that key is
+                               how a row that vanished from a polled query,
+                               or a Kafka tombstone, leaves the SOW.
+
+    sow/connectors/events      json, keyed on /id. The plain case: a JSON
+                               feed whose records carry their own identity.
+
+    connectors/ticks           json, journal only. A stream with no state to
+                               keep (a socket feed, a Hazelcast topic)
+                               where every message is appended.
+
+    connectors/audit           fix, journal only. Every FIX message a
+                               connector let through, as published.
+
+  The transport is shared: clients pick the message type in the URI
+  (/amps/json or /amps/fix), which is why a connector holds one client per
+  target topic type.
+-->
+<AMPSConfig>
+
+    <Name>amps-connectors</Name>
+
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <SQLTransport>amps-websocket</SQLTransport>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <!--
+      Topic names carry slashes, so %n cannot be used in FileName (it would
+      expand to a nested directory nothing creates); the SOW files are named
+      explicitly, as the other flows in this repository do.
+    -->
+    <SOW>
+        <Topic>
+            <Name>sow/connectors/orders</Name>
+            <MessageType>fix</MessageType>
+            <Key>/11</Key>
+            <FileName>./sow/connectors-orders.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <!-- No <Key>: the publisher names the record with a SowKey header. -->
+        <Topic>
+            <Name>sow/connectors/positions</Name>
+            <MessageType>json</MessageType>
+            <FileName>./sow/connectors-positions.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+        <Topic>
+            <Name>sow/connectors/events</Name>
+            <MessageType>json</MessageType>
+            <Key>/id</Key>
+            <FileName>./sow/connectors-events.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+    </SOW>
+
+    <!--
+      MinJournalSize 10MB is the floor AMPS accepts (verified on 5.3.5.135);
+      production instances use far larger files. Retention has to cover the
+      longest outage after which a subscriber is expected to resume; see
+      docs/src/transaction-log-sizing.md.
+    -->
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
+        <MinJournalSize>10MB</MinJournalSize>
+
+        <Topic>
+            <Name>sow/connectors/orders</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>sow/connectors/positions</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>sow/connectors/events</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>connectors/ticks</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>connectors/audit</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+    </TransactionLog>
+
+</AMPSConfig>

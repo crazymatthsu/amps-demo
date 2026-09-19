@@ -1,0 +1,21 @@
+# Shared by every connector application in the `dev` environment: a template --
+# point AMPS_HOST / AMPS_PORT (and the apps' KAFKA_HOST, JDBC_HOST, HAZELCAST_HOST)
+# at the real dev servers in the deployment that mounts it. See
+# config/local/common/application.yml for the rules.
+#
+# NEVER define `amps-connectors.connectors` here (lists merge by index; ConfigTreeTest
+# enforces it).
+amps-connectors:
+  amps:
+    host: ${AMPS_HOST:localhost}
+    port: ${AMPS_PORT:9007}
+    transport: tcp
+    client-name-prefix: amps-connectors
+    logon-timeout: 10s
+    reconnect-delay: 5s
+    # A dev instance is restarted often and its connectors are watched, so the publishes
+    # in flight at a restart are worth the synchronous write: FILE replays them after the
+    # process comes back, not merely after a reconnect.
+    publish-store: FILE
+    publish-store-dir: /app/state/amps-connectors
+    flush-timeout: 10s

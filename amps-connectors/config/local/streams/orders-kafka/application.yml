@@ -1,0 +1,63 @@
+# orders-kafka (local/streams) -- a Kafka topic of FIX orders onto the SOW topic AMPS keys itself.
+#
+# sow/connectors/orders is declared `<Key>/11</Key>`, so the SERVER derives each record's
+# key from the payload and this connector sends no SowKey. `key.fields: ["11"]` is
+# therefore not a key to send -- it is the list the connector CHECKS: a record that lost
+# tag 11 somewhere is rejected and counted rather than published under whatever key the
+# server would invent for it.
+#
+# The two shaping steps demonstrate the halves of the pipeline that are not the transport:
+# the filter drops everything that is not order state (D/G/F) before any work is done on
+# it, and the `drop` transform strips tag 10 -- the body checksum of the original message,
+# which is meaningless once the payload has been re-encoded for a different session.
+#
+# Kafka is also where the acknowledgment contract becomes visible: offsets are committed
+# from the poll thread only for records a batch has flushed to AMPS, so a crash between a
+# publish and its flush re-reads them. At-least-once, and the keyed topic makes the
+# duplicate harmless.
+#
+# Layered over the baked defaults and config/local/common/ at runtime; this file owns the
+# connector list. Reference examples with commentary: application-demo.yml.
+amps-connectors:
+  connectors:
+    - name: orders-kafka
+      enabled: true
+      format: FIX
+      # field-separator is left at SOH, which is what a FIX feed puts on the wire. A feed
+      # that writes `|` instead (a log replay, a file drop) sets `field-separator: "|"`.
+      source:
+        driver: ${source-driver:REAL}
+        kafka:
+          bootstrap-servers: "${KAFKA_HOST:localhost}:9092"
+          topic: orders.fix
+          # Mandatory: the group is where this connector's position lives, and an unnamed
+          # one would re-publish the whole topic on every restart.
+          group-id: amps-connectors-orders
+          from: EARLIEST           # EARLIEST | LATEST, for a group with no committed offset
+          poll-timeout: 500ms
+          max-poll-records: 500
+          reconnect-delay: 5s
+          # Anything this file does not name goes here untouched (security, SSL, fetch
+          # sizing). Credentials arrive as environment placeholders, never as literals.
+          properties: {}
+      filter:
+        match: ALL                 # ALL | ANY
+        rules:
+          # 35=D new order, 35=G replace, 35=F cancel: the messages that carry order state.
+          - { field: "35", in: [D, G, F] }
+      transforms:
+        # The checksum of the message as the SESSION framed it. Republished onto a topic,
+        # it is a field that can only ever disagree with its own payload.
+        - drop: [ "10" ]
+      amps:
+        topic: sow/connectors/orders
+        message-type: fix          # selects the encoder AND the client URI (/amps/fix)
+        command: PUBLISH
+        key:
+          fields: [ "11" ]         # ClOrdID: what the topic's <Key> reads
+          mode: SERVER
+        on-delete: SOW_DELETE      # expressed as a filter over the key fields in SERVER mode
+        passthrough: AUTO          # ...defeated by the drop above, so the map is re-encoded
+        batch:
+          max-messages: 500
+          flush-interval: 250ms
