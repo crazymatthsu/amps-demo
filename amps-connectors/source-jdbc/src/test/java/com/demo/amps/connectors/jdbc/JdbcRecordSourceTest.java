@@ -210,7 +210,7 @@ class JdbcRecordSourceTest {
                     .containsExactly("ACC-1|AAPL", "ACC-1|MSFT");
             assertThat(firstPoll).extracting(SourceRecord::action)
                     .containsOnly(SourceRecord.Action.UPSERT);
-            assertThat(payload(received.get(0)).has("account")).isTrue();
+            assertThat(payload(firstPoll.get(0)).has("account")).isTrue();
         }
     }
 
