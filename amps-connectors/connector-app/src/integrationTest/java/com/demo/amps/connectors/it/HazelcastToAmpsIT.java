@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
 import com.crankuptheamps.client.Client;
+import com.demo.amps.connectors.app.ConnectorApplication;
 import com.demo.amps.testharness.AmpsFlow;
 import com.demo.amps.testharness.AmpsTestServer;
 import com.hazelcast.config.Config;
@@ -120,7 +121,7 @@ class HazelcastToAmpsIT {
         positions.put("ACC-2|MSFT", position("ACC-2", "MSFT", 250, "330.25"));
 
         server = AmpsTestServer.start(AmpsFlow.AMPS_CONNECTORS);
-        app = ConnectorAppRunner.against(server.port())
+        app = ConnectorAppRunner.against(server.port(), ConnectorApplication.class)
                 // ---- the cache mirrored onto an unkeyed SOW topic ------------------
                 .connector("positions-hazelcast")
                 // A map value reaches the pipeline as text: JSON if it already was, JSON if

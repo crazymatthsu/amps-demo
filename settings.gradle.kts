@@ -50,6 +50,7 @@ include("amps-connectors:source-tcp")
 include("amps-connectors:source-kafka")
 include("amps-connectors:source-jdbc")
 include("amps-connectors:source-hazelcast")
+include("amps-connectors:source-amps")
 include("amps-connectors:connector-app")
 file("amps-connectors/apps").listFiles()
     ?.filter { it.isDirectory && File(it, "build.gradle.kts").exists() }

@@ -59,4 +59,9 @@ dependencies {
     testFixturesImplementation(platform(libs.spring.boot.bom))
     testFixturesApi(libs.amps.client)
     testFixturesImplementation(libs.awaitility)
+    // The integration-test runner (it/ConnectorAppRunner) boots a real application from
+    // whichever main class the suite names, so every application's integrationTest source
+    // set -- which already sees these fixtures through the convention plugin -- starts the
+    // deployed article the same way. SpringApplication itself is all it needs from Boot.
+    testFixturesImplementation(libs.spring.boot.starter)
 }
