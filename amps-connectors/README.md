@@ -451,6 +451,72 @@ Any setting can be overridden on the command line, e.g. an AMPS on another host:
 ./gradlew :amps-connectors:connector-app:bootRun --args="--spring.profiles.active=demo --amps-connectors.amps.host=amps-1"
 ```
 
+### Seeing the flow: the `integrationgraph` endpoint
+
+Spring Integration keeps a graph of every channel and endpoint in the context, and Spring
+Boot serves it as the `integrationgraph` actuator endpoint. Everything it needs is already on
+the classpath; the endpoint is merely not *exposed*, because `application.yml` exposes only
+`health` and `info`. Add it to the list — on the command line, as an environment variable for
+a container, or in a mounted `common/application.yml`:
+
+```bash
+./gradlew :amps-connectors:connector-app:bootRun --args="--spring.profiles.active=demo --management.endpoints.web.exposure.include=health,info,integrationgraph"
+```
+
+```bash
+MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,info,integrationgraph
+```
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, integrationgraph
+```
+
+Then read it (add `metrics` to the list above to get the second endpoint too):
+
+```bash
+curl -s localhost:8080/actuator/integrationgraph | jq .
+curl -s 'localhost:8080/actuator/metrics/spring.integration.send?tag=name:ticks-tcp.channel%230'
+```
+
+The document is a `nodes` list and a `links` list. Every connector contributes the three steps
+of [`ConnectorFlowFactory`](core/src/main/java/com/demo/amps/connectors/runtime/ConnectorFlowFactory.java),
+under the names the DSL generates from the registration id:
+
+```
+ticks-tcp.channel#0 → ...ConsumerEndpointFactoryBean#0 (service-activator: the pipeline)
+ticks-tcp.channel#1 → ...ConsumerEndpointFactoryBean#1 (aggregator: the batch)
+ticks-tcp.channel#2 → ...ConsumerEndpointFactoryBean#2 (service-activator: the AMPS publish)
+```
+
+plus the framework's `errorChannel → errorLogger` and the aggregator's `discard` link to
+`nullChannel`. Because Micrometer is on the classpath every node carries `sendTimers` —
+success and failure counts with mean and max milliseconds — so the graph doubles as a live
+counter: `channel#0`'s count is the connector's `received`, `channel#2`'s is its `batches`, and
+a non-zero `failures` on the last endpoint is a publish that threw. The same numbers are the
+`spring.integration.send` metric, tagged `name` (the node) and `result`. Flows registered at
+runtime through `IntegrationFlowContext` are in the graph; `POST` to the same URL rebuilds it if
+one is ever registered after startup.
+
+Nothing in Spring renders the JSON (Spring Flo, the UI it was written for, is archived), but it
+is one `jq` away from a diagram. This emits [Mermaid](https://mermaid.js.org/), one node per
+component with its send count and one edge per link:
+
+```bash
+curl -s localhost:8080/actuator/integrationgraph | jq -r '
+  "flowchart LR",
+  (.nodes[] | "  n\(.nodeId)[\"\(.name | sub("org.springframework.integration.config.ConsumerEndpointFactoryBean"; "endpoint"))<br/>\(.componentType), sent \(.sendTimers.successes.count)\"]"),
+  (.links[] | "  n\(.from) -->|\(.type)| n\(.to)")'
+```
+
+Paste the output into any Mermaid renderer (a GitHub Markdown block, the IDE's preview, or
+`https://mermaid.live`). For a per-message trace rather than a picture of the whole application,
+`logging.level.org.springframework.integration=DEBUG` logs every channel hop — far too loud for
+a 40 msg/s feed, right for one record that went missing.
+
 ### The fleet, under podman
 
 [`scripts/amps-connectors-compose.sh`](scripts/amps-connectors-compose.sh) generates a compose
