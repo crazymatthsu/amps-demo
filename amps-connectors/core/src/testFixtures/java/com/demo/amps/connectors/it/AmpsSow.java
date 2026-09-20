@@ -11,8 +11,9 @@ import java.util.List;
 
 /**
  * Reading AMPS back the way a consumer would -- with a plain {@link Client}, no framework
- * code involved -- so what these suites assert is what AMPS actually holds rather than what
- * the connector believes it published.
+ * code involved -- so what an integration suite asserts is what AMPS actually holds rather
+ * than what the connector believes it published. Shared by every application's suite, which
+ * is why it lives in core's test fixtures beside {@link ConnectorAppRunner}.
  *
  * <p>Two reads, because the two kinds of topic answer different questions. A SOW query returns
  * the current record per key, with {@link Message#getSowKey()} on each one, which is how a
@@ -21,16 +22,16 @@ import java.util.List;
  * has no SOW to query at all: the only way to see what reached it is to subscribe from the
  * {@code epoch} bookmark and let the server replay the transaction log.
  */
-final class AmpsSow {
+public final class AmpsSow {
 
     /** How long a read waits for the server, and how long a replay waits for the next message. */
-    static final Duration TIMEOUT = Duration.ofSeconds(10);
+    public static final Duration TIMEOUT = Duration.ofSeconds(10);
 
     private AmpsSow() {
     }
 
     /** One SOW record: the key AMPS filed it under, and its payload. */
-    record Record(String sowKey, String data) {
+    public record Record(String sowKey, String data) {
     }
 
     /**
@@ -42,7 +43,7 @@ final class AmpsSow {
      * @return the records, in the order the server returned them
      * @throws AMPSException if the query could not be issued
      */
-    static List<Record> records(Client client, String topic, String filter) throws AMPSException {
+    public static List<Record> records(Client client, String topic, String filter) throws AMPSException {
         List<Record> records = new ArrayList<>();
         Command query = new Command("sow").setTopic(topic).setFilter(filter)
                 .setTimeout(TIMEOUT.toMillis());
@@ -78,7 +79,7 @@ final class AmpsSow {
      * @return the payloads, in journal order
      * @throws AMPSException if the subscription could not be issued
      */
-    static List<String> replay(Client client, String topic, Duration idle) throws AMPSException {
+    public static List<String> replay(Client client, String topic, Duration idle) throws AMPSException {
         List<String> payloads = new ArrayList<>();
         Command subscribe = new Command("subscribe").setTopic(topic)
                 .setBookmark(Client.Bookmarks.EPOCH);
@@ -107,7 +108,7 @@ final class AmpsSow {
      * @return the connected client; the caller closes it
      * @throws AMPSException if the connection or the logon failed
      */
-    static Client connect(int port, String messageType, String name) throws AMPSException {
+    public static Client connect(int port, String messageType, String name) throws AMPSException {
         Client client = new Client(name);
         try {
             client.connect("tcp://127.0.0.1:" + port + "/amps/" + messageType);

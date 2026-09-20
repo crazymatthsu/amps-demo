@@ -1,0 +1,88 @@
+# instrument-enricher -- baked SAFE DEFAULTS only. The jar knows no environment.
+#
+# The same layering as the generic runner (connector-app): this file boots anywhere and
+# defines no connectors, no resources, no control channel and no alert sinks; the
+# deployable application is the pair of directories mounted on top of it, later sources
+# winning:
+#
+#   1. this file                  boots idle; the enricher's own defaults live here
+#   2. mounted instance config    amps-connectors/config/local/common/ and
+#                                 amps-connectors/config/local/streams/instrument-enricher/
+#                                 (SPRING_CONFIG_ADDITIONAL_LOCATION=
+#                                   file:/app/config/common/,file:/app/config/instance/)
+#
+# Never bake a connector or resource list here: two lists merge BY INDEX, so a baked entry
+# would bleed through under any mounted list that is shorter.
+
+spring:
+  application:
+    # The name the alerts carry and the control channel answers to (alerts.application and
+    # control.target fall back to it), and the stem of the AMPS client names those two hold:
+    # <prefix>-instrument-enricher-alerts and <prefix>-instrument-enricher-control-source.
+    name: instrument-enricher
+  main:
+    banner-mode: "off"
+
+server:
+  # Serves only the actuator; connectors are outbound clients. Not published to the host
+  # by the compose stack -- healthchecks run inside the container network.
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      # /actuator/health/{liveness,readiness}, which the image HEALTHCHECK and any
+      # orchestrator probe. Auto-enabled only on kubernetes; podman needs it spelled out.
+      probes:
+        enabled: true
+
+logging:
+  level:
+    com.demo.amps.connectors: INFO
+
+# Source driver for every connector; instance files reference it as ${source-driver:REAL},
+# so `--source-driver=SIMULATED` on the command line simulates the whole application.
+source-driver: REAL
+
+# The example's own settings. These are the FIX way of saying "the instrument is the SEDOL
+# in tag 48, tag 22=2 says it is a SEDOL, and tag 15 is its currency"; an instance file
+# overrides any of them under the same keys. See EnricherProperties.
+enricher:
+  resource: instruments           # the resources[].name the table is registered under
+  symbol-tag: "55"                # Symbol: the field looked up
+  set:                            # FIX tag <- column of the row that was found
+    "48": sedol                   #   SecurityID
+    "15": currency                #   Currency
+  literals:                       # FIX tag <- constant, on every hit
+    "22": "2"                     #   SecurityIDSource: 2 = SEDOL
+  on-miss: PASS                   # PASS (publish unenriched, alert) | DROP (discard, alert)
+
+amps-connectors:
+  enabled: true
+
+  # The AMPS instance every connector in this application publishes into; the mounted
+  # common/ layer normally supplies it. One server, one client per connector, plus one
+  # for the alerts sink and one for the control subscription.
+  amps:
+    host: ${AMPS_HOST:localhost}
+    port: ${AMPS_PORT:9007}
+    transport: tcp
+    client-name-prefix: amps-connectors
+    logon-timeout: 10s
+    reconnect-delay: 5s
+    publish-store: MEMORY
+    publish-store-dir: build/client-state/amps-connectors
+    flush-timeout: 10s
+    publish-batch-bytes: 0
+    publish-batch-delay: 10ms
+
+  # How often each connector logs its counters, with the resource status beneath them.
+  status-interval: 60s
+
+  # No connectors baked in: they arrive from the mounted instance configuration. See the
+  # note on list merging at the top of this file.
+  connectors: []

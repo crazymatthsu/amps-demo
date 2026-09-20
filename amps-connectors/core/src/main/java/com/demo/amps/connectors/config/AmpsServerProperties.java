@@ -65,7 +65,12 @@ public class AmpsServerProperties {
     @NotBlank
     private String clientNamePrefix = "amps-connectors";
 
-    /** How long {@code logon} waits before giving up and letting the reconnect loop retry. */
+    /**
+     * How long {@code logon} waits for its ack, and about how long a connector's <em>first</em>
+     * connect keeps redialling a server that is not there before it fails -- to be retried by
+     * the manager, on a tick that leaves the other connectors and the status line running.
+     * Reconnects after the first success are the HA client's own and never give up.
+     */
     @NotNull
     private Duration logonTimeout = Duration.ofSeconds(10);
 

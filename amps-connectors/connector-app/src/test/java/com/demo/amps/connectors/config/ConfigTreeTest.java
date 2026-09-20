@@ -2,6 +2,8 @@ package com.demo.amps.connectors.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.demo.amps.connectors.resource.ResourceFactory;
+import com.demo.amps.connectors.resource.jdbc.JdbcResourceFactory;
 import jakarta.validation.Validation;
 import jakarta.validation.ValidatorFactory;
 import java.io.IOException;
@@ -52,6 +54,14 @@ class ConfigTreeTest {
      * them is the difference between a failure and a test that silently walks nothing.
      */
     private static final Path CONFIG_ROOT = configRoot();
+
+    /**
+     * Every resource module the generic runner ships with. What {@code resources[]}
+     * entries in the tree are checked against, the way {@code ApplicationYamlBindingTest}
+     * checks the demo connectors against the driver modules.
+     */
+    private static final List<ResourceFactory> RESOURCE_FACTORIES =
+            List.of(new JdbcResourceFactory());
 
     private static Path configRoot() {
         for (Path candidate : List.of(
@@ -156,12 +166,29 @@ class ConfigTreeTest {
     void everyInstanceNamesOneTransportAndABoundDriver(Instance instance) throws IOException {
         for (ConnectorProperties connector : bind(instance).getConnectors()) {
             assertThat(connector.getSource().configuredBlocks())
-                    .as("%s/%s: exactly one of tcp/kafka/jdbc/hazelcast",
+                    .as("%s/%s: exactly one of tcp/kafka/jdbc/hazelcast/amps",
                             instance, connector.getName())
                     .hasSize(1);
             assertThat(connector.getSource().getDriver())
                     .as("%s/%s: source.driver resolved", instance, connector.getName())
                     .isEqualTo(SourceProperties.Driver.REAL);
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("instances")
+    @DisplayName("every resource an instance declares is one the runner carries a factory for")
+    void everyResourceIsClaimedByAFactoryTheRunnerCarries(Instance instance) throws IOException {
+        // A resources[] entry is built by the first ResourceFactory that recognises its
+        // kind, and the factories arrive with the image: this is what catches a resource
+        // module dropped from connector-app's build file, which would otherwise surface as
+        // a startup failure on the day someone deploys that block. (An application under
+        // apps/ declares its own modules, but the block is spelled the same and the runner
+        // is the image most instances run on.)
+        for (ResourceProperties resource : bind(instance).getResources()) {
+            assertThat(RESOURCE_FACTORIES)
+                    .as("%s: a resource module for %s", instance, resource)
+                    .anyMatch(factory -> factory.supports(resource));
         }
     }
 
@@ -293,6 +320,7 @@ class ConfigTreeTest {
         // pass vacuously on an empty list.
         assertThat(instances()).extracting(Instance::env).contains("local");
         assertThat(instances()).extracting(Instance::app)
-                .contains("ticks-tcp", "orders-kafka", "positions-jdbc", "events-hazelcast");
+                .contains("ticks-tcp", "orders-kafka", "positions-jdbc", "events-hazelcast",
+                        "instrument-enricher");
     }
 }

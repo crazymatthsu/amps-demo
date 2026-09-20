@@ -1,7 +1,9 @@
 package com.demo.amps.connectors.amps;
 
 import com.crankuptheamps.client.Command;
+import com.crankuptheamps.client.ConnectionInfo;
 import com.crankuptheamps.client.DefaultServerChooser;
+import com.crankuptheamps.client.FixedDelayStrategy;
 import com.crankuptheamps.client.HAClient;
 import com.crankuptheamps.client.MemoryPublishStore;
 import com.crankuptheamps.client.PublishStore;
@@ -34,6 +36,13 @@ import org.slf4j.LoggerFactory;
  * <p>The message type belongs to the URI, not to the publish call, which is why this takes one:
  * a client logged on via {@code /amps/fix} publishes FIX-typed topics, and a JSON connector in
  * the same application needs its own connection.
+ *
+ * <p>{@link #connect()} gives up after about {@code logon-timeout} against a server that is
+ * not there, and throws; every reconnect after that first success is the HA client's own and
+ * never gives up. The distinction matters because the two callers are different threads with
+ * different jobs: the first connect runs on whoever is starting the connector, which has other
+ * connectors to start and a status line to log, while a reconnect runs on the client's own
+ * thread and has nothing better to do than keep trying.
  */
 public final class HaAmpsPublisher implements AmpsPublisher {
 
@@ -73,10 +82,20 @@ public final class HaAmpsPublisher implements AmpsPublisher {
             return;
         }
         HAClient connecting = new HAClient(clientName);
+        int reconnectDelay = (int) server.getReconnectDelay().toMillis();
         try {
             attachPublishStore(connecting);
-            connecting.setServerChooser(new DefaultServerChooser().add(uri));
-            connecting.setReconnectDelay((int) server.getReconnectDelay().toMillis());
+            connecting.setServerChooser(new RememberingServerChooser().add(uri));
+            // Bounded for the FIRST connect only. connectAndLogon() retries through the
+            // server chooser until a strategy tells it to stop, and the plain fixed delay
+            // never does -- so against a server that is down it would block this thread
+            // forever, and with it the connector's start, the manager's retry tick, every
+            // status line and a clean shutdown. Giving up after about logon-timeout turns
+            // that into an exception the caller already knows how to handle: the manager
+            // retries the connector on its five-second tick, and the alerts sink connects
+            // on the first alert instead.
+            connecting.setReconnectDelayStrategy(new FixedDelayStrategy(
+                    reconnectDelay, (int) server.getLogonTimeout().toMillis()));
             connecting.setTimeout((int) server.getLogonTimeout().toMillis());
             if (server.getPublishBatchBytes() > 0) {
                 // Coalescing small publishes into one write is measurably faster at high rates
@@ -85,6 +104,11 @@ public final class HaAmpsPublisher implements AmpsPublisher {
                         (int) server.getPublishBatchDelay().toMillis());
             }
             connecting.connectAndLogon();
+            // Connected: from here on the client reconnects on its own, and for as long as it
+            // takes, because a server restart is exactly what an HA client is for. The bound
+            // above must not apply to that, or a long outage would leave the client
+            // disconnected for good with a publish store nobody replays.
+            connecting.setReconnectDelayStrategy(new FixedDelayStrategy(reconnectDelay));
         } catch (AMPSException | RuntimeException e) {
             connecting.close();
             throw e;
@@ -217,6 +241,30 @@ public final class HaAmpsPublisher implements AmpsPublisher {
             required().execute(command);
         } catch (AMPSException e) {
             throw new IllegalStateException(what + " failed", e);
+        }
+    }
+
+    /**
+     * A {@link DefaultServerChooser} that remembers the last failure it was told about.
+     *
+     * <p>The default one answers {@code getError()} with an empty string, and that string is
+     * all the client puts in the exception when it gives up -- "the last connection error
+     * was: " and nothing. Remembering it is what makes the log line say "connection refused"
+     * rather than leaving an operator to guess.
+     */
+    private static final class RememberingServerChooser extends DefaultServerChooser {
+
+        private volatile String error = "";
+
+        @Override
+        public void reportFailure(Exception exception, ConnectionInfo info) throws Exception {
+            error = String.valueOf(exception);
+            super.reportFailure(exception, info);
+        }
+
+        @Override
+        public String getError() {
+            return error;
         }
     }
 

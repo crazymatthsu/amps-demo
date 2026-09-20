@@ -2,6 +2,7 @@ package com.demo.amps.connectors.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.demo.amps.connectors.ampssource.AmpsSourceFactory;
 import com.demo.amps.connectors.hazelcast.HazelcastSourceFactory;
 import com.demo.amps.connectors.jdbc.JdbcSourceFactory;
 import com.demo.amps.connectors.kafka.KafkaSourceFactory;
@@ -53,7 +54,10 @@ class ApplicationYamlBindingTest {
     /** Every driver module the generic runner ships with, in the order the resolver sees them. */
     private static final List<SourceFactory> FACTORIES = List.of(
             new TcpSourceFactory(), new KafkaSourceFactory(),
-            new JdbcSourceFactory(), new HazelcastSourceFactory());
+            new JdbcSourceFactory(), new HazelcastSourceFactory(),
+            // Built with the shared server block, which is what a source.amps connector
+            // subscribes to when it names no server of its own.
+            new AmpsSourceFactory(new AmpsServerProperties()));
 
     private final ConnectorsProperties properties = bind("application-demo.yml", "application.yml");
 

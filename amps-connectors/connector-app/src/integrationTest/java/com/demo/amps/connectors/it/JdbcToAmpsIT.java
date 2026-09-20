@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
 import com.crankuptheamps.client.Client;
+import com.demo.amps.connectors.app.ConnectorApplication;
 import com.demo.amps.testharness.AmpsFlow;
 import com.demo.amps.testharness.AmpsTestServer;
 import java.sql.Connection;
@@ -77,7 +78,7 @@ class JdbcToAmpsIT {
                     PRIMARY KEY (account, symbol))""");
 
         server = AmpsTestServer.start(AmpsFlow.AMPS_CONNECTORS);
-        app = ConnectorAppRunner.against(server.port())
+        app = ConnectorAppRunner.against(server.port(), ConnectorApplication.class)
                 .connector("positions-jdbc")
                 // Required by source.jdbc: a result-set row has no wire format, so the source
                 // synthesises one as JSON keyed by column label.

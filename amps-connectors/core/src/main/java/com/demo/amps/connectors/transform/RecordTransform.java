@@ -28,6 +28,14 @@ import java.util.Map;
  *       own copy, and a transform that writes into the map it was given would be editing the
  *       evidence the next step is reading.</li>
  * </ul>
+ *
+ * <p>A bean that wants to know <em>which</em> connector it is serving -- to name it in an
+ * alert, say -- overrides {@link #bind(TransformContext)}: the registry calls it once per
+ * connector while resolving that connector's {@code bean:} steps, and folds the returned
+ * transform into that connector's chain. The bean itself stays one shared, stateless
+ * instance; the bound copy is the per-connector view, and it must be as thread-safe as the
+ * bean is. The default returns {@code this}, so a transform that does not care never sees
+ * the context.
  */
 @FunctionalInterface
 public interface RecordTransform {
@@ -38,4 +46,15 @@ public interface RecordTransform {
      * @return the fields to carry on with, or {@code null} to drop the record
      */
     Map<String, Object> apply(SourceRecord record, Map<String, Object> fields);
+
+    /**
+     * The view of this transform for one connector.
+     *
+     * @param context the connector the transform is being resolved for, its registry and
+     *     where its alerts go
+     * @return the transform to fold into that connector's chain; this instance by default
+     */
+    default RecordTransform bind(TransformContext context) {
+        return this;
+    }
 }

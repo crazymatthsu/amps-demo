@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
 import com.crankuptheamps.client.Client;
+import com.demo.amps.connectors.app.ConnectorApplication;
 import com.demo.amps.testharness.AmpsFlow;
 import com.demo.amps.testharness.AmpsTestServer;
 import java.io.IOException;
@@ -90,7 +91,7 @@ class TcpToAmpsIT {
         ticksPort = freePort();
         ordersPort = freePort();
 
-        app = ConnectorAppRunner.against(server.port())
+        app = ConnectorAppRunner.against(server.port(), ConnectorApplication.class)
                 // ---- PUBLISHER-keyed upserts onto an unkeyed SOW topic -------------
                 .connector("positions-tcp")
                 .set("format", "JSON")

@@ -13,13 +13,23 @@ description = "Generic source -> AMPS connector application; connectors arrive a
 dependencies {
     // Every source module, because this is the ONE image the whole fleet deploys: an
     // instance picks its transport in configuration (source.tcp / source.kafka /
-    // source.jdbc / source.hazelcast), and a driver missing from the image would turn
-    // that into a startup failure on the day someone writes a different block. An app
-    // under apps/ that only ever dials one broker can depend on just that module.
+    // source.jdbc / source.hazelcast / source.amps), and a driver missing from the image
+    // would turn that into a startup failure on the day someone writes a different block.
+    // An app under apps/ that only ever dials one broker can depend on just that module.
     implementation(project(":amps-connectors:source-tcp"))
     implementation(project(":amps-connectors:source-kafka"))
     implementation(project(":amps-connectors:source-jdbc"))
     implementation(project(":amps-connectors:source-hazelcast"))
+    // The fifth driver reads an AMPS topic: a bridge between two instances (or two topics of
+    // one), and the transport the control channel listens on. Same rule as the others -- an
+    // instance selects it with source.amps, and the image has to carry it.
+    implementation(project(":amps-connectors:source-amps"))
+    // The one resource kind, for the same reason: an instance that declares a
+    // resources[].jdbc entry (a lookup table for its rules to read, or for a `reload`
+    // command to refresh) has to find a factory for it in the image, and a missing one is
+    // a startup failure naming this module. ConfigTreeTest checks every instance's entries
+    // against the factories declared here.
+    implementation(project(":amps-connectors:resource-jdbc"))
 
     // The JDBC integration test polls a real in-process database rather than the
     // PostgreSQL the image ships: the source speaks java.sql and DriverManager, so H2

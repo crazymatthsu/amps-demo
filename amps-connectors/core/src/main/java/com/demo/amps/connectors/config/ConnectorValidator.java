@@ -1,5 +1,6 @@
 package com.demo.amps.connectors.config;
 
+import com.demo.amps.connectors.filter.FieldExpressions;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -24,7 +25,9 @@ import org.springframework.expression.spel.standard.SpelExpressionParser;
  *
  * <p>Checked once at startup by {@code ConnectorManager.validate()}, so a bad
  * {@code application.yml} stops the application with a readable list instead of a stack trace
- * half an hour later.
+ * half an hour later. The {@code resources:}, {@code alerts:} and {@code control:} slices are
+ * also checked by the auto-configuration as it builds their beans, which happens earlier
+ * than that.
  */
 public final class ConnectorValidator {
 
@@ -50,6 +53,162 @@ public final class ConnectorValidator {
                 errors.add("duplicate connector name: " + connector.getName());
             }
             errors.addAll(validate(connector));
+        }
+        errors.addAll(validateResources(properties));
+        errors.addAll(validateAlerts(properties));
+        errors.addAll(validateControl(properties));
+        return errors;
+    }
+
+    /**
+     * The {@code resources:} list: unique names, exactly one kind per entry, and what each
+     * kind cannot do without.
+     *
+     * <p>Public on its own, and not only through {@link #validate(ConnectorsProperties)},
+     * because the resources are built and started <em>before</em> the connector manager runs
+     * the full validation: the auto-configuration checks this slice where it consumes it, so
+     * a mistake stops the application with the same readable list rather than with a
+     * database error from a table that should never have been built.
+     *
+     * @param properties the bound configuration
+     * @return human-readable problems, each prefixed with the resource name
+     */
+    public static List<String> validateResources(ConnectorsProperties properties) {
+        List<String> errors = new ArrayList<>();
+        Set<String> names = new HashSet<>();
+        for (ResourceProperties resource : properties.getResources()) {
+            String id = "resource '" + resource.getName() + "': ";
+            if (isBlank(resource.getName())) {
+                errors.add(id + "name is required: it is what transforms and reload commands "
+                        + "address the resource by");
+            } else if (!names.add(resource.getName())) {
+                errors.add("duplicate resource name: " + resource.getName()
+                        + " -- a transform asking for it could not know which one it got");
+            }
+            Set<String> kinds = resource.configuredKinds();
+            if (kinds.isEmpty()) {
+                errors.add(id + "names no kind (jdbc), so nothing can build it -- a resource "
+                        + "that needs no configuration is an AppResource bean, not an entry");
+                continue;
+            }
+            if (kinds.size() > 1) {
+                errors.add(id + "names " + kinds + ", but an entry is one resource of one kind");
+                continue;
+            }
+            errors.addAll(validateJdbcResource(id, resource.getJdbc()));
+        }
+        return errors;
+    }
+
+    /** The {@code jdbc} resource: a query, a way to key its rows, and sane timings. */
+    private static List<String> validateJdbcResource(String id, JdbcResourceProperties jdbc) {
+        List<String> errors = new ArrayList<>();
+        if (isBlank(jdbc.getUrl())) {
+            errors.add(id + "jdbc.url is required");
+        }
+        if (isBlank(jdbc.getQuery())) {
+            errors.add(id + "jdbc.query is required: its result set is the whole table");
+        }
+        if (jdbc.getKeyColumns().isEmpty()) {
+            errors.add(id + "jdbc.key-columns is required: the key is what a transform looks "
+                    + "a row up by, and a table nobody can address is a table nobody can use");
+        } else if (jdbc.getKeyColumns().stream().anyMatch(ConnectorValidator::isBlank)) {
+            errors.add(id + "jdbc.key-columns contains a blank column name");
+        }
+        if (isBlank(jdbc.getKeySeparator())) {
+            errors.add(id + "jdbc.key-separator must not be blank");
+        }
+        if (jdbc.getReloadInterval() == null || jdbc.getReloadInterval().isNegative()) {
+            errors.add(id + "jdbc.reload-interval must be zero (reload on demand only) or "
+                    + "positive");
+        }
+        if (jdbc.getReconnectDelay() == null || jdbc.getReconnectDelay().isNegative()
+                || jdbc.getReconnectDelay().isZero()) {
+            errors.add(id + "jdbc.reconnect-delay must be positive: it is how long a failed "
+                    + "load waits before dialling again");
+        }
+        if (jdbc.getFetchSize() < 1) {
+            errors.add(id + "jdbc.fetch-size must be at least 1");
+        }
+        return errors;
+    }
+
+    /**
+     * The {@code alerts:} block: a queue that can hold something, and a sink that names
+     * everything it needs to reach.
+     *
+     * <p>Public for the same reason as {@link #validateResources}: the alert manager and its
+     * sinks are built when the context is, before the manager's validation runs.
+     *
+     * @param properties the bound configuration
+     * @return human-readable problems, each prefixed with {@code alerts.}
+     */
+    public static List<String> validateAlerts(ConnectorsProperties properties) {
+        AlertProperties alerts = properties.getAlerts();
+        if (alerts == null) {
+            return List.of();
+        }
+        List<String> errors = new ArrayList<>();
+        if (alerts.getQueueSize() < 1) {
+            errors.add("alerts.queue-size must be at least 1: it bounds what a slow sink can "
+                    + "hold, and a queue of nothing would drop every alert");
+        }
+        if (alerts.getMinSeverity() == null) {
+            errors.add("alerts.min-severity must be one of INFO/WARN/ERROR");
+        }
+        if (alerts.getSuppressRepeats() == null || alerts.getSuppressRepeats().isNegative()) {
+            errors.add("alerts.suppress-repeats must be zero (send every alert) or positive");
+        }
+        if (alerts.getAmps() != null && isBlank(alerts.getAmps().getTopic())) {
+            errors.add("alerts.amps.topic is required when alerts.amps is configured: the "
+                    + "topic is what enables the sink");
+        }
+        AlertProperties.Kafka kafka = alerts.getKafka();
+        if (kafka != null) {
+            if (isBlank(kafka.getTopic())) {
+                errors.add("alerts.kafka.topic is required when alerts.kafka is configured: "
+                        + "the topic is what enables the sink");
+            } else if (isBlank(kafka.getBootstrapServers())) {
+                errors.add("alerts.kafka.topic needs alerts.kafka.bootstrap-servers: a topic "
+                        + "with no cluster to find it on is a sink that will never send");
+            }
+        }
+        return errors;
+    }
+
+    /**
+     * The {@code control:} block: when it is on, a source that names exactly one transport
+     * (and satisfies that transport's own rules, a Kafka group id above all -- a control
+     * topic read by an unnamed group is one whose position is lost on every restart), and
+     * target names that are names.
+     *
+     * <p>The source is checked as the synthetic connector the dispatcher will present it as,
+     * so the rules are the same ones a feed's block gets and the messages read the same way,
+     * prefixed {@code control:} instead of a connector's name. Off, the block is not looked
+     * at: a half-written control section under a profile that never enables it is not a
+     * mistake yet.
+     *
+     * <p>Public for the same reason as {@link #validateResources}: the dispatcher is built
+     * when the context is, and the auto-configuration checks this slice where it consumes it.
+     *
+     * @param properties the bound configuration
+     * @return human-readable problems, each prefixed with {@code control: }
+     */
+    public static List<String> validateControl(ConnectorsProperties properties) {
+        ControlProperties control = properties.getControl();
+        if (control == null || !control.isEnabled()) {
+            return List.of();
+        }
+        List<String> errors = new ArrayList<>();
+        ConnectorProperties listener = new ConnectorProperties();
+        listener.setName("control");
+        listener.setFormat(SourceFormat.JSON);
+        listener.setSource(control.getSource());
+        errors.addAll(validateSource("control: ", listener));
+        if (control.getAcceptTargets() == null
+                || control.getAcceptTargets().stream().anyMatch(ConnectorValidator::isBlank)) {
+            errors.add("control: accept-targets contains a blank name; a name an instance "
+                    + "answers to has to be one a command can carry");
         }
         return errors;
     }
@@ -84,12 +243,13 @@ public final class ConnectorValidator {
         SourceProperties source = connector.getSource();
         List<String> blocks = source.configuredBlocks();
         if (blocks.isEmpty()) {
-            errors.add(id + "source needs exactly one of tcp/kafka/jdbc/hazelcast, and has none");
+            errors.add(id + "source needs exactly one of tcp/kafka/jdbc/hazelcast/amps, and "
+                    + "has none");
             return errors;
         }
         if (blocks.size() > 1) {
             errors.add(id + "source configures " + blocks + ", but a connector feeds one topic "
-                    + "from one feed: keep exactly one of tcp/kafka/jdbc/hazelcast");
+                    + "from one feed: keep exactly one of tcp/kafka/jdbc/hazelcast/amps");
             return errors;
         }
         KafkaSourceProperties kafka = source.getKafka();
@@ -100,6 +260,42 @@ public final class ConnectorValidator {
         }
         errors.addAll(validateJdbc(id, connector));
         errors.addAll(validateHazelcast(id, connector));
+        errors.addAll(validateAmps(id, connector));
+        return errors;
+    }
+
+    /**
+     * The {@code source.amps} rules: a format AMPS has a message type for, and a bookmark
+     * where a bookmark subscription is asked for.
+     *
+     * <p>The message type is not configured under {@code source.amps} because the
+     * connector's {@code format} already says what the payload is, and in AMPS the message
+     * type belongs to the connection URI: {@code FIX} subscribes through {@code /amps/fix}.
+     * {@code TEXT} is this framework's name for "a line", and AMPS has no such type, so
+     * there is no URI to subscribe through.
+     */
+    private static List<String> validateAmps(String id, ConnectorProperties connector) {
+        AmpsSourceProperties amps = connector.getSource().getAmps();
+        if (amps == null) {
+            return List.of();
+        }
+        List<String> errors = new ArrayList<>();
+        if (connector.getFormat() == SourceFormat.TEXT) {
+            errors.add(id + "source.amps cannot read format: TEXT -- the message type goes "
+                    + "on the connection URI (/amps/json, /amps/fix, /amps/nvfix), and AMPS "
+                    + "has none for a bare line");
+        }
+        if (isBlank(amps.getTopic())) {
+            errors.add(id + "source.amps.topic is required");
+        }
+        if (amps.getMode() == null) {
+            errors.add(id + "source.amps.mode must be one of "
+                    + "SUBSCRIBE/SOW_AND_SUBSCRIBE/BOOKMARK");
+        } else if (amps.getMode() == AmpsSourceProperties.Mode.BOOKMARK
+                && amps.getBookmark() == null) {
+            errors.add(id + "source.amps.mode: BOOKMARK requires source.amps.bookmark "
+                    + "(EPOCH, MOST_RECENT or NOW): it is where the replay starts");
+        }
         return errors;
     }
 
@@ -286,7 +482,10 @@ public final class ConnectorValidator {
         }
     }
 
-    /** Each step names exactly one kind, and every {@code derive} expression parses. */
+    /**
+     * Each step names exactly one kind, every {@code derive} expression parses, and a
+     * {@code rules} step's rules are whole.
+     */
     private static List<String> validateTransforms(String id, ConnectorProperties connector) {
         List<String> errors = new ArrayList<>();
         for (TransformStep step : connector.getTransforms()) {
@@ -306,6 +505,64 @@ public final class ConnectorValidator {
             }
             if (step.getBean() != null && step.getBean().isBlank()) {
                 errors.add(id + "a transform step names a blank bean");
+            }
+            if (step.getRules() != null) {
+                errors.addAll(validateRules(id, step.getRules()));
+            }
+        }
+        return errors;
+    }
+
+    /**
+     * A {@code rules} step: at least one rule; each named, uniquely within the step, with a
+     * {@code when} that parses and a {@code then} that does something; an alert with a code
+     * and a message that parses as a template; a bean with a name.
+     *
+     * <p>Names are checked here and not only by bean validation because the name is what
+     * every later message says: a rule the log calls {@code rule ''} is a rule nobody can
+     * find, and two rules called {@code large-notional} are one counter that lies.
+     */
+    private static List<String> validateRules(String id, List<RuleProperties> rules) {
+        List<String> errors = new ArrayList<>();
+        if (rules.isEmpty()) {
+            errors.add(id + "a rules step lists no rules, so it does nothing");
+            return errors;
+        }
+        Set<String> names = new HashSet<>();
+        for (RuleProperties rule : rules) {
+            String name = rule.getName();
+            if (isBlank(name)) {
+                errors.add(id + "a rule has no name: the name is its counter on the status "
+                        + "line and the detail on every alert it raises");
+            } else if (!names.add(name)) {
+                errors.add(id + "duplicate rule name '" + name + "' in one rules step: the "
+                        + "two would share a counter");
+            }
+            String where = "rule '" + name + "'";
+            if (isBlank(rule.getWhen())) {
+                errors.add(id + where + " has no when: a rule is a condition");
+            } else {
+                errors.addAll(expression(id, where + ".when", rule.getWhen()));
+            }
+            RuleThen then = rule.getThen();
+            if (then == null || then.configuredActions().isEmpty()) {
+                errors.add(id + where + " names no action (set/bean/alert/drop), so it would "
+                        + "do nothing but count");
+                continue;
+            }
+            if (then.getBean() != null && then.getBean().isBlank()) {
+                errors.add(id + where + " names a blank bean");
+            }
+            RuleAlert alert = then.getAlert();
+            if (alert != null) {
+                if (isBlank(alert.getCode())) {
+                    errors.add(id + where + ".alert needs a code: it is the stable name a "
+                            + "reader groups by and repeat suppression collapses on");
+                }
+                if (alert.getSeverity() == null) {
+                    errors.add(id + where + ".alert.severity must be one of INFO/WARN/ERROR");
+                }
+                errors.addAll(template(id, where + ".alert.message", alert.getMessage()));
             }
         }
         return errors;
@@ -340,8 +597,8 @@ public final class ConnectorValidator {
         if (key.getMode() == KeyProperties.Mode.PUBLISHER && key.getFields().isEmpty()
                 && !sourceSuppliesKeys(connector.getSource())) {
             errors.add(id + "amps.key.mode: PUBLISHER with no amps.key.fields needs a source "
-                    + "that keys its own messages (kafka, hazelcast with a map, or jdbc with "
-                    + "key-columns), and "
+                    + "that keys its own messages (kafka, hazelcast with a map, jdbc with "
+                    + "key-columns, or amps in SOW_AND_SUBSCRIBE mode), and "
                     + connector.getSource().describe() + " does not. AMPS accepts a publish "
                     + "with no SowKey onto an unkeyed SOW topic and files it under a sentinel "
                     + "key, so every record would overwrite the one before it");
@@ -371,6 +628,14 @@ public final class ConnectorValidator {
         if (source.getHazelcast() != null && source.getHazelcast().getMap() != null) {
             return true;
         }
+        // An AMPS SOW record has a SowKey and a journal message does not, and only a
+        // sow_and_subscribe is guaranteed to be reading a SOW: a plain subscription to a
+        // keyed topic would carry keys too, but nothing in the configuration says the topic
+        // is keyed, and the sentinel collapse is too quiet a failure to bet on it.
+        if (source.getAmps() != null
+                && source.getAmps().getMode() == AmpsSourceProperties.Mode.SOW_AND_SUBSCRIBE) {
+            return true;
+        }
         return source.getJdbc() != null && !source.getJdbc().getKeyColumns().isEmpty();
     }
 
@@ -384,6 +649,20 @@ public final class ConnectorValidator {
             return List.of();
         } catch (RuntimeException e) {
             return List.of(id + where + " [" + text + "] does not parse: " + e.getMessage());
+        }
+    }
+
+    /** A message template: literal text with {@code #{...}} in it, each of which has to parse. */
+    private static List<String> template(String id, String where, String text) {
+        if (isBlank(text)) {
+            return List.of();
+        }
+        try {
+            FieldExpressions.parseTemplate(text);
+            return List.of();
+        } catch (RuntimeException e) {
+            return List.of(id + where + " [" + text + "] does not parse as a template: "
+                    + e.getMessage());
         }
     }
 

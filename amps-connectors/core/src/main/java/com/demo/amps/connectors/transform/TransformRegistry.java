@@ -1,6 +1,7 @@
 package com.demo.amps.connectors.transform;
 
 import com.demo.amps.connectors.config.TransformStep;
+import com.demo.amps.connectors.transform.rules.RuleSet;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -42,30 +43,61 @@ public class TransformRegistry {
     }
 
     /**
-     * Turn a connector's steps into the transforms to fold over each record, in order.
+     * The bean of that name -- what a {@code bean:} step and a rule's {@code bean} action
+     * both resolve through.
      *
-     * <p>A {@code bean:} step resolves to the bean of that name; every other kind is compiled
-     * by {@link TransformChain#compile}, so the built-ins and the custom ones end up as the
-     * same kind of thing and the chain does not need to know which was which.
+     * @param name the bean name
+     * @return the transform
+     * @throws IllegalStateException naming the bean and what is registered, if it is not
+     */
+    public RecordTransform require(String name) {
+        RecordTransform bean = transforms.get(name);
+        if (bean == null) {
+            throw new IllegalStateException("no RecordTransform bean named '"
+                    + name + "'; registered: " + transforms.keySet());
+        }
+        return bean;
+    }
+
+    /**
+     * Turn a connector's steps into the transforms to fold over each record, in order, with
+     * no connector behind them: what a test, a tool, or the older overload wants.
      *
      * @param steps the connector's {@code transforms:} list
      * @return one transform per step
      * @throws IllegalStateException naming the first unknown bean and what is registered
-     * @throws IllegalArgumentException if a step does not name exactly one kind
+     * @throws IllegalArgumentException if a step does not name exactly one kind, or a rule is
+     *     malformed
      */
     public List<RecordTransform> resolve(List<TransformStep> steps) {
+        return resolve(steps, TransformContext.of(this));
+    }
+
+    /**
+     * Turn a connector's steps into the transforms to fold over each record, in order.
+     *
+     * <p>A {@code bean:} step resolves to the bean of that name, {@linkplain
+     * RecordTransform#bind(TransformContext) bound} to the connector so a bean that names the
+     * connector in its alerts can; a {@code rules:} step is compiled by {@link RuleSet#compile}
+     * with the context, because its alerts need the connector's name; every other kind is
+     * compiled by {@link TransformChain#compile}. All of them end up as the same kind of
+     * thing, and the chain does not need to know which was which.
+     *
+     * @param steps the connector's {@code transforms:} list
+     * @param context the connector the steps belong to, and where its rules raise
+     * @return one transform per step
+     * @throws IllegalStateException naming the first unknown bean and what is registered
+     * @throws IllegalArgumentException if a step does not name exactly one kind, or a rule is
+     *     malformed
+     */
+    public List<RecordTransform> resolve(List<TransformStep> steps, TransformContext context) {
         List<RecordTransform> resolved = new ArrayList<>(steps.size());
         for (TransformStep step : steps) {
-            if (step.getBean() != null) {
-                RecordTransform bean = transforms.get(step.getBean());
-                if (bean == null) {
-                    throw new IllegalStateException("no RecordTransform bean named '"
-                            + step.getBean() + "'; registered: " + transforms.keySet());
-                }
-                resolved.add(bean);
-            } else {
-                resolved.add(TransformChain.compile(step));
-            }
+            resolved.add(switch (TransformChain.kindOf(step)) {
+                case "bean" -> require(step.getBean()).bind(context);
+                case "rules" -> RuleSet.compile(step.getRules(), context);
+                default -> TransformChain.compile(step);
+            });
         }
         return List.copyOf(resolved);
     }

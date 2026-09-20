@@ -228,6 +228,46 @@ class ConnectorValidatorTest {
     }
 
     @Test
+    @DisplayName("an AMPS source has no message type for TEXT, and a bookmark replay needs a bookmark")
+    void refusesAmpsSourceRules() {
+        ConnectorProperties text = TestConnectors.amps("bridge", "sow/connectors/orders");
+        text.setFormat(SourceFormat.TEXT);
+        assertThat(ConnectorValidator.validate(text))
+                .anySatisfy(error -> assertThat(error).contains("cannot read format: TEXT"));
+
+        ConnectorProperties bookmark = TestConnectors.amps("bridge", "sow/connectors/orders");
+        bookmark.getSource().getAmps().setMode(AmpsSourceProperties.Mode.BOOKMARK);
+        bookmark.getSource().getAmps().setBookmark(null);
+        assertThat(ConnectorValidator.validate(bookmark))
+                .anySatisfy(error -> assertThat(error).contains("BOOKMARK requires"));
+        bookmark.getSource().getAmps().setBookmark(AmpsSourceProperties.Bookmark.EPOCH);
+        assertThat(ConnectorValidator.validate(bookmark)).isEmpty();
+
+        ConnectorProperties blank = TestConnectors.amps("bridge", " ");
+        assertThat(ConnectorValidator.validate(blank))
+                .anySatisfy(error -> assertThat(error).contains("source.amps.topic is required"));
+
+        // The block list names every transport, amps included.
+        assertThat(ConnectorValidator.validate(TestConnectors.simulated("nothing")))
+                .anySatisfy(error -> assertThat(error).contains("tcp/kafka/jdbc/hazelcast/amps"));
+    }
+
+    @Test
+    @DisplayName("a SOW record has a SowKey, so sow_and_subscribe keys its own records; a journal does not")
+    void acceptsAnAmpsSowSubscriptionAsItsOwnKeySource() {
+        ConnectorProperties sow = TestConnectors.withKey(
+                TestConnectors.amps("bridge", "sow/connectors/orders"), KeyProperties.Mode.PUBLISHER);
+        sow.getSource().getAmps().setMode(AmpsSourceProperties.Mode.SOW_AND_SUBSCRIBE);
+        assertThat(ConnectorValidator.validate(sow)).isEmpty();
+
+        ConnectorProperties journal = TestConnectors.withKey(
+                TestConnectors.amps("bridge", "connectors/ticks"), KeyProperties.Mode.PUBLISHER);
+        assertThat(ConnectorValidator.validate(journal))
+                .anySatisfy(error -> assertThat(error).contains("amps:connectors/ticks"))
+                .anySatisfy(error -> assertThat(error).contains("SOW_AND_SUBSCRIBE"));
+    }
+
+    @Test
     void refusesKafkaWithNoGroupId() {
         ConnectorProperties connector = TestConnectors.kafka("orders", "orders", "g");
         connector.getSource().getKafka().setGroupId("  ");
@@ -292,5 +332,290 @@ class ConnectorValidatorTest {
         assertThat(ConnectorValidator.validate(connector))
                 .isNotEmpty()
                 .allSatisfy(error -> assertThat(error).startsWith("connector 'named': "));
+    }
+
+    // ---- rules ------------------------------------------------------------------
+
+    private static RuleProperties rule(String name, String when) {
+        RuleProperties rule = new RuleProperties();
+        rule.setName(name);
+        rule.setWhen(when);
+        rule.getThen().setSet(Map.of("flag", "on"));
+        return rule;
+    }
+
+    private static ConnectorProperties withRules(RuleProperties... rules) {
+        ConnectorProperties connector = TestConnectors.tcp("orders", 5001);
+        TransformStep step = new TransformStep();
+        step.setRules(List.of(rules));
+        connector.setTransforms(List.of(step));
+        return connector;
+    }
+
+    @Test
+    @DisplayName("a well-formed rules step is accepted, and is one kind like any other")
+    void acceptsAWellFormedRulesStep() {
+        RuleProperties alerting = rule("limit-without-price", "#f['40'] == '2' && !#f.containsKey('44')");
+        alerting.getThen().setSet(null);
+        RuleAlert alert = new RuleAlert();
+        alert.setCode("LIMIT_WITHOUT_PRICE");
+        alert.setMessage("limit order #{#f['11']} has no price");
+        alerting.getThen().setAlert(alert);
+        RuleProperties dropping = rule("cancel", "#r.action.name() == 'DELETE'");
+        dropping.getThen().setDrop(true);
+        ConnectorProperties connector = withRules(alerting, dropping);
+        assertThat(ConnectorValidator.validate(connector)).isEmpty();
+        assertThat(connector.getTransforms().get(0).configuredKinds()).containsExactly("rules");
+
+        TransformStep twice = new TransformStep();
+        twice.setRules(List.of(rule("a", "true")));
+        twice.setBean("x");
+        assertThat(twice.configuredKinds()).containsExactly("bean", "rules");
+    }
+
+    @Test
+    @DisplayName("a rules step lists rules, each named once, each with a when that parses")
+    void refusesRulesWithoutNamesOrConditions() {
+        assertThat(ConnectorValidator.validate(withRules()))
+                .anySatisfy(error -> assertThat(error).contains("lists no rules"));
+
+        RuleProperties blank = rule(" ", "true");
+        RuleProperties noWhen = rule("no-when", " ");
+        RuleProperties badWhen = rule("bad-when", "#f['11' ==");
+        assertThat(ConnectorValidator.validate(withRules(blank, noWhen, badWhen, rule("no-when", "true"))))
+                .anySatisfy(error -> assertThat(error).contains("a rule has no name"))
+                .anySatisfy(error -> assertThat(error).contains("rule 'no-when' has no when"))
+                .anySatisfy(error -> assertThat(error).contains("rule 'bad-when'.when"))
+                .anySatisfy(error -> assertThat(error).contains("duplicate rule name 'no-when'"));
+    }
+
+    @Test
+    @DisplayName("a then does something, an alert has a code, and a message is a template")
+    void refusesRulesWhoseThenIsIncomplete() {
+        RuleProperties nothing = rule("nothing", "true");
+        nothing.getThen().setSet(null);
+        RuleProperties blankBean = rule("blank-bean", "true");
+        blankBean.getThen().setBean(" ");
+        RuleProperties noCode = rule("no-code", "true");
+        noCode.getThen().setAlert(new RuleAlert());
+        RuleProperties badTemplate = rule("bad-template", "true");
+        RuleAlert alert = new RuleAlert();
+        alert.setCode("X");
+        alert.setMessage("open #{#f['11']");
+        alert.setSeverity(null);
+        badTemplate.getThen().setAlert(alert);
+
+        assertThat(ConnectorValidator.validate(withRules(nothing, blankBean, noCode, badTemplate)))
+                .allSatisfy(error -> assertThat(error).startsWith("connector 'orders': "))
+                .anySatisfy(error -> assertThat(error).contains("rule 'nothing' names no action"))
+                .anySatisfy(error -> assertThat(error).contains("rule 'blank-bean' names a blank bean"))
+                .anySatisfy(error -> assertThat(error).contains("rule 'no-code'.alert needs a code"))
+                .anySatisfy(error -> assertThat(error).contains("rule 'bad-template'.alert.message"))
+                .anySatisfy(error -> assertThat(error).contains("rule 'bad-template'.alert.severity"));
+    }
+
+    // ---- control ----------------------------------------------------------------
+
+    private static ConnectorsProperties withControl(ControlProperties control) {
+        ConnectorsProperties properties = new ConnectorsProperties();
+        properties.setControl(control);
+        return properties;
+    }
+
+    private static ControlProperties ampsControl() {
+        ControlProperties control = new ControlProperties();
+        control.setEnabled(true);
+        AmpsSourceProperties amps = new AmpsSourceProperties();
+        amps.setTopic("connectors/control");
+        control.getSource().setAmps(amps);
+        return control;
+    }
+
+    @Test
+    @DisplayName("control is off by default and valid; on, it is valid with one source block")
+    void acceptsDefaultAndWellFormedControl() {
+        assertThat(ConnectorValidator.validateControl(new ConnectorsProperties())).isEmpty();
+        assertThat(new ConnectorsProperties().getControl().isEnabled()).isFalse();
+        assertThat(new ConnectorsProperties().getControl().getAcceptTargets()).containsExactly("all");
+        assertThat(ConnectorValidator.validateControl(withControl(ampsControl()))).isEmpty();
+        assertThat(ConnectorValidator.validate(withControl(ampsControl()))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("enabled control needs exactly one source block, and the block's own rules apply")
+    void refusesEnabledControlWithoutOneSource() {
+        ControlProperties none = new ControlProperties();
+        none.setEnabled(true);
+        assertThat(ConnectorValidator.validateControl(withControl(none)))
+                .allSatisfy(error -> assertThat(error).startsWith("control: "))
+                .anySatisfy(error -> assertThat(error).contains("exactly one"))
+                .anySatisfy(error -> assertThat(error).contains("has none"));
+
+        ControlProperties two = ampsControl();
+        KafkaSourceProperties kafka = new KafkaSourceProperties();
+        kafka.setBootstrapServers("localhost:9092");
+        kafka.setTopic("connectors.control");
+        kafka.setGroupId("g");
+        two.getSource().setKafka(kafka);
+        assertThat(ConnectorValidator.validate(withControl(two)))
+                .anySatisfy(error -> assertThat(error).contains("control: source configures"));
+
+        ControlProperties noGroup = new ControlProperties();
+        noGroup.setEnabled(true);
+        KafkaSourceProperties unnamed = new KafkaSourceProperties();
+        unnamed.setBootstrapServers("localhost:9092");
+        unnamed.setTopic("connectors.control");
+        noGroup.getSource().setKafka(unnamed);
+        assertThat(ConnectorValidator.validateControl(withControl(noGroup)))
+                .anySatisfy(error -> assertThat(error).contains("control: source.kafka.group-id"));
+
+        // Disabled, a half-written block is not a mistake yet.
+        none.setEnabled(false);
+        assertThat(ConnectorValidator.validateControl(withControl(none))).isEmpty();
+    }
+
+    @Test
+    void refusesBlankAcceptTargets() {
+        ControlProperties control = ampsControl();
+        control.setAcceptTargets(List.of("all", " "));
+        assertThat(ConnectorValidator.validateControl(withControl(control)))
+                .anySatisfy(error -> assertThat(error).contains("accept-targets contains a blank"));
+    }
+
+    // ---- resources --------------------------------------------------------------
+
+    private static ResourceProperties jdbcResource(String name) {
+        ResourceProperties resource = new ResourceProperties();
+        resource.setName(name);
+        JdbcResourceProperties jdbc = new JdbcResourceProperties();
+        jdbc.setUrl("jdbc:h2:mem:refdata");
+        jdbc.setQuery("SELECT symbol, sedol FROM instruments");
+        jdbc.setKeyColumns(List.of("symbol"));
+        resource.setJdbc(jdbc);
+        return resource;
+    }
+
+    private static ConnectorsProperties withResources(ResourceProperties... resources) {
+        ConnectorsProperties properties = new ConnectorsProperties();
+        properties.setResources(List.of(resources));
+        return properties;
+    }
+
+    @Test
+    @DisplayName("a well-formed jdbc resource is accepted, through the full validation too")
+    void acceptsAWellFormedResource() {
+        ConnectorsProperties properties = withResources(jdbcResource("instruments"));
+        assertThat(ConnectorValidator.validateResources(properties)).isEmpty();
+        assertThat(ConnectorValidator.validate(properties)).isEmpty();
+        assertThat(jdbcResource("instruments").configuredKinds()).containsExactly("jdbc");
+    }
+
+    @Test
+    @DisplayName("a resource needs a unique name: transforms and reload commands address it by it")
+    void refusesBlankAndDuplicateResourceNames() {
+        ResourceProperties blank = jdbcResource("  ");
+        assertThat(ConnectorValidator.validateResources(withResources(blank)))
+                .anySatisfy(error -> assertThat(error).contains("name is required"));
+
+        assertThat(ConnectorValidator.validate(withResources(
+                jdbcResource("instruments"), jdbcResource("instruments"))))
+                .anySatisfy(error -> assertThat(error).contains(
+                        "duplicate resource name: instruments"));
+    }
+
+    @Test
+    @DisplayName("an entry names exactly one kind, or nothing can build it")
+    void refusesAResourceWithNoKind() {
+        ResourceProperties none = new ResourceProperties();
+        none.setName("instruments");
+        assertThat(ConnectorValidator.validateResources(withResources(none)))
+                .anySatisfy(error -> assertThat(error)
+                        .startsWith("resource 'instruments': ")
+                        .contains("names no kind"));
+        assertThat(none.configuredKinds()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a jdbc resource is a query, a way to key its rows, and timings that make sense")
+    void refusesAJdbcResourceMissingItsEssentials() {
+        ResourceProperties resource = jdbcResource("instruments");
+        resource.getJdbc().setUrl(" ");
+        resource.getJdbc().setQuery(null);
+        resource.getJdbc().setKeyColumns(List.of());
+        resource.getJdbc().setReloadInterval(Duration.ofSeconds(-1));
+        resource.getJdbc().setReconnectDelay(Duration.ZERO);
+        resource.getJdbc().setFetchSize(0);
+        resource.getJdbc().setKeySeparator("");
+
+        assertThat(ConnectorValidator.validateResources(withResources(resource)))
+                .allSatisfy(error -> assertThat(error).startsWith("resource 'instruments': "))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.url is required"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.query is required"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.key-columns is required"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.reload-interval"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.reconnect-delay"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.fetch-size"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.key-separator"));
+
+        ResourceProperties blankColumn = jdbcResource("instruments");
+        blankColumn.getJdbc().setKeyColumns(List.of("symbol", " "));
+        assertThat(ConnectorValidator.validateResources(withResources(blankColumn)))
+                .anySatisfy(error -> assertThat(error).contains("blank column name"));
+
+        // Zero is "on demand only", and is fine.
+        ResourceProperties onDemand = jdbcResource("instruments");
+        onDemand.getJdbc().setReloadInterval(Duration.ZERO);
+        assertThat(ConnectorValidator.validateResources(withResources(onDemand))).isEmpty();
+    }
+
+    // ---- alerts -----------------------------------------------------------------
+
+    private static ConnectorsProperties withAlerts(AlertProperties alerts) {
+        ConnectorsProperties properties = new ConnectorsProperties();
+        properties.setAlerts(alerts);
+        return properties;
+    }
+
+    @Test
+    @DisplayName("the default alerts block -- enabled, log only -- is valid")
+    void acceptsDefaultAlerts() {
+        assertThat(ConnectorValidator.validateAlerts(new ConnectorsProperties())).isEmpty();
+        AlertProperties both = new AlertProperties();
+        both.setAmps(new AlertProperties.Amps());
+        both.getAmps().setTopic("connectors/alerts");
+        both.setKafka(new AlertProperties.Kafka());
+        both.getKafka().setTopic("connectors.alerts");
+        both.getKafka().setBootstrapServers("localhost:9092");
+        assertThat(ConnectorValidator.validate(withAlerts(both))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a queue of nothing would drop every alert")
+    void refusesAnEmptyAlertQueue() {
+        AlertProperties alerts = new AlertProperties();
+        alerts.setQueueSize(0);
+        alerts.setSuppressRepeats(Duration.ofSeconds(-5));
+        assertThat(ConnectorValidator.validateAlerts(withAlerts(alerts)))
+                .anySatisfy(error -> assertThat(error).contains("alerts.queue-size"))
+                .anySatisfy(error -> assertThat(error).contains("alerts.suppress-repeats"));
+    }
+
+    @Test
+    @DisplayName("a sink block names its topic, and a Kafka topic names its cluster")
+    void refusesASinkMissingWhatItNeeds() {
+        AlertProperties amps = new AlertProperties();
+        amps.setAmps(new AlertProperties.Amps());
+        assertThat(ConnectorValidator.validateAlerts(withAlerts(amps)))
+                .anySatisfy(error -> assertThat(error).contains("alerts.amps.topic is required"));
+
+        AlertProperties kafka = new AlertProperties();
+        kafka.setKafka(new AlertProperties.Kafka());
+        kafka.getKafka().setTopic("connectors.alerts");
+        assertThat(ConnectorValidator.validateAlerts(withAlerts(kafka)))
+                .anySatisfy(error -> assertThat(error).contains("bootstrap-servers"));
+
+        kafka.getKafka().setTopic(" ");
+        assertThat(ConnectorValidator.validateAlerts(withAlerts(kafka)))
+                .anySatisfy(error -> assertThat(error).contains("alerts.kafka.topic is required"));
     }
 }
