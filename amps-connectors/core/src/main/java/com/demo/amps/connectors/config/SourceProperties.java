@@ -58,6 +58,13 @@ public class SourceProperties {
     private HazelcastSourceProperties hazelcast;
 
     /**
+     * AMPS subscription settings; non-null selects the AMPS source -- a topic of another
+     * instance, or of the same one, read as a feed.
+     */
+    @Valid
+    private AmpsSourceProperties amps;
+
+    /**
      * Names of the transport blocks this source configures, in a stable order.
      *
      * <p>Used by the validator and by {@code SourceResolver}'s failure message: "which feed did
@@ -66,7 +73,7 @@ public class SourceProperties {
      * @return the configured block names, e.g. {@code ["kafka"]}
      */
     public List<String> configuredBlocks() {
-        List<String> blocks = new ArrayList<>(4);
+        List<String> blocks = new ArrayList<>(5);
         if (tcp != null) {
             blocks.add("tcp");
         }
@@ -79,6 +86,9 @@ public class SourceProperties {
         if (hazelcast != null) {
             blocks.add("hazelcast");
         }
+        if (amps != null) {
+            blocks.add("amps");
+        }
         return blocks;
     }
 
@@ -87,7 +97,8 @@ public class SourceProperties {
      * calls the thing being read.
      *
      * @return e.g. {@code kafka:orders}, {@code tcp:0.0.0.0:5001}, {@code jdbc:snapshot},
-     *     {@code hazelcast:topic:events}, {@code hazelcast:map:positions}
+     *     {@code hazelcast:topic:events}, {@code hazelcast:map:positions},
+     *     {@code amps:sow/connectors/orders}
      */
     public String describe() {
         if (tcp != null) {
@@ -108,6 +119,11 @@ public class SourceProperties {
             return hazelcast.getMap() != null
                     ? "hazelcast:map:" + hazelcast.getMap()
                     : "hazelcast:topic:" + hazelcast.getTopic();
+        }
+        if (amps != null) {
+            // The topic, not the server: the server is usually the application's own, and
+            // the topic is what tells two AMPS connectors apart in a log line.
+            return "amps:" + amps.getTopic();
         }
         return "<no source>";
     }
@@ -158,5 +174,13 @@ public class SourceProperties {
 
     public void setHazelcast(HazelcastSourceProperties hazelcast) {
         this.hazelcast = hazelcast;
+    }
+
+    public AmpsSourceProperties getAmps() {
+        return amps;
+    }
+
+    public void setAmps(AmpsSourceProperties amps) {
+        this.amps = amps;
     }
 }

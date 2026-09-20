@@ -156,7 +156,7 @@ class ConfigTreeTest {
     void everyInstanceNamesOneTransportAndABoundDriver(Instance instance) throws IOException {
         for (ConnectorProperties connector : bind(instance).getConnectors()) {
             assertThat(connector.getSource().configuredBlocks())
-                    .as("%s/%s: exactly one of tcp/kafka/jdbc/hazelcast",
+                    .as("%s/%s: exactly one of tcp/kafka/jdbc/hazelcast/amps",
                             instance, connector.getName())
                     .hasSize(1);
             assertThat(connector.getSource().getDriver())
