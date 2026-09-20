@@ -1,6 +1,7 @@
 package com.demo.amps.connectors.hazelcast;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
@@ -17,6 +18,13 @@ import com.hazelcast.topic.ITopic;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -242,8 +250,72 @@ class HazelcastRecordSourceTest {
 
     // ---- lifecycle -------------------------------------------------------------------------
 
+    /**
+     * The case the gate exists for. A plain-topic message is delivered on one of the client's
+     * event threads, and {@code HazelcastInstance.shutdown()} ends those threads by
+     * interrupting them; a handler that is inside the aggregator's {@code lockInterruptibly()}
+     * at that moment loses its record. So the handler here blocks on an interruptible wait of
+     * the same shape, and {@code close()} has to wait for it rather than shut the client down
+     * under it.
+     */
     @Test
     @Order(5)
+    @DisplayName("close() waits for the message inside the handler instead of interrupting it")
+    void closeLetsTheDeliveryInFlightFinish() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch released = new CountDownLatch(1);
+        AtomicBoolean interrupted = new AtomicBoolean();
+        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        ITopic<String> topic = member.getTopic("draining");
+        HazelcastRecordSource source =
+                new HazelcastRecordSource(connector("draining-hazelcast", "draining"));
+        source.start(record -> {
+            entered.countDown();
+            try {
+                if (!released.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("the test never released the handler");
+                }
+            } catch (InterruptedException e) {
+                interrupted.set(true);
+                throw new IllegalStateException("interrupted inside the handler", e);
+            }
+            received.add(record);
+        });
+        awaitConnected(source, Duration.ofSeconds(10));
+
+        topic.publish("{\"id\":1}");
+        assertThat(entered.await(10, TimeUnit.SECONDS))
+                .as("the message reached the handler")
+                .isTrue();
+
+        ExecutorService closer = Executors.newSingleThreadExecutor();
+        try {
+            // Close while the handler is blocked, the way Connector.stop() does on shutdown.
+            Future<?> closing = closer.submit(source::close);
+
+            // It reports closed as soon as it starts, but it has not RETURNED -- and the
+            // client is still up, because the event thread inside the handler is its.
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !source.isConnected());
+            assertThatThrownBy(() -> closing.get(300, TimeUnit.MILLISECONDS))
+                    .as("close() is still waiting for the blocked delivery")
+                    .isInstanceOf(TimeoutException.class);
+            assertThat(HazelcastClient.getAllHazelcastClients()).isNotEmpty();
+            assertThat(interrupted).isFalse();
+            assertThat(received).isEmpty();
+
+            // Let the handler go: close() finishes, and the record it was carrying arrives.
+            released.countDown();
+            closing.get(10, TimeUnit.SECONDS);
+        } finally {
+            closer.shutdownNow();
+        }
+        assertThat(interrupted).as("the event thread was never interrupted").isFalse();
+        assertThat(received).extracting(SourceRecord::data).containsExactly("{\"id\":1}");
+        assertThat(HazelcastClient.getAllHazelcastClients()).isEmpty();
+    }
+
+    @Test
+    @Order(6)
     @DisplayName("close() removes the listener and shuts the client down")
     void closeShutsTheClientDown() {
         List<SourceRecord> received = new CopyOnWriteArrayList<>();
@@ -271,7 +343,7 @@ class HazelcastRecordSourceTest {
     }
 
     @Test
-    @Order(6)
+    @Order(7)
     @DisplayName("a cluster that is not up yet is waited for, not a failed start")
     void aMemberThatIsNotUpYetIsWaitedFor() {
         List<SourceRecord> received = new CopyOnWriteArrayList<>();

@@ -65,6 +65,15 @@ import org.slf4j.LoggerFactory;
  * {@link HazelcastSubscription#refresh} -- for a map, that is the snapshot again, which is the
  * whole reason a lost event costs accuracy only until the next connect. A topic has nothing to
  * re-read and does nothing.
+ *
+ * <h2>Closing waits for the handler</h2>
+ *
+ * <p>Events reach the handler on Hazelcast's event threads, and {@code shutdown()} ends those
+ * threads by interrupting them -- which, for a delivery that is inside the pipeline at that
+ * moment, means a record lost at the aggregator's lock. So every delivery is counted through a
+ * {@link DeliveryGate}, and {@link #close()} removes the listener, waits for the count to
+ * reach zero, and only then shuts the client down; the join that follows shares the same
+ * {@value #CLOSE_JOIN_MILLIS}ms budget.
  */
 public class HazelcastRecordSource implements RecordSource {
 
@@ -107,6 +116,9 @@ public class HazelcastRecordSource implements RecordSource {
     /** Monitor the reconnect backoff and the connected watch wait on, so {@code close()} cuts them short. */
     private final Object backoff = new Object();
 
+    /** Counts deliveries inside the handler, so the client is not shut down under one. */
+    private final DeliveryGate gate;
+
     private volatile HazelcastInstance client;
     private volatile Thread thread;
 
@@ -118,6 +130,7 @@ public class HazelcastRecordSource implements RecordSource {
         this.subscription = source.getMap() != null
                 ? new MapSubscription(connector)
                 : new TopicSubscription(connector);
+        this.gate = new DeliveryGate(connector.getName());
     }
 
     @Override
@@ -125,7 +138,10 @@ public class HazelcastRecordSource implements RecordSource {
         log.info("[{}] starting Hazelcast source: {} on cluster '{}' at {}",
                 connector.getName(), subscription.describe(), source.getClusterName(),
                 source.getMembers());
-        Thread runner = new Thread(() -> run(handler), connector.getName() + "-hazelcast");
+        // Every path to the handler -- entry events, topic messages, the snapshot -- goes
+        // through the gate, so close() can wait for the ones in flight before the client goes.
+        RecordHandler guarded = gate.guard(handler);
+        Thread runner = new Thread(() -> run(guarded), connector.getName() + "-hazelcast");
         runner.setDaemon(true);
         this.thread = runner;
         runner.start();
@@ -156,7 +172,7 @@ public class HazelcastRecordSource implements RecordSource {
                 }
             } finally {
                 connected.set(false);
-                disconnect();
+                disconnect(System.currentTimeMillis() + CLOSE_JOIN_MILLIS);
             }
             if (!closed.get()) {
                 log.info("[{}] reconnecting to Hazelcast in {}",
@@ -318,10 +334,16 @@ public class HazelcastRecordSource implements RecordSource {
     public void close() {
         closed.set(true);
         connected.set(false);
+        // Before anything else: a delivery that has not reached the handler yet is turned
+        // away, and the ones that have are what disconnect() waits for.
+        gate.close();
         synchronized (backoff) {
             backoff.notifyAll();
         }
-        disconnect();
+        // One budget for the whole close: the wait for in-flight deliveries and the join of
+        // the source thread share it, the way the TCP source shares its join across readers.
+        long deadline = System.currentTimeMillis() + CLOSE_JOIN_MILLIS;
+        disconnect(deadline);
 
         Thread runner = this.thread;
         this.thread = null;
@@ -329,7 +351,7 @@ public class HazelcastRecordSource implements RecordSource {
             return;
         }
         try {
-            runner.join(CLOSE_JOIN_MILLIS);
+            runner.join(Math.max(1L, deadline - System.currentTimeMillis()));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return;
@@ -341,15 +363,27 @@ public class HazelcastRecordSource implements RecordSource {
     }
 
     /**
-     * Remove the listener and shut the client down. Idempotent, and called from both
-     * {@link #close()} and the source thread's own {@code finally} -- whichever gets there
-     * first does the work.
+     * Remove the listener, wait for the deliveries already inside the handler, and shut the
+     * client down. Idempotent, and called from both {@link #close()} and the source thread's
+     * own {@code finally} -- whichever gets there first does the work.
+     *
+     * <p>The wait sits between the other two on purpose. With the listener gone nothing new is
+     * dispatched, so the count can only fall; and {@code shutdown()} interrupts the event
+     * threads, so it must not run while one of them is inside the pipeline. On the reconnect
+     * path the gate stays open -- the client being replaced is the only thing that stops.
+     *
+     * @param deadlineMillis how long, as an absolute time, to wait for the handler
      */
-    private void disconnect() {
+    private void disconnect(long deadlineMillis) {
         subscription.unsubscribe();
         HazelcastInstance running = this.client;
         this.client = null;
         if (running != null) {
+            if (!gate.awaitIdle(deadlineMillis)) {
+                log.warn("[{}] {} Hazelcast delivery(ies) still inside the handler after {}ms; "
+                                + "shutting the client down under them",
+                        connector.getName(), gate.inFlight(), CLOSE_JOIN_MILLIS);
+            }
             try {
                 running.shutdown();
             } catch (RuntimeException e) {
