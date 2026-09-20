@@ -21,7 +21,7 @@ amps-demo/
 ├── amps-test-harness/  starts a throwaway AMPS container for the integration suites
 ├── fix-pub-seqno/  FIX publisher sequence recovery: find the last tag 8888 AMPS holds, republish the gap
 ├── quickfixj-v2-demo/  QuickFIX/J 2.x drop-copy engine on Spring Boot + Spring Integration, sequence numbers replicated to AMPS for failover
-├── amps-connectors/  source -> AMPS connector framework (TCP, Kafka, JDBC, Hazelcast) + the generic Spring Boot runner its config tree deploys
+├── amps-connectors/  source -> AMPS connector framework (TCP, Kafka, JDBC, Hazelcast, AMPS) with resources, rules, alerts and a control channel + the generic Spring Boot runner its config tree deploys
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -170,7 +170,13 @@ what a delete is when the source has no such message. Batching is a Spring
 Integration aggregator, and its single flush per batch is what makes the
 acknowledgment back to Kafka or a JDBC watermark honest. One generic runner
 image deploys N times, each instance made a different application by the
-configuration directory it mounts.
+configuration directory it mounts. Around the pipeline sit shared
+**resources** (a reloadable JDBC lookup table a code transform enriches
+from), a **rules** step (SpEL conditions that set, alert or drop, with a hit
+counter per rule), JSON **alerts** onto an AMPS or Kafka topic, a **control
+channel** (`reload`, `status`) read from either, and AMPS itself as a source
+-- and `apps/instrument-enricher` is the worked example: FIX orders from
+Kafka enriched with SEDOL and currency by symbol on their way into the SOW.
 
 ```bash
 AMPS_FLOW=amps-connectors ./server/scripts/amps.sh start
@@ -179,7 +185,8 @@ AMPS_FLOW=amps-connectors ./server/scripts/amps.sh start
 
 -> [amps-connectors/README.md](amps-connectors/README.md)
 for the pipeline stages, the batch and acknowledgment contract, the two key
-modes and their traps, the configuration reference for every block, the
+modes and their traps, rules, resources, alerts and the control channel, the
+configuration reference for every block, how to write a code transform, the
 config tree and its compose generator, and why Spring Integration is used
 for the batch and nothing else.
 
