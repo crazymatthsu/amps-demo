@@ -17,18 +17,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
@@ -68,7 +64,8 @@ import org.slf4j.LoggerFactory;
  * (an {@code AS} alias included). Numbers stay numbers and booleans stay booleans, dates and
  * times become ISO-8601 text -- a timestamp in its {@code Instant} form -- and SQL
  * {@code NULL} becomes an explicit JSON {@code null}, which is a cleared field rather than an
- * absent one.
+ * absent one. The conversion itself is {@link JdbcValues}, shared with the JDBC resource so
+ * that a row published from a table and a row looked up in one carry the same values.
  *
  * <p>{@code key-columns} is a list, and the record's key is those columns' values joined by
  * {@code key-separator}: a position is an account and a symbol far more often than it is one
@@ -242,19 +239,11 @@ public class JdbcRecordSource implements RecordSource {
     /**
      * Open the configured connection.
      *
-     * <p>A blank username hands the URL the whole job, which is what an embedded or
-     * trust-authenticated database expects; passing {@code ("", "")} to those is not the same
-     * thing and is rejected by some drivers.
-     *
      * @return a new connection
      * @throws SQLException when the database cannot be reached or refuses the credentials
      */
     private Connection connect() throws SQLException {
-        String username = source.getUsername();
-        if (username == null || username.isBlank()) {
-            return DriverManager.getConnection(source.getUrl());
-        }
-        return DriverManager.getConnection(source.getUrl(), username, source.getPassword());
+        return JdbcValues.connect(source.getUrl(), source.getUsername(), source.getPassword());
     }
 
     /**
@@ -390,14 +379,18 @@ public class JdbcRecordSource implements RecordSource {
     /**
      * Serialise the current row as a flat JSON object keyed by column label.
      *
+     * <p>The row is read through {@link JdbcValues#row}, the same map a JDBC resource builds
+     * its lookup table from, so a value published by this source and the same value looked up
+     * by a transform are converted by one rule and cannot drift apart.
+     *
      * @param rows positioned on the row to serialise
      * @param meta that result set's metadata
      * @return the row's JSON text
      */
     private String json(ResultSet rows, ResultSetMetaData meta) throws SQLException {
         ObjectNode row = mapper.createObjectNode();
-        for (int column = 1; column <= meta.getColumnCount(); column++) {
-            put(row, meta.getColumnLabel(column), rows.getObject(column));
+        for (Map.Entry<String, Object> column : JdbcValues.row(rows, meta).entrySet()) {
+            put(row, column.getKey(), column.getValue());
         }
         return row.toString();
     }
@@ -405,36 +398,23 @@ public class JdbcRecordSource implements RecordSource {
     /**
      * One column's value, in the JSON type that keeps its meaning.
      *
-     * <p>Numbers and booleans stay themselves, so a filter or a transform has a number to
-     * compare. Dates and times become ISO-8601 text, because JSON has no date type and AMPS
-     * reads instants from text; a timestamp without a zone is read in the JVM's zone, which is
-     * what {@link Timestamp#toInstant()} does and what the database round-tripped it through.
-     * A SQL {@code NULL} becomes an explicit JSON null -- an explicit clear, not an absent
-     * field. Everything else (a BLOB, a driver's own vendor type) gets its string form, which
-     * is as much as this source can honestly claim to know about it.
+     * <p>The meaning is {@link JdbcValues#convert}'s decision; this only writes what it
+     * decided with the JSON type that matches, so a {@code BigDecimal} is written exact, a
+     * boolean as a boolean and a SQL {@code NULL} as an explicit JSON null -- a cleared field,
+     * not an absent one.
      */
     private static void put(ObjectNode row, String label, Object value) {
-        switch (value) {
+        switch (JdbcValues.convert(value)) {
             case null -> row.putNull(label);
             case Boolean v -> row.put(label, v);
             case BigDecimal v -> row.put(label, v);
             case BigInteger v -> row.put(label, v);
-            case Byte v -> row.put(label, v.intValue());
-            case Short v -> row.put(label, v.intValue());
             case Integer v -> row.put(label, v);
             case Long v -> row.put(label, v);
             case Float v -> row.put(label, v);
             case Double v -> row.put(label, v);
-            case Number v -> row.put(label, v.doubleValue());
-            case Timestamp v -> row.put(label, v.toInstant().toString());
-            case java.sql.Date v -> row.put(label, v.toLocalDate().toString());
-            case Time v -> row.put(label, v.toLocalTime().toString());
-            case Instant v -> row.put(label, v.toString());
-            case OffsetDateTime v -> row.put(label, v.toInstant().toString());
-            case LocalDateTime v -> row.put(label, v.atZone(ZoneId.systemDefault())
-                    .toInstant().toString());
-            case LocalDate v -> row.put(label, v.toString());
-            case LocalTime v -> row.put(label, v.toString());
+            case String v -> row.put(label, v);
+            // Unreachable: convert() returns one of the types above. Kept for exhaustiveness.
             default -> row.put(label, String.valueOf(value));
         }
     }

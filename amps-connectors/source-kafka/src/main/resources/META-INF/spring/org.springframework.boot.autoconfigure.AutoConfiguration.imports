@@ -1,1 +1,2 @@
 com.demo.amps.connectors.kafka.KafkaSourceAutoConfiguration
+com.demo.amps.connectors.kafka.alert.KafkaAlertAutoConfiguration
