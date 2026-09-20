@@ -30,6 +30,22 @@
     connectors/audit           fix, journal only. Every FIX message a
                                connector let through, as published.
 
+    connectors/control         json, journal only. The control channel: an
+                               application subscribes here (control.source.
+                               amps) and acts on the commands addressed to
+                               it, e.g. {"command":"reload","target":
+                               "instruments","to":"instrument-enricher"}.
+                               Journalled so a bookmark subscription can
+                               replay what was sent while it was away.
+
+    connectors/alerts          json, journal only. Where every application
+                               publishes its alerts (alerts.amps.topic): one
+                               JSON object per alert with a stable code
+                               (UNKNOWN_SYMBOL, PUBLISH_FLUSH_TIMEOUT...),
+                               and the INFO reply to a status command.
+                               Journalled, so a reader that was not
+                               subscribed at the time still sees them.
+
   The transport is shared: clients pick the message type in the URI
   (/amps/json or /amps/fix), which is why a connector holds one client per
   target topic type.
@@ -128,6 +144,14 @@
         <Topic>
             <Name>connectors/audit</Name>
             <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>connectors/control</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>connectors/alerts</Name>
+            <MessageType>json</MessageType>
         </Topic>
     </TransactionLog>
 

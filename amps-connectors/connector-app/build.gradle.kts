@@ -24,6 +24,12 @@ dependencies {
     // one), and the transport the control channel listens on. Same rule as the others -- an
     // instance selects it with source.amps, and the image has to carry it.
     implementation(project(":amps-connectors:source-amps"))
+    // The one resource kind, for the same reason: an instance that declares a
+    // resources[].jdbc entry (a lookup table for its rules to read, or for a `reload`
+    // command to refresh) has to find a factory for it in the image, and a missing one is
+    // a startup failure naming this module. ConfigTreeTest checks every instance's entries
+    // against the factories declared here.
+    implementation(project(":amps-connectors:resource-jdbc"))
 
     // The JDBC integration test polls a real in-process database rather than the
     // PostgreSQL the image ships: the source speaks java.sql and DriverManager, so H2
