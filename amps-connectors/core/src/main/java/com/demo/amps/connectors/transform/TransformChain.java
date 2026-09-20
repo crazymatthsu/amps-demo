@@ -4,6 +4,8 @@ import com.demo.amps.connectors.config.TransformStep;
 import com.demo.amps.connectors.decode.Fields;
 import com.demo.amps.connectors.filter.FieldExpressions;
 import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.transform.rules.RuleSet;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,8 +36,14 @@ import org.springframework.expression.Expression;
  *       through unchanged, because an unknown enum value is a reason to look at the feed, not
  *       a reason to lose the record</li>
  *   <li>{@code derive} -- a SpEL expression per new field, evaluated over the record as the
- *       earlier steps left it, and stored with whatever type it produced</li>
+ *       earlier steps left it ({@code #f}) and the record itself ({@code #r}), and stored
+ *       with whatever type it produced</li>
  * </ul>
+ *
+ * <p>Two kinds are not compiled here, because they need more than the step: a {@code bean}
+ * is looked up in the {@link TransformRegistry}, and a {@code rules} step becomes a
+ * {@link RuleSet} that needs the connector's name for its alerts. Both go through
+ * {@link TransformRegistry#resolve(List, TransformContext)}, which is what {@link #of} calls.
  */
 public final class TransformChain {
 
@@ -49,7 +57,8 @@ public final class TransformChain {
     }
 
     /**
-     * Compile a connector's steps, resolving any {@code bean:} step against the registry.
+     * Compile a connector's steps with no connector behind them, resolving any {@code bean:}
+     * step against the registry.
      *
      * @param steps the connector's {@code transforms:} list
      * @param registry the application's transform beans
@@ -57,7 +66,22 @@ public final class TransformChain {
      * @throws IllegalStateException naming the first unknown bean and what is registered
      */
     public static TransformChain of(List<TransformStep> steps, TransformRegistry registry) {
-        return new TransformChain(registry.resolve(steps));
+        return of(steps, TransformContext.of(registry));
+    }
+
+    /**
+     * Compile a connector's steps for that connector: {@code bean:} steps resolved against
+     * the context's registry, {@code rules:} steps raising with the connector's name.
+     *
+     * @param steps the connector's {@code transforms:} list
+     * @param context the connector, its beans and its alerts
+     * @return the chain to fold over each record
+     * @throws IllegalStateException naming the first unknown bean and what is registered
+     * @throws IllegalArgumentException if a step does not name exactly one kind, or a rule is
+     *     malformed
+     */
+    public static TransformChain of(List<TransformStep> steps, TransformContext context) {
+        return new TransformChain(context.registry().resolve(steps, context));
     }
 
     /** Whether there is anything to do -- which is also what decides {@code passthrough: AUTO}. */
@@ -68,6 +92,17 @@ public final class TransformChain {
     /** How many steps run per record. */
     public int size() {
         return transforms.size();
+    }
+
+    /** The {@code rules} steps, in order, for their counters on the status line. */
+    public List<RuleSet> ruleSets() {
+        List<RuleSet> sets = new ArrayList<>(1);
+        for (RecordTransform transform : transforms) {
+            if (transform instanceof RuleSet rules) {
+                sets.add(rules);
+            }
+        }
+        return List.copyOf(sets);
     }
 
     /**
@@ -89,18 +124,38 @@ public final class TransformChain {
     }
 
     /**
-     * Compile one built-in step.
+     * The one kind a step names.
      *
-     * @param step a step that does not name a {@code bean}
-     * @return the transform that performs it
-     * @throws IllegalArgumentException if the step does not name exactly one kind
+     * @param step a transform step
+     * @return its kind: {@code keep}, {@code drop}, {@code rename}, {@code set},
+     *     {@code values}, {@code derive}, {@code bean} or {@code rules}
+     * @throws IllegalArgumentException if the step names none or several
      */
-    public static RecordTransform compile(TransformStep step) {
+    static String kindOf(TransformStep step) {
         Set<String> kinds = step.configuredKinds();
         if (kinds.size() != 1) {
             throw new IllegalArgumentException("transform step names "
                     + (kinds.isEmpty() ? "no kind" : "kinds " + kinds)
                     + ", but a step names exactly one kind");
+        }
+        return kinds.iterator().next();
+    }
+
+    /**
+     * Compile one built-in step.
+     *
+     * @param step a step that names neither a {@code bean} nor {@code rules}
+     * @return the transform that performs it
+     * @throws IllegalArgumentException if the step does not name exactly one kind, or names
+     *     a kind that needs more than the step to compile
+     */
+    public static RecordTransform compile(TransformStep step) {
+        String kind = kindOf(step);
+        if ("rules".equals(kind) || "bean".equals(kind)) {
+            throw new IllegalArgumentException("a " + kind + " step is not a built-in: "
+                    + "it needs the application's beans" + ("rules".equals(kind)
+                            ? " and the connector's name for its alerts" : "")
+                    + ", so resolve it through TransformRegistry.resolve(steps, context)");
         }
         if (step.getKeep() != null) {
             List<String> keep = List.copyOf(step.getKeep());
@@ -126,7 +181,7 @@ public final class TransformChain {
             Map<String, Map<String, String>> tables = new LinkedHashMap<>(step.getValues());
             return (record, fields) -> values(fields, tables);
         }
-        // `derive` is the only kind left: configuredKinds() already refused a step with none.
+        // `derive` is the only kind left: kindOf() already refused a step with none.
         Map<String, Expression> derive = new LinkedHashMap<>();
         Map<String, String> text = new LinkedHashMap<>(step.getDerive());
         text.forEach((field, expression) -> derive.put(field, FieldExpressions.parse(expression)));
@@ -134,7 +189,7 @@ public final class TransformChain {
             Map<String, Object> result = new LinkedHashMap<>(fields);
             derive.forEach((field, expression) ->
                     Fields.put(result, field, FieldExpressions.evaluate(
-                            expression, text.get(field), result)));
+                            expression, text.get(field), record, result)));
             return result;
         };
     }

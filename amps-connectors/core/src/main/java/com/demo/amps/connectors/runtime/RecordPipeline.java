@@ -11,8 +11,11 @@ import com.demo.amps.connectors.encode.PayloadEncoderFactory;
 import com.demo.amps.connectors.filter.RecordFilter;
 import com.demo.amps.connectors.source.SourceRecord;
 import com.demo.amps.connectors.transform.TransformChain;
+import com.demo.amps.connectors.transform.TransformContext;
 import com.demo.amps.connectors.transform.TransformRegistry;
+import com.demo.amps.connectors.transform.rules.RuleSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -67,16 +70,29 @@ public final class RecordPipeline {
     private final AtomicLong ignoredDeletes = new AtomicLong();
 
     /**
-     * Compile the connector's configuration into a pipeline.
-     *
-     * <p>Everything that can fail on a bad configuration -- a regular expression, a SpEL
-     * expression, an unknown transform bean, an unusable message type -- fails here, at
-     * connector start, rather than on the first record.
+     * Compile the connector's configuration into a pipeline with no connector behind its
+     * transforms: {@code bean:} steps resolve, {@code rules:} steps raise nowhere. What a
+     * test of the pipeline itself wants.
      *
      * @param connector the connector configuration
      * @param registry the application's transform beans, for {@code bean:} steps
      */
     public RecordPipeline(ConnectorProperties connector, TransformRegistry registry) {
+        this(connector, TransformContext.of(registry));
+    }
+
+    /**
+     * Compile the connector's configuration into a pipeline.
+     *
+     * <p>Everything that can fail on a bad configuration -- a regular expression, a SpEL
+     * expression, an unknown transform bean, a malformed rule, an unusable message type --
+     * fails here, at connector start, rather than on the first record.
+     *
+     * @param connector the connector configuration
+     * @param context the connector's name, the application's transform beans, and where the
+     *     {@code rules:} steps raise their alerts
+     */
+    public RecordPipeline(ConnectorProperties connector, TransformContext context) {
         this.name = connector.getName();
         this.target = connector.getAmps();
         this.topic = target.getTopic();
@@ -84,7 +100,7 @@ public final class RecordPipeline {
         this.filter = connector.getFilter() == null
                 ? null
                 : new RecordFilter(connector.getFilter());
-        this.transforms = TransformChain.of(connector.getTransforms(), registry);
+        this.transforms = TransformChain.of(connector.getTransforms(), context);
         this.keys = target.getKey() == null ? null : new KeyExtractor(target.getKey());
         // The connector's one field separator serves both ends: a feed read as `|`-delimited
         // FIX is published as `|`-delimited FIX, which is what keeps passthrough honest --
@@ -236,6 +252,11 @@ public final class RecordPipeline {
     /** The connector's name, for log lines. */
     public String name() {
         return name;
+    }
+
+    /** The {@code rules:} steps, in order, for their per-rule counters. */
+    public List<RuleSet> ruleSets() {
+        return transforms.ruleSets();
     }
 
     /** Records handed over by the source. */

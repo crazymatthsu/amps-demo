@@ -33,10 +33,11 @@ import org.springframework.validation.annotation.Validated;
  * asymmetry is the deployment model: one image, N instances, each made a different application
  * by the files it mounts.
  *
- * <p>Beside the connectors, two application-level blocks: {@link #getResources() resources},
+ * <p>Beside the connectors, three application-level blocks: {@link #getResources() resources},
  * the shared lookup tables and clients that code transforms enrich from, started before the
- * connectors and stopped after them; and {@link #getAlerts() alerts}, where everything that
- * goes wrong is reported beyond the log.
+ * connectors and stopped after them; {@link #getAlerts() alerts}, where everything that goes
+ * wrong is reported beyond the log; and {@link #getControl() control}, the topic the
+ * application takes commands from -- off unless asked for.
  */
 @ConfigurationProperties(prefix = "amps-connectors")
 @Validated
@@ -67,6 +68,11 @@ public class ConnectorsProperties {
     @Valid
     @NotNull
     private AlertProperties alerts = new AlertProperties();
+
+    /** The control channel: where commands come from. Disabled by default. */
+    @Valid
+    @NotNull
+    private ControlProperties control = new ControlProperties();
 
     /**
      * How often each connector logs its counters (received, published, rejected, filtered,
@@ -124,6 +130,14 @@ public class ConnectorsProperties {
 
     public void setAlerts(AlertProperties alerts) {
         this.alerts = alerts == null ? new AlertProperties() : alerts;
+    }
+
+    public ControlProperties getControl() {
+        return control;
+    }
+
+    public void setControl(ControlProperties control) {
+        this.control = control == null ? new ControlProperties() : control;
     }
 
     public Duration getStatusInterval() {

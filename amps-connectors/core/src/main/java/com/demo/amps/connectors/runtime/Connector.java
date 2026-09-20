@@ -10,7 +10,9 @@ import com.demo.amps.connectors.config.AmpsServerProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.source.RecordSource;
 import com.demo.amps.connectors.source.SourceResolver;
+import com.demo.amps.connectors.transform.TransformContext;
 import com.demo.amps.connectors.transform.TransformRegistry;
+import com.demo.amps.connectors.transform.rules.RuleSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -81,7 +83,11 @@ public final class Connector implements AutoCloseable {
             Alerts alerts) {
         this.properties = properties;
         this.alerts = alerts;
-        this.pipeline = new RecordPipeline(properties, transforms);
+        // The rules in the pipeline raise under this connector's name, which is why the
+        // context is built here and not by the pipeline: the pipeline is a function and does
+        // not know whose it is.
+        this.pipeline = new RecordPipeline(
+                properties, new TransformContext(properties.getName(), transforms, alerts));
         // Wrapped here, not in BatchPublisher: that class is about the acknowledgment
         // contract and stays ignorant of who is listening.
         this.publisher = new AlertingAmpsPublisher(
@@ -207,13 +213,21 @@ public final class Connector implements AutoCloseable {
     }
 
     private String counters() {
-        return String.format(
+        StringBuilder text = new StringBuilder(String.format(
                 "received=%d published=%d batches=%d failed=%d rejected=%d filtered=%d "
                         + "dropped=%d ignored-deletes=%d",
                 pipeline.received(), batchPublisher.publishedMessages(),
                 batchPublisher.publishedBatches(), batchPublisher.failedBatches(),
                 pipeline.rejected(), pipeline.filtered(), pipeline.dropped(),
-                pipeline.ignoredDeletes());
+                pipeline.ignoredDeletes()));
+        // One rules[...] per rules step: the per-rule hits are the only evidence that a
+        // rule which never fires is a rule about something that never happens.
+        for (RuleSet rules : pipeline.ruleSets()) {
+            if (rules.size() > 0) {
+                text.append(' ').append(rules.summary());
+            }
+        }
+        return text.toString();
     }
 
     /** The compiled pipeline, for its counters. */

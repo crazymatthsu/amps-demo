@@ -1,5 +1,6 @@
 package com.demo.amps.connectors;
 
+import com.demo.amps.connectors.config.AmpsSourceProperties;
 import com.demo.amps.connectors.config.AmpsTargetProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.HazelcastSourceProperties;
@@ -83,6 +84,15 @@ public final class TestConnectors {
         HazelcastSourceProperties hazelcast = new HazelcastSourceProperties();
         hazelcast.setMap(map);
         connector.getSource().setHazelcast(hazelcast);
+        return connector;
+    }
+
+    /** An AMPS connector subscribing live to {@code topic} on the application's own server. */
+    public static ConnectorProperties amps(String name, String topic) {
+        ConnectorProperties connector = base(name);
+        AmpsSourceProperties amps = new AmpsSourceProperties();
+        amps.setTopic(topic);
+        connector.getSource().setAmps(amps);
         return connector;
     }
 

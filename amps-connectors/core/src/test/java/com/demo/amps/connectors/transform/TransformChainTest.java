@@ -3,8 +3,13 @@ package com.demo.amps.connectors.transform;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.demo.amps.connectors.alert.Alert;
+import com.demo.amps.connectors.config.RuleAlert;
+import com.demo.amps.connectors.config.RuleProperties;
 import com.demo.amps.connectors.config.TransformStep;
 import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.transform.rules.RuleSet;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -116,6 +121,16 @@ class TransformChainTest {
     }
 
     @Test
+    @DisplayName("derive sees the record as #r, so a source key or a topic can become a field")
+    void deriveSeesTheRecord() {
+        TransformStep step = new TransformStep();
+        step.setDerive(Map.of("sourceKey", "#r.key", "origin", "#r.attributes['topic']"));
+        Map<String, Object> result = TransformChain.compile(step).apply(
+                RECORD.withAttributes(Map.of("topic", "orders")), order());
+        assertThat(result).containsEntry("sourceKey", "C-1").containsEntry("origin", "orders");
+    }
+
+    @Test
     void theInputMapIsNeverMutated() {
         Map<String, Object> fields = order();
         TransformStep step = new TransformStep();
@@ -151,6 +166,59 @@ class TransformChainTest {
         assertThat(chain.isEmpty()).isTrue();
         assertThat(chain.size()).isZero();
         assertThat(chain.apply(RECORD, order())).isEqualTo(order());
+    }
+
+    @Test
+    @DisplayName("a rules step compiles through the registry with a context, never as a built-in")
+    void rulesStepsNeedAContext() {
+        RuleProperties rule = new RuleProperties();
+        rule.setName("flag-buys");
+        rule.setWhen("#f['54'] == '1'");
+        rule.getThen().setSet(Map.of("side", "BUY"));
+        RuleAlert alert = new RuleAlert();
+        alert.setCode("BUY_SEEN");
+        alert.setMessage("buy #{#f['11']}");
+        rule.getThen().setAlert(alert);
+        TransformStep rules = new TransformStep();
+        rules.setRules(List.of(rule));
+        TransformStep keep = new TransformStep();
+        keep.setKeep(List.of("11", "side"));
+
+        assertThatThrownBy(() -> TransformChain.compile(rules))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("rules step")
+                .hasMessageContaining("TransformRegistry.resolve");
+
+        List<Alert> raised = new ArrayList<>();
+        TransformContext context = new TransformContext(
+                "orders", new TransformRegistry(Map.of()), raised::add);
+        TransformChain chain = TransformChain.of(List.of(rules, keep), context);
+        assertThat(chain.size()).isEqualTo(2);
+        assertThat(chain.ruleSets()).hasSize(1);
+        assertThat(chain.apply(RECORD, order()))
+                .containsExactly(Map.entry("11", "ORD-1"), Map.entry("side", "BUY"));
+        assertThat(chain.ruleSets().get(0).summary()).isEqualTo("rules[flag-buys=1]");
+        assertThat(raised).singleElement().satisfies(fired -> {
+            assertThat(fired.code()).isEqualTo("BUY_SEEN");
+            assertThat(fired.message()).isEqualTo("buy ORD-1");
+            assertThat(fired.connector()).isEqualTo("orders");
+        });
+
+        // The registry-only overload still compiles rules; they just raise nowhere.
+        TransformChain bare = TransformChain.of(List.of(rules), new TransformRegistry(Map.of()));
+        assertThat(bare.ruleSets()).singleElement().isInstanceOf(RuleSet.class);
+        assertThat(bare.apply(RECORD, order())).containsEntry("side", "BUY");
+        assertThat(new TransformChain(List.of()).ruleSets()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a bean step is the registry's to resolve, not compile's")
+    void beanStepsAreNotBuiltIns() {
+        TransformStep bean = new TransformStep();
+        bean.setBean("myEnricher");
+        assertThatThrownBy(() -> TransformChain.compile(bean))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("bean step");
     }
 
     @Test

@@ -10,6 +10,9 @@ import com.demo.amps.connectors.config.AlertProperties;
 import com.demo.amps.connectors.config.ConnectorValidator;
 import com.demo.amps.connectors.config.ConnectorsProperties;
 import com.demo.amps.connectors.config.ResourceProperties;
+import com.demo.amps.connectors.control.CommandContext;
+import com.demo.amps.connectors.control.CommandDispatcher;
+import com.demo.amps.connectors.control.CommandHandler;
 import com.demo.amps.connectors.resource.AppResource;
 import com.demo.amps.connectors.resource.ResourceFactory;
 import com.demo.amps.connectors.resource.ResourceRegistry;
@@ -46,10 +49,11 @@ import org.springframework.integration.dsl.context.IntegrationFlowContext;
  *
  * <p>The extension points are collected rather than enumerated -- every
  * {@link SourceFactory} and {@link ResourceFactory} on the classpath (each module
- * auto-configures its own), every {@link RecordTransform}, {@link AppResource} and
- * {@link AlertSink} bean the application declares. All of them are legitimately empty: an
- * application with no source module can still run simulated connectors, transforms are the
- * exception rather than the rule, and alerts with no sink are alerts in the log.
+ * auto-configures its own), every {@link RecordTransform}, {@link AppResource},
+ * {@link AlertSink} and {@link CommandHandler} bean the application declares. All of them
+ * are legitimately empty: an application with no source module can still run simulated
+ * connectors, transforms are the exception rather than the rule, alerts with no sink are
+ * alerts in the log, and the built-in commands need no handler bean at all.
  *
  * <p>Every bean is {@code @ConditionalOnMissingBean}, which is how a test replaces the AMPS
  * client with a recording one and drives the whole flow -- channels, aggregator, timers,
@@ -61,7 +65,10 @@ import org.springframework.integration.dsl.context.IntegrationFlowContext;
  * registry is built from the resources, the factories and the {@link AlertManager} -- which
  * is built from the sinks. That is a chain, not a cycle, as long as no resource and no sink
  * depends on the transform registry or the connector manager. A resource that wants to raise
- * alerts takes {@link Alerts}, which is earlier in the chain.
+ * alerts takes {@link Alerts}, which is earlier in the chain. The {@link CommandDispatcher}
+ * is the end of it: it holds the manager and the registry, and nothing holds it -- a
+ * {@link CommandHandler} bean that needs the connectors is given them in its
+ * {@link CommandContext} at dispatch time, never injected with the dispatcher.
  */
 @AutoConfiguration
 @EnableConfigurationProperties(ConnectorsProperties.class)
@@ -230,6 +237,43 @@ public class ConnectorsAutoConfiguration {
             AlertManager alerts) {
         return new ConnectorManager(
                 properties, transforms, publishers, sources, flows, resources, alerts);
+    }
+
+    /**
+     * The control channel, listening when {@code control.enabled} says so and idle
+     * otherwise -- always a bean, so an application can ask it for its status either way.
+     *
+     * <p>The application name is the alerts' ({@code alerts.application}, else
+     * {@code spring.application.name}), because it is the same identity: the name the
+     * instance answers to in a command's {@code to} is the name its alerts carry, and the
+     * synthetic connector the control source is resolved for is {@code <name>-control}.
+     *
+     * @param properties the bound configuration, for the {@code control:} block
+     * @param environment for {@code spring.application.name}
+     * @param sources resolves the control source from the modules on the classpath
+     * @param resources what {@code reload} reloads
+     * @param connectors what {@code status} reports on
+     * @param alerts where the commands report
+     * @param handlers the application's own command handlers; empty is the usual case
+     * @return the dispatcher
+     * @throws IllegalStateException if the control block is enabled and invalid
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public CommandDispatcher commandDispatcher(
+            ConnectorsProperties properties,
+            Environment environment,
+            SourceResolver sources,
+            ResourceRegistry resources,
+            ConnectorManager connectors,
+            AlertManager alerts,
+            ObjectProvider<CommandHandler> handlers) {
+        requireValid(ConnectorValidator.validateControl(properties));
+        String application = properties.getAlerts().applicationName(environment);
+        return new CommandDispatcher(
+                properties.getControl(), application, sources,
+                new CommandContext(application, resources, connectors, alerts),
+                handlers.orderedStream().toList());
     }
 
     private static AppResource build(
