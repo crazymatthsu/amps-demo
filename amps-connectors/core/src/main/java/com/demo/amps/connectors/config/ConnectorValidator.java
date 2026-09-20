@@ -24,7 +24,8 @@ import org.springframework.expression.spel.standard.SpelExpressionParser;
  *
  * <p>Checked once at startup by {@code ConnectorManager.validate()}, so a bad
  * {@code application.yml} stops the application with a readable list instead of a stack trace
- * half an hour later.
+ * half an hour later. The {@code resources:} and {@code alerts:} slices are also checked by
+ * the auto-configuration as it builds their beans, which happens earlier than that.
  */
 public final class ConnectorValidator {
 
@@ -50,6 +51,124 @@ public final class ConnectorValidator {
                 errors.add("duplicate connector name: " + connector.getName());
             }
             errors.addAll(validate(connector));
+        }
+        errors.addAll(validateResources(properties));
+        errors.addAll(validateAlerts(properties));
+        return errors;
+    }
+
+    /**
+     * The {@code resources:} list: unique names, exactly one kind per entry, and what each
+     * kind cannot do without.
+     *
+     * <p>Public on its own, and not only through {@link #validate(ConnectorsProperties)},
+     * because the resources are built and started <em>before</em> the connector manager runs
+     * the full validation: the auto-configuration checks this slice where it consumes it, so
+     * a mistake stops the application with the same readable list rather than with a
+     * database error from a table that should never have been built.
+     *
+     * @param properties the bound configuration
+     * @return human-readable problems, each prefixed with the resource name
+     */
+    public static List<String> validateResources(ConnectorsProperties properties) {
+        List<String> errors = new ArrayList<>();
+        Set<String> names = new HashSet<>();
+        for (ResourceProperties resource : properties.getResources()) {
+            String id = "resource '" + resource.getName() + "': ";
+            if (isBlank(resource.getName())) {
+                errors.add(id + "name is required: it is what transforms and reload commands "
+                        + "address the resource by");
+            } else if (!names.add(resource.getName())) {
+                errors.add("duplicate resource name: " + resource.getName()
+                        + " -- a transform asking for it could not know which one it got");
+            }
+            Set<String> kinds = resource.configuredKinds();
+            if (kinds.isEmpty()) {
+                errors.add(id + "names no kind (jdbc), so nothing can build it -- a resource "
+                        + "that needs no configuration is an AppResource bean, not an entry");
+                continue;
+            }
+            if (kinds.size() > 1) {
+                errors.add(id + "names " + kinds + ", but an entry is one resource of one kind");
+                continue;
+            }
+            errors.addAll(validateJdbcResource(id, resource.getJdbc()));
+        }
+        return errors;
+    }
+
+    /** The {@code jdbc} resource: a query, a way to key its rows, and sane timings. */
+    private static List<String> validateJdbcResource(String id, JdbcResourceProperties jdbc) {
+        List<String> errors = new ArrayList<>();
+        if (isBlank(jdbc.getUrl())) {
+            errors.add(id + "jdbc.url is required");
+        }
+        if (isBlank(jdbc.getQuery())) {
+            errors.add(id + "jdbc.query is required: its result set is the whole table");
+        }
+        if (jdbc.getKeyColumns().isEmpty()) {
+            errors.add(id + "jdbc.key-columns is required: the key is what a transform looks "
+                    + "a row up by, and a table nobody can address is a table nobody can use");
+        } else if (jdbc.getKeyColumns().stream().anyMatch(ConnectorValidator::isBlank)) {
+            errors.add(id + "jdbc.key-columns contains a blank column name");
+        }
+        if (isBlank(jdbc.getKeySeparator())) {
+            errors.add(id + "jdbc.key-separator must not be blank");
+        }
+        if (jdbc.getReloadInterval() == null || jdbc.getReloadInterval().isNegative()) {
+            errors.add(id + "jdbc.reload-interval must be zero (reload on demand only) or "
+                    + "positive");
+        }
+        if (jdbc.getReconnectDelay() == null || jdbc.getReconnectDelay().isNegative()
+                || jdbc.getReconnectDelay().isZero()) {
+            errors.add(id + "jdbc.reconnect-delay must be positive: it is how long a failed "
+                    + "load waits before dialling again");
+        }
+        if (jdbc.getFetchSize() < 1) {
+            errors.add(id + "jdbc.fetch-size must be at least 1");
+        }
+        return errors;
+    }
+
+    /**
+     * The {@code alerts:} block: a queue that can hold something, and a sink that names
+     * everything it needs to reach.
+     *
+     * <p>Public for the same reason as {@link #validateResources}: the alert manager and its
+     * sinks are built when the context is, before the manager's validation runs.
+     *
+     * @param properties the bound configuration
+     * @return human-readable problems, each prefixed with {@code alerts.}
+     */
+    public static List<String> validateAlerts(ConnectorsProperties properties) {
+        AlertProperties alerts = properties.getAlerts();
+        if (alerts == null) {
+            return List.of();
+        }
+        List<String> errors = new ArrayList<>();
+        if (alerts.getQueueSize() < 1) {
+            errors.add("alerts.queue-size must be at least 1: it bounds what a slow sink can "
+                    + "hold, and a queue of nothing would drop every alert");
+        }
+        if (alerts.getMinSeverity() == null) {
+            errors.add("alerts.min-severity must be one of INFO/WARN/ERROR");
+        }
+        if (alerts.getSuppressRepeats() == null || alerts.getSuppressRepeats().isNegative()) {
+            errors.add("alerts.suppress-repeats must be zero (send every alert) or positive");
+        }
+        if (alerts.getAmps() != null && isBlank(alerts.getAmps().getTopic())) {
+            errors.add("alerts.amps.topic is required when alerts.amps is configured: the "
+                    + "topic is what enables the sink");
+        }
+        AlertProperties.Kafka kafka = alerts.getKafka();
+        if (kafka != null) {
+            if (isBlank(kafka.getTopic())) {
+                errors.add("alerts.kafka.topic is required when alerts.kafka is configured: "
+                        + "the topic is what enables the sink");
+            } else if (isBlank(kafka.getBootstrapServers())) {
+                errors.add("alerts.kafka.topic needs alerts.kafka.bootstrap-servers: a topic "
+                        + "with no cluster to find it on is a sink that will never send");
+            }
         }
         return errors;
     }

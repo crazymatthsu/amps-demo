@@ -293,4 +293,141 @@ class ConnectorValidatorTest {
                 .isNotEmpty()
                 .allSatisfy(error -> assertThat(error).startsWith("connector 'named': "));
     }
+
+    // ---- resources --------------------------------------------------------------
+
+    private static ResourceProperties jdbcResource(String name) {
+        ResourceProperties resource = new ResourceProperties();
+        resource.setName(name);
+        JdbcResourceProperties jdbc = new JdbcResourceProperties();
+        jdbc.setUrl("jdbc:h2:mem:refdata");
+        jdbc.setQuery("SELECT symbol, sedol FROM instruments");
+        jdbc.setKeyColumns(List.of("symbol"));
+        resource.setJdbc(jdbc);
+        return resource;
+    }
+
+    private static ConnectorsProperties withResources(ResourceProperties... resources) {
+        ConnectorsProperties properties = new ConnectorsProperties();
+        properties.setResources(List.of(resources));
+        return properties;
+    }
+
+    @Test
+    @DisplayName("a well-formed jdbc resource is accepted, through the full validation too")
+    void acceptsAWellFormedResource() {
+        ConnectorsProperties properties = withResources(jdbcResource("instruments"));
+        assertThat(ConnectorValidator.validateResources(properties)).isEmpty();
+        assertThat(ConnectorValidator.validate(properties)).isEmpty();
+        assertThat(jdbcResource("instruments").configuredKinds()).containsExactly("jdbc");
+    }
+
+    @Test
+    @DisplayName("a resource needs a unique name: transforms and reload commands address it by it")
+    void refusesBlankAndDuplicateResourceNames() {
+        ResourceProperties blank = jdbcResource("  ");
+        assertThat(ConnectorValidator.validateResources(withResources(blank)))
+                .anySatisfy(error -> assertThat(error).contains("name is required"));
+
+        assertThat(ConnectorValidator.validate(withResources(
+                jdbcResource("instruments"), jdbcResource("instruments"))))
+                .anySatisfy(error -> assertThat(error).contains(
+                        "duplicate resource name: instruments"));
+    }
+
+    @Test
+    @DisplayName("an entry names exactly one kind, or nothing can build it")
+    void refusesAResourceWithNoKind() {
+        ResourceProperties none = new ResourceProperties();
+        none.setName("instruments");
+        assertThat(ConnectorValidator.validateResources(withResources(none)))
+                .anySatisfy(error -> assertThat(error)
+                        .startsWith("resource 'instruments': ")
+                        .contains("names no kind"));
+        assertThat(none.configuredKinds()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a jdbc resource is a query, a way to key its rows, and timings that make sense")
+    void refusesAJdbcResourceMissingItsEssentials() {
+        ResourceProperties resource = jdbcResource("instruments");
+        resource.getJdbc().setUrl(" ");
+        resource.getJdbc().setQuery(null);
+        resource.getJdbc().setKeyColumns(List.of());
+        resource.getJdbc().setReloadInterval(Duration.ofSeconds(-1));
+        resource.getJdbc().setReconnectDelay(Duration.ZERO);
+        resource.getJdbc().setFetchSize(0);
+        resource.getJdbc().setKeySeparator("");
+
+        assertThat(ConnectorValidator.validateResources(withResources(resource)))
+                .allSatisfy(error -> assertThat(error).startsWith("resource 'instruments': "))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.url is required"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.query is required"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.key-columns is required"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.reload-interval"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.reconnect-delay"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.fetch-size"))
+                .anySatisfy(error -> assertThat(error).contains("jdbc.key-separator"));
+
+        ResourceProperties blankColumn = jdbcResource("instruments");
+        blankColumn.getJdbc().setKeyColumns(List.of("symbol", " "));
+        assertThat(ConnectorValidator.validateResources(withResources(blankColumn)))
+                .anySatisfy(error -> assertThat(error).contains("blank column name"));
+
+        // Zero is "on demand only", and is fine.
+        ResourceProperties onDemand = jdbcResource("instruments");
+        onDemand.getJdbc().setReloadInterval(Duration.ZERO);
+        assertThat(ConnectorValidator.validateResources(withResources(onDemand))).isEmpty();
+    }
+
+    // ---- alerts -----------------------------------------------------------------
+
+    private static ConnectorsProperties withAlerts(AlertProperties alerts) {
+        ConnectorsProperties properties = new ConnectorsProperties();
+        properties.setAlerts(alerts);
+        return properties;
+    }
+
+    @Test
+    @DisplayName("the default alerts block -- enabled, log only -- is valid")
+    void acceptsDefaultAlerts() {
+        assertThat(ConnectorValidator.validateAlerts(new ConnectorsProperties())).isEmpty();
+        AlertProperties both = new AlertProperties();
+        both.setAmps(new AlertProperties.Amps());
+        both.getAmps().setTopic("connectors/alerts");
+        both.setKafka(new AlertProperties.Kafka());
+        both.getKafka().setTopic("connectors.alerts");
+        both.getKafka().setBootstrapServers("localhost:9092");
+        assertThat(ConnectorValidator.validate(withAlerts(both))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a queue of nothing would drop every alert")
+    void refusesAnEmptyAlertQueue() {
+        AlertProperties alerts = new AlertProperties();
+        alerts.setQueueSize(0);
+        alerts.setSuppressRepeats(Duration.ofSeconds(-5));
+        assertThat(ConnectorValidator.validateAlerts(withAlerts(alerts)))
+                .anySatisfy(error -> assertThat(error).contains("alerts.queue-size"))
+                .anySatisfy(error -> assertThat(error).contains("alerts.suppress-repeats"));
+    }
+
+    @Test
+    @DisplayName("a sink block names its topic, and a Kafka topic names its cluster")
+    void refusesASinkMissingWhatItNeeds() {
+        AlertProperties amps = new AlertProperties();
+        amps.setAmps(new AlertProperties.Amps());
+        assertThat(ConnectorValidator.validateAlerts(withAlerts(amps)))
+                .anySatisfy(error -> assertThat(error).contains("alerts.amps.topic is required"));
+
+        AlertProperties kafka = new AlertProperties();
+        kafka.setKafka(new AlertProperties.Kafka());
+        kafka.getKafka().setTopic("connectors.alerts");
+        assertThat(ConnectorValidator.validateAlerts(withAlerts(kafka)))
+                .anySatisfy(error -> assertThat(error).contains("bootstrap-servers"));
+
+        kafka.getKafka().setTopic(" ");
+        assertThat(ConnectorValidator.validateAlerts(withAlerts(kafka)))
+                .anySatisfy(error -> assertThat(error).contains("alerts.kafka.topic is required"));
+    }
 }

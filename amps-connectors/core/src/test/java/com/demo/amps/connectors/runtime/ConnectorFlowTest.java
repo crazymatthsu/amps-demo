@@ -2,6 +2,9 @@ package com.demo.amps.connectors.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.demo.amps.connectors.alert.Alert;
+import com.demo.amps.connectors.alert.AlertingAmpsPublisher;
+import com.demo.amps.connectors.alert.RecordingAlertSink;
 import com.demo.amps.connectors.amps.AmpsPublisherFactory;
 import com.demo.amps.connectors.amps.RecordingAmpsPublisher;
 import com.demo.amps.connectors.source.FakeRecordSource;
@@ -39,6 +42,10 @@ import org.springframework.test.annotation.DirtiesContext;
  * <p>The last case is the one that is easy to get wrong and expensive to discover later: when
  * the application stops, the records already read but not yet batched have to be published,
  * not dropped. That is what {@code ConnectorManager.stop()} asserts here.
+ *
+ * <p>Alerts ride on the same context: a {@code RecordingAlertSink} bean stands in for the
+ * alerts topic, so a flush that fails is asserted twice over -- as the acknowledgments that
+ * did not happen, and as the {@code PUBLISH_FLUSH_TIMEOUT} the connector raised about it.
  */
 @SpringBootTest(properties = {
         "spring.main.web-application-type=none",
@@ -131,12 +138,21 @@ class ConnectorFlowTest {
                             : new RecordingAmpsPublisher());
         }
 
+        /** Stands in for the alerts topic: whatever the connectors raise lands here. */
+        @Bean
+        RecordingAlertSink recordingAlertSink() {
+            return alerts;
+        }
+
+        private final RecordingAlertSink alerts = new RecordingAlertSink();
+
         RecordingAmpsPublisher publisher(String connector) {
             return publishers.get(connector);
         }
 
         void clearAll() {
             publishers.values().forEach(RecordingAmpsPublisher::clear);
+            alerts.clear();
         }
     }
 
@@ -321,6 +337,34 @@ class ConnectorFlowTest {
         assertThat(acks.get()).isEqualTo(2);
         assertThat(fakes.bySize.closeCount()).isEqualTo(1);
         assertThat(publisher.isConnected()).isFalse();
+    }
+
+    @Test
+    @DisplayName("a batch whose flush times out is not acknowledged, and says so as an alert")
+    void aFailedFlushRaisesAnAlert() {
+        AtomicInteger acks = new AtomicInteger();
+        RecordingAmpsPublisher publisher = fakes.publisher("bysize").failFlushes(1);
+
+        fakes.bySize.emit(record("K-1", acks));
+        fakes.bySize.emit(record("K-2", acks));
+        fakes.bySize.emit(record("K-3", acks));
+        assertThat(publisher.calls()).hasSize(3);
+        assertThat(acks.get()).isZero();
+
+        // Raised on the source thread through the wrapped publisher, delivered on the alert
+        // thread to the sink bean, stamped with the default application name on the way.
+        Alert alert = fakes.alerts.awaitCode(AlertingAmpsPublisher.PUBLISH_FLUSH_TIMEOUT);
+        assertThat(alert.severity()).isEqualTo(Alert.Severity.WARN);
+        assertThat(alert.connector()).isEqualTo("bysize");
+        assertThat(alert.application()).isEqualTo("amps-connector");
+        assertThat(alert.timestamp()).isNotNull();
+
+        // The next batch lands, and only its records are acknowledged.
+        fakes.bySize.emit(record("K-4", acks));
+        fakes.bySize.emit(record("K-5", acks));
+        fakes.bySize.emit(record("K-6", acks));
+        assertThat(acks.get()).isEqualTo(3);
+        assertThat(manager.connectors().get(0).batchPublisher().failedBatches()).isEqualTo(1);
     }
 
     @Test

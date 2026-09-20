@@ -1,14 +1,19 @@
 package com.demo.amps.connectors.runtime;
 
+import com.demo.amps.connectors.alert.Alert;
+import com.demo.amps.connectors.alert.Alerts;
 import com.demo.amps.connectors.amps.AmpsPublisherFactory;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.ConnectorValidator;
 import com.demo.amps.connectors.config.ConnectorsProperties;
+import com.demo.amps.connectors.resource.ResourceRegistry;
 import com.demo.amps.connectors.source.SourceResolver;
 import com.demo.amps.connectors.transform.TransformRegistry;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -33,11 +38,19 @@ import org.springframework.context.SmartLifecycle;
  *
  * <p>The status line is the other half of that: the only routine evidence that a quiet
  * connector is quiet because the feed is quiet, rather than because it has been retrying for
- * an hour.
+ * an hour. The resources' lines ride along under it, because a connector that is RUNNING
+ * with its lookup table UNAVAILABLE is publishing unenriched records, and the two lines
+ * belong next to each other. A failed start is also an alert ({@code CONNECTOR_START_FAILED}),
+ * raised on every failed attempt and left to repeat suppression to collapse: the retry tick
+ * is five seconds and the window thirty, so a broker that stays down is one alert and a
+ * summary, not a stream.
  */
 public class ConnectorManager implements SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(ConnectorManager.class);
+
+    /** Raised, at WARN, each time a connector's start attempt fails. */
+    public static final String CONNECTOR_START_FAILED = "CONNECTOR_START_FAILED";
 
     /** How often a connector that failed to start is tried again. */
     private static final Duration RETRY_INTERVAL = Duration.ofSeconds(5);
@@ -47,6 +60,8 @@ public class ConnectorManager implements SmartLifecycle {
     private final AmpsPublisherFactory publishers;
     private final SourceResolver sources;
     private final ConnectorFlowFactory flows;
+    private final ResourceRegistry resources;
+    private final Alerts alerts;
     private final List<Connector> connectors = new ArrayList<>();
 
     private ScheduledExecutorService scheduler;
@@ -58,18 +73,25 @@ public class ConnectorManager implements SmartLifecycle {
      * @param publishers builds each connector's AMPS client
      * @param sources resolves each connector's source
      * @param flows registers each connector's Spring Integration flow
+     * @param resources the application's shared resources, for the status log
+     * @param alerts where a connector that will not start, and the connectors themselves,
+     *     report what goes wrong
      */
     public ConnectorManager(
             ConnectorsProperties properties,
             TransformRegistry transforms,
             AmpsPublisherFactory publishers,
             SourceResolver sources,
-            ConnectorFlowFactory flows) {
+            ConnectorFlowFactory flows,
+            ResourceRegistry resources,
+            Alerts alerts) {
         this.properties = properties;
         this.transforms = transforms;
         this.publishers = publishers;
         this.sources = sources;
         this.flows = flows;
+        this.resources = resources;
+        this.alerts = alerts;
     }
 
     /**
@@ -90,6 +112,11 @@ public class ConnectorManager implements SmartLifecycle {
         return List.copyOf(connectors);
     }
 
+    /** The application's shared resources, whose status is logged beside the connectors'. */
+    public ResourceRegistry resources() {
+        return resources;
+    }
+
     @Override
     public synchronized void start() {
         if (running) {
@@ -103,7 +130,8 @@ public class ConnectorManager implements SmartLifecycle {
         validate();
         for (ConnectorProperties connector : properties.enabledConnectors()) {
             connectors.add(new Connector(
-                    connector, properties.getAmps(), transforms, publishers, sources, flows));
+                    connector, properties.getAmps(), transforms, publishers, sources, flows,
+                    alerts));
         }
         running = true;
         if (connectors.isEmpty()) {
@@ -172,6 +200,14 @@ public class ConnectorManager implements SmartLifecycle {
             } catch (Exception e) {
                 log.warn("[{}] start failed, retrying in {}s: {}",
                         connector.name(), RETRY_INTERVAL.toSeconds(), e.toString());
+                Map<String, Object> details = new LinkedHashMap<>();
+                details.put("error", e.toString());
+                details.put("retryIn", RETRY_INTERVAL.toString());
+                alerts.raise(Alert.of(Alert.Severity.WARN, CONNECTOR_START_FAILED,
+                                "start failed, retrying in " + RETRY_INTERVAL.toSeconds()
+                                        + "s: " + e.getMessage())
+                        .withConnector(connector.name())
+                        .withDetails(details));
             }
         }
     }
@@ -192,7 +228,10 @@ public class ConnectorManager implements SmartLifecycle {
     private void logStatus() {
         try {
             if (running && !connectors.isEmpty()) {
-                log.info("connector status:{}", status());
+                String resourceStatus = resources == null || resources.names().isEmpty()
+                        ? ""
+                        : System.lineSeparator() + "resource status:" + resources.status();
+                log.info("connector status:{}{}", status(), resourceStatus);
             }
         } catch (RuntimeException e) {
             log.warn("connector status tick failed", e);
