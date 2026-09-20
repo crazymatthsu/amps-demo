@@ -8,11 +8,21 @@ import com.demo.amps.connectors.alert.AmpsAlertSink;
 import com.demo.amps.connectors.alert.RecordingAlertSink;
 import com.demo.amps.connectors.config.AlertProperties;
 import com.demo.amps.connectors.config.ResourceProperties;
+import com.demo.amps.connectors.control.CommandContext;
+import com.demo.amps.connectors.control.CommandDispatcher;
+import com.demo.amps.connectors.control.CommandHandler;
+import com.demo.amps.connectors.control.ControlCommand;
+import com.demo.amps.connectors.control.StatusCommand;
 import com.demo.amps.connectors.resource.AppResource;
 import com.demo.amps.connectors.resource.FakeResource;
 import com.demo.amps.connectors.resource.ResourceFactory;
 import com.demo.amps.connectors.resource.ResourceRegistry;
 import com.demo.amps.connectors.runtime.ConnectorManager;
+import com.demo.amps.connectors.source.FakeRecordSource;
+import com.demo.amps.connectors.source.FakeSourceFactory;
+import com.demo.amps.connectors.source.SourceRecord;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -22,8 +32,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.mock.env.MockEnvironment;
 
 /**
- * The bean graph the auto-configuration builds for the resources and the alerts, with the
- * connectors themselves left to {@code ConnectorFlowTest}.
+ * The bean graph the auto-configuration builds for the resources, the alerts and the control
+ * channel, with the connectors themselves left to {@code ConnectorFlowTest}.
  */
 class ConnectorsAutoConfigurationTest {
 
@@ -66,6 +76,40 @@ class ConnectorsAutoConfigurationTest {
             };
         }
     }
+
+    /** A control source the test can push commands into, and a handler of the app's own. */
+    @Configuration(proxyBeanMethods = false)
+    static class Control {
+
+        private final FakeRecordSource source = new FakeRecordSource();
+        private final List<ControlCommand> flushed = new ArrayList<>();
+
+        @Bean
+        FakeSourceFactory controlSourceFactory() {
+            return new FakeSourceFactory(source, connector -> connector.getName().endsWith("-control"));
+        }
+
+        @Bean
+        CommandHandler flushHandler() {
+            return new CommandHandler() {
+                @Override
+                public String command() {
+                    return "flush";
+                }
+
+                @Override
+                public void handle(ControlCommand command, CommandContext context) {
+                    flushed.add(command);
+                }
+            };
+        }
+    }
+
+    private static final String[] CONTROL = {
+            "spring.application.name=instrument-enricher",
+            "amps-connectors.control.enabled=true",
+            "amps-connectors.control.source.amps.topic=connectors/control"
+    };
 
     private static final String[] INSTRUMENTS = {
             "amps-connectors.resources[0].name=instruments",
@@ -168,6 +212,65 @@ class ConnectorsAutoConfigurationTest {
                 .withPropertyValues("amps-connectors.resources[0].enabled=false")
                 .run(context -> assertThat(context.getBean(ResourceRegistry.class).names())
                         .isEmpty());
+    }
+
+    @Test
+    @DisplayName("the dispatcher is always a bean, idle unless control.enabled says otherwise")
+    void controlIsOffByDefault() {
+        runner.run(context -> {
+            assertThat(context).hasSingleBean(CommandDispatcher.class);
+            CommandDispatcher dispatcher = context.getBean(CommandDispatcher.class);
+            assertThat(dispatcher.isRunning()).isFalse();
+            assertThat(dispatcher.status()).isEqualTo("control: disabled");
+            assertThat(dispatcher.commands()).containsExactlyInAnyOrder("reload", "status");
+        });
+    }
+
+    @Test
+    @DisplayName("enabled control listens on its source, named after the application, and dispatches")
+    void controlListensAndDispatches() {
+        runner.withUserConfiguration(AppResources.class, Control.class)
+                .withPropertyValues(CONTROL)
+                .run(context -> {
+                    CommandDispatcher dispatcher = context.getBean(CommandDispatcher.class);
+                    assertThat(dispatcher.isRunning()).isTrue();
+                    assertThat(dispatcher.target()).isEqualTo("instrument-enricher");
+                    assertThat(dispatcher.connector().getName())
+                            .isEqualTo("instrument-enricher-control");
+                    assertThat(dispatcher.commands())
+                            .containsExactlyInAnyOrder("reload", "status", "flush");
+                    // Started after the connectors: the phase order is what makes a command
+                    // that arrives at boot find something to act on.
+                    assertThat(dispatcher.getPhase())
+                            .isGreaterThan(context.getBean(ConnectorManager.class).getPhase());
+
+                    Control control = context.getBean(Control.class);
+                    assertThat(control.source.startCount()).isEqualTo(1);
+                    control.source.emit(SourceRecord.of(
+                            "{\"command\":\"flush\",\"to\":\"instrument-enricher\"}"));
+                    control.source.emit(SourceRecord.of("{\"command\":\"status\"}"));
+                    assertThat(control.flushed).hasSize(1);
+                    assertThat(dispatcher.succeeded()).isEqualTo(2);
+
+                    Alert status = context.getBean(RecordingAlertSink.class)
+                            .awaitCode(StatusCommand.STATUS);
+                    assertThat(status.application()).isEqualTo("instrument-enricher");
+                    assertThat(status.details()).containsKeys("connectors", "resources");
+                    assertThat(String.valueOf(status.details().get("resources"))).contains("rics");
+                });
+    }
+
+    @Test
+    @DisplayName("an invalid control: block stops the application with the readable list")
+    void failsOnInvalidControl() {
+        runner.withPropertyValues("amps-connectors.control.enabled=true").run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure())
+                    .rootCause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("invalid amps-connectors configuration")
+                    .hasMessageContaining("control: source needs exactly one");
+        });
     }
 
     @Test

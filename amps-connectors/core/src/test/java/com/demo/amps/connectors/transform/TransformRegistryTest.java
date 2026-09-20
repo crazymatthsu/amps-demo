@@ -3,8 +3,13 @@ package com.demo.amps.connectors.transform;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.demo.amps.connectors.alert.Alert;
+import com.demo.amps.connectors.config.RuleAlert;
+import com.demo.amps.connectors.config.RuleProperties;
 import com.demo.amps.connectors.config.TransformStep;
 import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.transform.rules.RuleSet;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +64,48 @@ class TransformRegistryTest {
         TransformChain chain = new TransformChain(resolved);
         assertThat(chain.apply(SourceRecord.of(""), fields))
                 .containsExactly(Map.entry("55", "AAPL"), Map.entry("enriched", true));
+    }
+
+    @Test
+    @DisplayName("a rules step resolves to a RuleSet raising under the context's connector")
+    void resolvesRulesStepsWithTheContext() {
+        RuleProperties rule = new RuleProperties();
+        rule.setName("enriched-buys");
+        rule.setWhen("#f['enriched'] == true");
+        rule.getThen().setBean("myEnricher");
+        RuleAlert alert = new RuleAlert();
+        alert.setCode("ENRICHED");
+        rule.getThen().setAlert(alert);
+        TransformStep rules = new TransformStep();
+        rules.setRules(List.of(rule));
+
+        TransformRegistry registry = new TransformRegistry(Map.of("myEnricher", ENRICHER));
+        List<Alert> raised = new ArrayList<>();
+        List<RecordTransform> resolved = registry.resolve(
+                List.of(bean("myEnricher"), rules), new TransformContext("orders", registry, raised::add));
+        assertThat(resolved).hasSize(2);
+        assertThat(resolved.get(0)).isSameAs(ENRICHER);
+        assertThat(resolved.get(1)).isInstanceOf(RuleSet.class);
+
+        Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("11", "ORD-1");
+        new TransformChain(resolved).apply(SourceRecord.of(""), fields);
+        assertThat(raised).singleElement().satisfies(fired -> {
+            assertThat(fired.code()).isEqualTo("ENRICHED");
+            assertThat(fired.message()).isEqualTo("enriched-buys");
+            assertThat(fired.connector()).isEqualTo("orders");
+            assertThat(fired.details()).containsEntry("rule", "enriched-buys");
+        });
+
+        // The context-less overload compiles the same rules for their own sake.
+        assertThat(registry.resolve(List.of(rules))).singleElement().isInstanceOf(RuleSet.class);
+        // A rule's bean action is resolved as strictly as a bean step.
+        rule.getThen().setBean("typo");
+        assertThatThrownBy(() -> registry.resolve(List.of(rules)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("'typo'")
+                .hasMessageContaining("myEnricher");
+        assertThat(registry.require("myEnricher")).isSameAs(ENRICHER);
     }
 
     @Test

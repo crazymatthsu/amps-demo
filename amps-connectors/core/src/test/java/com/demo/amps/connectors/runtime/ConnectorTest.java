@@ -8,6 +8,9 @@ import com.demo.amps.connectors.alert.AlertingAmpsPublisher;
 import com.demo.amps.connectors.amps.RecordingAmpsPublisher;
 import com.demo.amps.connectors.config.AmpsServerProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
+import com.demo.amps.connectors.config.RuleAlert;
+import com.demo.amps.connectors.config.RuleProperties;
+import com.demo.amps.connectors.config.TransformStep;
 import com.demo.amps.connectors.source.FakeRecordSource;
 import com.demo.amps.connectors.source.FakeSourceFactory;
 import com.demo.amps.connectors.source.SourceRecord;
@@ -51,11 +54,15 @@ class ConnectorTest {
     }
 
     private Connector connector(MessageChannel channel) {
+        return connector(TestConnectors.tcp("orders", 15009), channel);
+    }
+
+    private Connector connector(ConnectorProperties properties, MessageChannel channel) {
         return new Connector(
-                TestConnectors.tcp("orders", 15009),
+                properties,
                 new AmpsServerProperties(),
                 new TransformRegistry(Map.of()),
-                properties -> recording,
+                connector -> recording,
                 new SourceResolver(List.of(new FakeSourceFactory(source))),
                 flowsOver(channel),
                 raised::add);
@@ -96,6 +103,53 @@ class ConnectorTest {
         connector.stop();
         assertThat(source.closeCount()).isEqualTo(1);
         assertThat(recording.isConnected()).isFalse();
+    }
+
+    @Test
+    @DisplayName("a rules step raises under the connector's name, and its hits are on the status line")
+    void rulesRaiseAsTheConnectorAndCountOnTheStatusLine() throws Exception {
+        ConnectorProperties properties = TestConnectors.tcp("orders", 15009);
+        RuleProperties large = new RuleProperties();
+        large.setName("large");
+        large.setWhen("#num(#f['qty']) > 100");
+        RuleAlert alert = new RuleAlert();
+        alert.setCode("LARGE_ORDER");
+        alert.setMessage("order #{#f['id']} is large");
+        large.getThen().setAlert(alert);
+        RuleProperties never = new RuleProperties();
+        never.setName("never");
+        never.setWhen("false");
+        never.getThen().setDrop(true);
+        TransformStep rules = new TransformStep();
+        rules.setRules(List.of(large, never));
+        properties.setTransforms(List.of(rules));
+
+        Connector connector = connector(properties, new MessageChannel() {
+            @Override
+            public boolean send(Message<?> message) {
+                return true;
+            }
+
+            @Override
+            public boolean send(Message<?> message, long timeout) {
+                return true;
+            }
+        });
+        connector.start();
+        assertThat(connector.pipeline().ruleSets()).hasSize(1);
+        assertThat(connector.status()).endsWith("rules[large=0,never=0]");
+
+        connector.pipeline().apply(SourceRecord.of("{\"id\":\"1\",\"qty\":500}"));
+        connector.pipeline().apply(SourceRecord.of("{\"id\":\"2\",\"qty\":5}"));
+
+        assertThat(connector.status()).endsWith("rules[large=1,never=0]");
+        assertThat(raised).singleElement().satisfies(fired -> {
+            assertThat(fired.code()).isEqualTo("LARGE_ORDER");
+            assertThat(fired.connector()).isEqualTo("orders");
+            assertThat(fired.message()).isEqualTo("order 1 is large");
+            assertThat(fired.details()).containsEntry("rule", "large");
+        });
+        connector.stop();
     }
 
     @Test
