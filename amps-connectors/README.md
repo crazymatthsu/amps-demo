@@ -1010,11 +1010,15 @@ enriches takes its **resource** from the `ResourceRegistry` — `lookup(name, ty
 the bean method, so a wrong name fails at boot — and holds it; it takes **`Alerts`** to say
 what it could not do, raising `Alert.of(severity, code, message).withDetails(...)`. Both are
 ordinary constructor arguments; nothing about a transform is Spring-specific, which is what
-keeps the enricher testable against an H2-backed table with no context at all. One limit to
-know: a bean transform is not told which connector runs it — only a `rules` step is compiled
-with a `TransformContext` carrying the connector's name — so an alert it raises has no
-`connector` unless the application attaches one, and repeat suppression then collapses on the
-code alone across every connector that shares the bean.
+keeps the enricher testable against an H2-backed table with no context at all. A bean that
+wants to know **which connector** it is serving — to name it in an alert, so that repeat
+suppression works per connector rather than collapsing on the code alone — overrides
+`bind(TransformContext)`: the registry calls it once per connector while resolving that
+connector's `bean:` steps (and a rule's `bean` action), and folds the returned transform into
+that connector's chain. The bean stays one shared, stateless instance; the bound copy is a
+per-connector view that closes over `context.connectorName()` and `context.alerts()`, and it
+must be as thread-safe as the bean is. The default returns the bean itself, so a transform that
+does not care never sees the context.
 
 Two consequences of the pipeline are worth knowing before writing one. **Any transform
 re-encodes**: `passthrough: AUTO` publishes the original bytes only when nothing touched the
@@ -1134,8 +1138,15 @@ the simulator for the Kafka feed and an in-memory H2 seeded from the module's SQ
 reference table, so it needs nothing but AMPS:
 
 ```bash
-./gradlew :amps-connectors:apps:instrument-enricher:bootRun --args="--spring.config.additional-location=file:amps-connectors/config/local/common/,file:amps-connectors/config/local/streams/instrument-enricher/ --source-driver=SIMULATED --amps-connectors.resources[0].jdbc.url=jdbc:h2:mem:refdata;INIT=RUNSCRIPT FROM 'amps-connectors/apps/instrument-enricher/sql/instruments.sql'"
+JDBC_URL="jdbc:h2:mem:refdata;DB_CLOSE_DELAY=-1;INIT=RUNSCRIPT FROM 'amps-connectors/apps/instrument-enricher/sql/instruments.sql'" \
+./gradlew :amps-connectors:apps:instrument-enricher:bootRun \
+    --args="--spring.config.additional-location=file:amps-connectors/config/local/common/,file:amps-connectors/config/local/streams/instrument-enricher/ --source-driver=SIMULATED"
 ```
+
+`JDBC_URL` replaces the whole URL rather than one property of it because an indexed list
+such as `resources[0]` binds from one property source: a command-line
+`--amps-connectors.resources[0].jdbc.url=…` would win the whole entry and leave it with a URL
+and nothing else. The instance file exposes the URL as `${JDBC_URL:…}` for the same reason.
 
 Then publish `{"command":"reload","target":"instruments"}` on `connectors/control` with any
 JSON client, watch the status log for the `rules[…]` counters and the `instruments` line, and

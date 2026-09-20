@@ -3,6 +3,7 @@ package com.demo.amps.connectors.enricher;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.demo.amps.connectors.alert.Alert;
 import com.demo.amps.connectors.alert.Alerts;
@@ -12,6 +13,9 @@ import com.demo.amps.connectors.config.ResourceProperties;
 import com.demo.amps.connectors.encode.FixEncoder;
 import com.demo.amps.connectors.resource.jdbc.JdbcLookupTable;
 import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.transform.RecordTransform;
+import com.demo.amps.connectors.transform.TransformContext;
+import com.demo.amps.connectors.transform.TransformRegistry;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -209,11 +213,30 @@ class InstrumentEnricherTest {
         assertThat(alert.severity()).isEqualTo(Alert.Severity.WARN);
         assertThat(alert.message()).contains("K-5").contains("instruments");
         assertThat(alert.details()).containsExactly(entry("symbol", "K-5"), entry("clOrdId", "ORD-7"));
-        // No connector: a bean step runs in whichever connector names it, and the manager
-        // stamps the application. Nothing here should have guessed either.
+        // The bare bean knows no connector, and the manager stamps the application later.
+        // Nothing here should have guessed either.
         assertThat(alert.connector()).isNull();
         assertThat(alert.application()).isNull();
         assertThat(alert.timestamp()).isNull();
+    }
+
+    @Test
+    @DisplayName("bound to a connector, the same bean names that connector in what it raises")
+    void boundCopyNamesTheConnector() {
+        InstrumentEnricher enricher = enricher(EnricherProperties.OnMiss.PASS);
+        TransformRegistry registry = new TransformRegistry(Map.of("instrumentEnricher", enricher));
+        RecordTransform orders = enricher.bind(new TransformContext("orders-enriched", registry, alerts::add));
+        RecordTransform bare = enricher.bind(TransformContext.of(registry));
+
+        assertThat(orders.apply(upsert(), order("ORD-7", "K-5"))).containsEntry("55", "K-5");
+        assertThat(bare.apply(upsert(), order("ORD-8", "K-5"))).containsEntry("55", "K-5");
+        assertThat(orders.apply(upsert(), order("ORD-9", "K-0"))).containsEntry("48", "B0YQ5W0");
+
+        assertThat(enricher.misses()).isEqualTo(2);
+        assertThat(enricher.hits()).isEqualTo(1);
+        assertThat(alerts).extracting(Alert::code, Alert::connector).containsExactly(
+                tuple(InstrumentEnricher.UNKNOWN_SYMBOL, "orders-enriched"),
+                tuple(InstrumentEnricher.UNKNOWN_SYMBOL, null));
     }
 
     @Test

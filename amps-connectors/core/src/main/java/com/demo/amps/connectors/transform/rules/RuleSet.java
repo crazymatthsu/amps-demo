@@ -121,7 +121,7 @@ public final class RuleSet implements RecordTransform {
             if (then.getBean().isBlank()) {
                 throw new IllegalArgumentException("rule '" + name + "' names a blank bean");
             }
-            bean = context.registry().require(then.getBean());
+            bean = context.registry().require(then.getBean()).bind(context);
         }
         AlertTemplate alert = null;
         if (then.getAlert() != null) {

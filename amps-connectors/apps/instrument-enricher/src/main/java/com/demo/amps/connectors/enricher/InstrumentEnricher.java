@@ -6,6 +6,7 @@ import com.demo.amps.connectors.decode.Fields;
 import com.demo.amps.connectors.resource.jdbc.JdbcLookupTable;
 import com.demo.amps.connectors.source.SourceRecord;
 import com.demo.amps.connectors.transform.RecordTransform;
+import com.demo.amps.connectors.transform.TransformContext;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -54,11 +55,14 @@ import org.slf4j.LoggerFactory;
  *       {@code UNKNOWN_SYMBOL}s would say the first when the truth is the second.</li>
  * </ul>
  *
- * <p>The alerts carry no connector: a {@code bean:} step is resolved by name, with no
- * connector behind it, and the same bean may run in several connectors' pipelines. The
- * alert manager still stamps the application, and repeat suppression still collapses a
- * storm on the code -- so a feed of unknown symbols is one alert per window, not one per
- * record, whichever policy is in force.
+ * <p>The alerts name the connector. One bean serves every connector that names it, so the
+ * bean itself cannot know which pipeline a record came down -- but the registry asks it, per
+ * connector, for a {@linkplain #bind(TransformContext) bound} copy, and that copy stamps the
+ * connector on everything it raises. Repeat suppression then collapses a storm per connector
+ * and code -- a feed of unknown symbols is one alert per window, not one per record,
+ * whichever policy is in force -- and an operator reading the alerts topic can tell which
+ * feed it was. Used bare, outside a connector, the same alerts go out with no connector,
+ * and the alert manager still stamps the application.
  */
 public final class InstrumentEnricher implements RecordTransform {
 
@@ -98,6 +102,20 @@ public final class InstrumentEnricher implements RecordTransform {
 
     @Override
     public Map<String, Object> apply(SourceRecord record, Map<String, Object> fields) {
+        return apply(null, record, fields);
+    }
+
+    /**
+     * The per-connector view: the same lookup, the same counters, alerts that name the
+     * connector. Called by the registry once per connector that names this bean.
+     */
+    @Override
+    public RecordTransform bind(TransformContext context) {
+        String connector = context.connectorName().isBlank() ? null : context.connectorName();
+        return (record, fields) -> apply(connector, record, fields);
+    }
+
+    private Map<String, Object> apply(String connector, SourceRecord record, Map<String, Object> fields) {
         if (record.action() == SourceRecord.Action.DELETE) {
             return copy(fields);
         }
@@ -111,7 +129,7 @@ public final class InstrumentEnricher implements RecordTransform {
             details.put("resource", table.name());
             details.put("symbol", symbol);
             details.put("clOrdId", clOrdId(fields));
-            alerts.raise(Alert.of(Alert.Severity.WARN, RESOURCE_UNAVAILABLE,
+            raise(connector, Alert.of(Alert.Severity.WARN, RESOURCE_UNAVAILABLE,
                             "resource '" + table.name() + "' has nothing loaded; symbol " + symbol
                                     + (drops() ? " is dropped" : " passes through unenriched"))
                     .withDetails(details));
@@ -123,7 +141,7 @@ public final class InstrumentEnricher implements RecordTransform {
             Map<String, Object> details = new LinkedHashMap<>();
             details.put("symbol", symbol);
             details.put("clOrdId", clOrdId(fields));
-            alerts.raise(Alert.of(Alert.Severity.WARN, UNKNOWN_SYMBOL,
+            raise(connector, Alert.of(Alert.Severity.WARN, UNKNOWN_SYMBOL,
                             "symbol " + symbol + " is not in " + table.name()
                                     + (drops() ? "; the order is dropped"
                                             : "; the order passes through unenriched"))
@@ -181,6 +199,11 @@ public final class InstrumentEnricher implements RecordTransform {
                     + "mapped to it is left unset", table.name(), column, row.keySet());
         }
         return null;
+    }
+
+    /** Raise, naming the connector when this is a bound copy that knows one. */
+    private void raise(String connector, Alert alert) {
+        alerts.raise(connector == null ? alert : alert.withConnector(connector));
     }
 
     /** The on-miss policy applied to a record that was not enriched. */

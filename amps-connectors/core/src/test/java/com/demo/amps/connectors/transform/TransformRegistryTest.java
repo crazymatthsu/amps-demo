@@ -108,6 +108,56 @@ class TransformRegistryTest {
         assertThat(registry.require("myEnricher")).isSameAs(ENRICHER);
     }
 
+    /** A bean that wants the connector's name: its bound copy stamps every record with it. */
+    private static final class ConnectorAwareEnricher implements RecordTransform {
+
+        final List<String> boundTo = new ArrayList<>();
+
+        @Override
+        public Map<String, Object> apply(SourceRecord record, Map<String, Object> fields) {
+            return fields;
+        }
+
+        @Override
+        public RecordTransform bind(TransformContext context) {
+            boundTo.add(context.connectorName());
+            return (record, fields) -> {
+                Map<String, Object> result = new LinkedHashMap<>(fields);
+                result.put("connector", context.connectorName());
+                return result;
+            };
+        }
+    }
+
+    @Test
+    @DisplayName("a bean step is bound to the connector it is resolved for, once per connector")
+    void bindsABeanStepToItsConnector() {
+        ConnectorAwareEnricher enricher = new ConnectorAwareEnricher();
+        TransformRegistry registry = new TransformRegistry(Map.of("aware", enricher));
+        TransformContext orders = new TransformContext("orders", registry, null);
+
+        RecordTransform bound = registry.resolve(List.of(bean("aware")), orders).get(0);
+        assertThat(bound).isNotSameAs(enricher);
+        assertThat(bound.apply(SourceRecord.of("{}"), Map.of("55", "VOD.L")))
+                .containsEntry("55", "VOD.L")
+                .containsEntry("connector", "orders");
+        // The default bind() is the bean itself: a transform that does not care sees nothing.
+        assertThat(registry.resolve(List.of(bean("aware")))).isNotSameAs(enricher);
+        assertThat(ENRICHER.bind(orders)).isSameAs(ENRICHER);
+
+        // A rule's bean action is bound the same way.
+        RuleProperties rule = new RuleProperties();
+        rule.setName("tag");
+        rule.setWhen("true");
+        rule.getThen().setBean("aware");
+        TransformStep rules = new TransformStep();
+        rules.setRules(List.of(rule));
+        RuleSet ruleSet = (RuleSet) registry.resolve(List.of(rules), orders).get(0);
+        assertThat(ruleSet.apply(SourceRecord.of("{}"), Map.of("55", "VOD.L")))
+                .containsEntry("connector", "orders");
+        assertThat(enricher.boundTo).containsExactly("orders", "", "orders");
+    }
+
     @Test
     void anApplicationWithNoTransformsGetsAnEmptyRegistry() {
         TransformRegistry registry = new TransformRegistry(Map.of());

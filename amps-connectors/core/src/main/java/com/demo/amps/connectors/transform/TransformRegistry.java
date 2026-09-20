@@ -76,11 +76,12 @@ public class TransformRegistry {
     /**
      * Turn a connector's steps into the transforms to fold over each record, in order.
      *
-     * <p>A {@code bean:} step resolves to the bean of that name; a {@code rules:} step is
-     * compiled by {@link RuleSet#compile} with the context, because its alerts need the
-     * connector's name; every other kind is compiled by {@link TransformChain#compile}. All
-     * of them end up as the same kind of thing, and the chain does not need to know which
-     * was which.
+     * <p>A {@code bean:} step resolves to the bean of that name, {@linkplain
+     * RecordTransform#bind(TransformContext) bound} to the connector so a bean that names the
+     * connector in its alerts can; a {@code rules:} step is compiled by {@link RuleSet#compile}
+     * with the context, because its alerts need the connector's name; every other kind is
+     * compiled by {@link TransformChain#compile}. All of them end up as the same kind of
+     * thing, and the chain does not need to know which was which.
      *
      * @param steps the connector's {@code transforms:} list
      * @param context the connector the steps belong to, and where its rules raise
@@ -93,7 +94,7 @@ public class TransformRegistry {
         List<RecordTransform> resolved = new ArrayList<>(steps.size());
         for (TransformStep step : steps) {
             resolved.add(switch (TransformChain.kindOf(step)) {
-                case "bean" -> require(step.getBean());
+                case "bean" -> require(step.getBean()).bind(context);
                 case "rules" -> RuleSet.compile(step.getRules(), context);
                 default -> TransformChain.compile(step);
             });
