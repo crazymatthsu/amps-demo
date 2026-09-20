@@ -1,0 +1,161 @@
+# instrument-enricher (local/streams) -- a Kafka topic of FIX orders, ENRICHED from a
+# database table on the way to the SOW topic AMPS keys itself.
+#
+# This is orders-kafka with one more step in it, and the step is code: the connector names
+# the `instrumentEnricher` bean that amps-connectors/apps/instrument-enricher declares, which
+# looks tag 55 (Symbol) up in the `instruments` resource below and writes the SEDOL as tag
+# 48 (with 22=2 to say that is what 48 holds) and the currency as tag 15. It is therefore
+# NOT the generic runner's image that runs this directory but localhost/amps-instrument-
+# enricher:local, which the compose script picks because apps/instrument-enricher/ exists.
+#
+# Three application-level blocks appear here for the first time, and they are in the
+# instance file rather than in common/ on purpose: each one holds an AMPS client named after
+# the application (<prefix>-instrument-enricher-alerts, <prefix>-instrument-enricher-control-
+# source), so two applications sharing them through common/ would collide on the server.
+#
+#   resources   the reference table: one query, re-read every five minutes and whenever a
+#               `reload` command says so; a reload that fails keeps the last good copy
+#   control     the topic this instance takes commands from, over AMPS
+#   alerts      where everything that goes wrong is published, beyond the log
+#
+# What a miss does is the application's own setting (`enricher.on-miss`, baked as PASS: an
+# order whose symbol nobody knows is still an order, and it reaches the topic unenriched,
+# counted and alerted as UNKNOWN_SYMBOL). Override it here under `enricher:` if this topic's
+# contract is "every record is enriched".
+#
+# Layered over the application's baked defaults and config/local/common/ at runtime; this
+# file owns the connector list.
+amps-connectors:
+  resources:
+    - name: instruments            # what the enricher, a reload command and the status log call it
+      enabled: true
+      jdbc:
+        # JDBC_HOST moves the database the way the other placeholders move their endpoints;
+        # JDBC_URL replaces the whole URL, for a run against something other than
+        # PostgreSQL (the README's in-memory H2 recipe). A whole-URL switch rather than a
+        # `--amps-connectors.resources[0].jdbc.url=` override because a list is bound from
+        # ONE property source: an element overridden on the command line would be a
+        # resource with a URL and nothing else.
+        url: "${JDBC_URL:jdbc:postgresql://${JDBC_HOST:localhost}:5432/refdata}"
+        username: refdata_ro
+        password: "${JDBC_PASSWORD:}"   # a placeholder and nothing else, ever
+        # Run verbatim; its result set IS the table. The column labels are what
+        # `enricher.set` addresses (matched ignoring case, so PostgreSQL's lower case and
+        # H2's upper case both work). sql/instruments.sql in the app module creates it.
+        query: SELECT symbol, sedol, isin, currency, ric FROM instruments
+        key-columns: [ symbol ]    # the lookup key: tag 55 as the feed spells it
+        key-separator: "|"
+        # Re-read on a timer AND on demand: five minutes is the staleness this reference
+        # data can tolerate, and the control channel below is for the moment it cannot.
+        # 0 turns the timer off and leaves reloads to the `reload` command alone.
+        reload-interval: 5m
+        reconnect-delay: 5s        # after a failed load, before dialling again
+        fetch-size: 1000
+
+  control:
+    enabled: true
+    # The name a command's `to` has to carry to be acted on here; absent or `all` reaches
+    # every instance. Blank would fall back to spring.application.name, which is the same
+    # word -- spelled out so the file says what the topic has to say.
+    target: instrument-enricher
+    accept-targets: [ all ]
+    source:                        # the SAME block a connector's source: takes
+      amps:
+        topic: connectors/control  # json; live commands only, nothing replayed on start
+        mode: SUBSCRIBE
+      # ...or a Kafka topic instead, one consumer group PER INSTANCE and from LATEST -- a
+      # shared group hands each command to one member, and a broadcast one member receives
+      # is not a broadcast:
+      # kafka:
+      #   bootstrap-servers: "${KAFKA_HOST:localhost}:9092"
+      #   topic: connectors.control
+      #   group-id: instrument-enricher-control-${HOSTNAME:local}
+      #   from: LATEST
+
+  alerts:
+    enabled: true
+    application: instrument-enricher   # every alert's `application`, and half the client name
+    min-severity: INFO             # INFO carries the `status` command's reply, so keep it
+    # A storm of one code from one connector (a thousand unknown symbols) is the first
+    # alert at once, then one more when the window closes saying how many followed.
+    suppress-repeats: 30s
+    queue-size: 1000               # bounded; a slow sink costs alerts, never the record thread
+    amps:
+      topic: connectors/alerts     # json, journalled: read it back with a bookmark subscription
+    # ...and/or a Kafka topic, keyed by alert code (the source-kafka module ships the sink):
+    # kafka:
+    #   bootstrap-servers: "${KAFKA_HOST:localhost}:9092"
+    #   topic: connectors.alerts
+    #   properties: {}
+
+  connectors:
+    - name: orders-enriched
+      enabled: true
+      format: FIX
+      # field-separator is left at SOH, which is what a FIX feed puts on the wire.
+      source:
+        driver: ${source-driver:REAL}
+        # What `--source-driver=SIMULATED` generates instead of reading Kafka: a new limit
+        # order per tick over six symbols, five of which the seed table knows -- so a run
+        # with no broker still shows the enrichment, and one UNKNOWN_SYMBOL. Pipes stand
+        # for SOH, and are swapped on the way out. Ignored under driver REAL.
+        simulated:
+          rate: 5
+          keys: 6
+          template: "8=FIX.4.2|35=D|11=ORD-{{key}}|55={{key}}|54=1|38={{seq}}|40=2|44=10.5|60={{ts}}|10=000"
+        kafka:
+          bootstrap-servers: "${KAFKA_HOST:localhost}:9092"
+          topic: orders.fix
+          # Its own group, not orders-kafka's: a group IS a position, and two applications
+          # reading one topic through one group would each see half of it.
+          group-id: amps-connectors-orders-enriched
+          from: EARLIEST
+          poll-timeout: 500ms
+          max-poll-records: 500
+          reconnect-delay: 5s
+          properties: {}
+      filter:
+        match: ALL
+        rules:
+          # 35=D new order, 35=G replace, 35=F cancel: the messages that carry order state.
+          - { field: "35", in: [D, G, F] }
+      transforms:
+        # The checksum of the message as the SESSION framed it: republished, it can only
+        # ever disagree with its own payload. Dropping it also ends passthrough, which the
+        # enrichment would have ended anyway.
+        - drop: [ "10" ]
+        # The code step. The bean name is the contract with EnricherConfiguration in the
+        # app module; a wrong name is a startup failure listing the names that exist.
+        - bean: instrumentEnricher
+        # Conditional actions over the enriched record, each counting its hits on the
+        # status line (rules[limit-without-price=0,large-notional=0]). Rules see the fields
+        # as the steps before them left them, so tag 48 is there to test if wanted.
+        - rules:
+            - name: limit-without-price
+              # OrdType 2 is a limit order, and a limit order without Price (44) is a feed
+              # problem worth an alert -- but still an order, so it is not dropped.
+              when: "#f['40'] == '2' && !#f.containsKey('44')"
+              then:
+                alert:
+                  severity: WARN
+                  code: LIMIT_WITHOUT_PRICE
+                  message: "limit order #{#f['11']} has no price"
+            - name: large-notional
+              # Tag the big ones for readers of the topic: OrderQty x Price over a million
+              # gets a custom tag. #num of a missing field is NaN, so no price means false.
+              when: "#num(#f['38']) * #num(#f['44']) > 1000000"
+              then:
+                set: { "5001": LARGE }
+              stop: false
+      amps:
+        topic: sow/connectors/orders
+        message-type: fix          # selects the encoder AND the client URI (/amps/fix)
+        command: PUBLISH
+        key:
+          fields: [ "11" ]         # ClOrdID: what the topic's <Key> reads; checked, not sent
+          mode: SERVER
+        on-delete: SOW_DELETE      # expressed as a filter over the key fields in SERVER mode
+        passthrough: AUTO          # ...defeated by the transforms, so the map is re-encoded
+        batch:
+          max-messages: 500
+          flush-interval: 250ms
