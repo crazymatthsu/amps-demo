@@ -39,11 +39,21 @@ public final class SimulatedSource implements RecordSource {
 
     private static final Logger log = LoggerFactory.getLogger(SimulatedSource.class);
 
+    /**
+     * How long {@link #close()} waits for a tick that is already inside the handler. The same
+     * budget the real drivers give their reader threads, and the one {@link RecordSource#close}
+     * promises.
+     */
+    private static final long CLOSE_JOIN_MILLIS = 5_000;
+
     private final ConnectorProperties connector;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicLong sequence = new AtomicLong();
 
     private volatile ScheduledExecutorService scheduler;
+
+    /** The tick thread, so a {@link #close()} arriving on it does not wait for itself. */
+    private volatile Thread ticker;
 
     public SimulatedSource(ConnectorProperties connector) {
         this.connector = connector;
@@ -61,6 +71,7 @@ public final class SimulatedSource implements RecordSource {
         ScheduledExecutorService started = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "amps-sim-" + connector.getName());
             thread.setDaemon(true);
+            ticker = thread;
             return thread;
         });
         scheduler = started;
@@ -101,12 +112,45 @@ public final class SimulatedSource implements RecordSource {
         return running.get();
     }
 
+    /**
+     * Stop ticking and wait for the tick that is already in the handler, if there is one.
+     *
+     * <p>{@code shutdown()} rather than {@code shutdownNow()}, and the difference is a record.
+     * The handler runs the pipeline on the tick thread, and the pipeline ends in the
+     * aggregator, which takes its lock with {@code lockInterruptibly()}. A tick interrupted
+     * there does not deliver its record and does not throw it back either: the aggregator
+     * reports "Interrupted getting lock", the connector counts a source error, and the record
+     * misses the forced release the connector performs right after this returns -- one
+     * {@code published} short of {@code received} at every shutdown. So no new tick starts
+     * ({@code running} is already false, and a shut-down scheduler reschedules nothing), the
+     * one in flight is allowed to finish, and only a tick that has not finished within
+     * {@value #CLOSE_JOIN_MILLIS}ms -- which means the lock it waits on is held by a release
+     * that is itself stuck -- is interrupted.
+     */
     @Override
     public void close() {
         running.set(false);
         ScheduledExecutorService current = scheduler;
         scheduler = null;
-        if (current != null) {
+        if (current == null) {
+            return;
+        }
+        current.shutdown();
+        if (Thread.currentThread() == ticker) {
+            // Closed from inside the handler: the in-flight tick is this call, and it will
+            // finish the moment it returns.
+            return;
+        }
+        boolean finished;
+        try {
+            finished = current.awaitTermination(CLOSE_JOIN_MILLIS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            finished = false;
+        }
+        if (!finished) {
+            log.warn("[{}] simulated tick did not finish within {}ms; interrupting it",
+                    connector.getName(), CLOSE_JOIN_MILLIS);
             current.shutdownNow();
         }
     }
