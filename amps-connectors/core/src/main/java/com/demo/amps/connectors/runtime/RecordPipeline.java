@@ -163,12 +163,21 @@ public final class RecordPipeline {
      * for text that means the source format is the message type -- and no transform stands
      * between them. TEXT never matches: it decodes to a field this framework invented, so the
      * original line is never what the topic should carry.
+     *
+     * <p>Whatever the setting says, only text and bytes can pass through: they ARE a wire
+     * form. A typed object (a Hazelcast value handed through under its ids) is not, and
+     * publishing it untouched would put {@code String.valueOf(object)} on the topic; it goes
+     * through the codec's encoder instead, which for a same-type target builds the wire form
+     * straight from the object without a field map in between.
      */
-    private boolean passthrough(PayloadType inType) {
+    private boolean passthrough(InboundRecord record) {
+        if (!(record.data() instanceof String || record.data() instanceof byte[])) {
+            return false;
+        }
         return switch (target.getPassthrough()) {
             case ALWAYS -> true;
             case NEVER -> false;
-            case AUTO -> transforms.isEmpty() && sameWireFormat(inType);
+            case AUTO -> transforms.isEmpty() && sameWireFormat(record.type());
         };
     }
 
@@ -239,7 +248,7 @@ public final class RecordPipeline {
             return null;
         }
         String sowKey = keys == null ? null : keys.key(record, fields);
-        Object data = passthrough(record.type()) ? record.data() : encoder.encode(fields);
+        Object data = passthrough(record) ? record.data() : encoder.encode(fields);
         Command command = target.getCommand() == AmpsTargetProperties.Command.DELTA_PUBLISH
                 ? Command.DELTA_PUBLISH
                 : Command.PUBLISH;

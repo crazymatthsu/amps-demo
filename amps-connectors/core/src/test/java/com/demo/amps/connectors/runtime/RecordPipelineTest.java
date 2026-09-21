@@ -403,9 +403,17 @@ class RecordPipelineTest {
         void passesThroughOnlyWhenTheTypesMatchAndNothingChanged() {
             TestPojoCodec.Order order = order();
             OutboundRecord same = out(typedPipeline(typedOut(json("orders"))), typed(order));
-            assertThat(same.data()).as("typed in == typed out, no transforms: handed through")
-                    .isSameAs(order);
+            // An object is not a wire form, whatever passthrough says: same type in and out
+            // still goes through the codec's encoder, which builds the bytes from the object.
+            assertThat(same.data()).as("typed in == typed out, no transforms: encoded, never the object")
+                    .isInstanceOf(byte[].class);
+            assertThat(Payloads.text(same.data())).contains("\"id\":\"O-1\"");
             assertThat(same.type()).isEqualTo(TestPojoCodec.TYPE);
+
+            byte[] wire = Payloads.bytes("{\"id\":\"O-1\",\"qty\":100}");
+            OutboundRecord bytes = out(typedPipeline(typedOut(json("orders"))),
+                    InboundRecord.of(wire).withType(TestPojoCodec.TYPE));
+            assertThat(bytes.data()).as("bytes ARE a wire form: handed through untouched").isSameAs(wire);
 
             OutboundRecord toText = out(typedPipeline(json("orders")), typed(order()));
             assertThat(toText.data()).as("typed in, text out: re-encoded").isInstanceOf(String.class);
