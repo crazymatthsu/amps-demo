@@ -20,7 +20,8 @@ worked example.
 
 This is the module to read when the question is *how does something that is not AMPS become a
 SOW record*: the answer involves a key that one of two ends computes, a delete that is
-sometimes a filter and sometimes a key, and a batch whose flush is what makes an
+sometimes a filter and sometimes a key, a payload that is sometimes text and sometimes a
+typed object, and a batch whose flush — or the server's persisted ack — is what makes an
 acknowledgment honest.
 
 ---
@@ -31,9 +32,9 @@ acknowledgment honest.
 amps-connectors/
 ├── core/             :amps-connectors:core — the pipeline as a java-library
 │                     (decode → filter → transform → key → encode → batch → publish)
-│                     + the source, resource, alert-sink and command SPIs + the config
-│                     model and validator + auto-configuration + test fixtures (incl.
-│                     the integration-test runner). Knows no transport.
+│                     + the source, codec, resource, alert-sink and command SPIs + the
+│                     config model and validator + auto-configuration + test fixtures
+│                     (incl. the integration-test runner). Knows no transport.
 ├── source-tcp/       :amps-connectors:source-tcp — the framed-socket driver (java.net)
 ├── source-kafka/     :amps-connectors:source-kafka — the Kafka consumer driver, and the
 │                     Kafka ALERT SINK (the framework's one producer lives here too)
@@ -105,21 +106,21 @@ flowchart LR
         STREAM["STREAMING feed (a socket, an INCREMENTAL query,<br/>a plain Hazelcast topic, an AMPS subscribe)<br/>a log, and often not even that: a socket replays<br/>nothing at all and never deletes"]
     end
 
-    SUB["RecordSource → InboundRecord(data, key, UPSERT / DELETE, ack)<br/>TcpRecordSource (LISTEN binds and accepts N feeds;<br/>CONNECT redials) · KafkaRecordSource (group offsets<br/>committed only for ACKNOWLEDGED records) ·<br/>JdbcRecordSource (polls; rows → JSON; a key that<br/>stopped appearing → DELETE) · HazelcastRecordSource<br/>(client; a plain or reliable TOPIC, or an IMap whose<br/>entry events key and delete) · AmpsRecordSource<br/>(its own HAClient, named &lt;prefix&gt;-&lt;connector&gt;-source;<br/>sow/publish/delta_publish → UPSERT, oof/sow_delete<br/>→ DELETE) · SimulatedSource<br/>(driver: SIMULATED — the demo profile)"]
+    SUB["RecordSource → InboundRecord(data, type, key, action, seqno, ack)<br/>data: text, bytes or the typed object · type: 0/0 = text by<br/>format, else a codec's factory/class ids · action: UPSERT / DELETE<br/>seqno: the Kafka offset, the ringbuffer sequence, or a delivery<br/>counter · ack: ONE Acknowledger per stream (a Kafka partition,<br/>a JDBC poll loop), NONE where there is nothing to rewind<br/>TcpRecordSource (LISTEN binds and accepts N feeds;<br/>CONNECT redials) · KafkaRecordSource (group offsets<br/>committed only for ACKNOWLEDGED records; payload-type<br/>reads the values as bytes for a codec) · JdbcRecordSource<br/>(polls; rows → JSON; a key that stopped appearing → DELETE) ·<br/>HazelcastRecordSource (client; a plain or reliable TOPIC, or<br/>an IMap whose entry events key and delete; typed-values: OBJECT<br/>hands an IdentifiedDataSerializable through under its ids) ·<br/>AmpsRecordSource (its own HAClient, named<br/>&lt;prefix&gt;-&lt;connector&gt;-source; sow/publish/delta_publish<br/>→ UPSERT, oof/sow_delete → DELETE) · SimulatedSource<br/>(driver: SIMULATED — the demo profile)"]
 
-    DEC["RecordDecoder — format:<br/>JSON (nesting and types kept: a price stays a<br/>BigDecimal, so 185.50 survives) · FIX / NVFIX<br/>(tag=value on field-separator; a repeated tag<br/>becomes tag#2, so groups survive) · TEXT<br/>malformed input → IllegalArgumentException → rejected"]
+    DEC["RecordDecoder — by the RECORD's type:<br/>a set type → the registered PayloadCodec's decoder: a lazy<br/>FieldView over the object's builder (reads on demand,<br/>writes to the builder, never flattened) · 0/0 → format:<br/>JSON (nesting and types kept: a price stays a<br/>BigDecimal, so 185.50 survives) · FIX / NVFIX<br/>(tag=value on field-separator; a repeated tag<br/>becomes tag#2, so groups survive) · TEXT<br/>malformed input, or a type no codec decodes →<br/>IllegalArgumentException → rejected"]
 
     FLT["RecordFilter — filter:<br/>declarative rules (equals/not-equals/in/matches/<br/>gt/gte/lt/lte/present, combined ALL or ANY)<br/>AND an optional SpEL expression over #f<br/>a DELETE with an empty body SKIPS the filter"]
 
-    TRF["TransformChain — transforms:<br/>keep · drop · rename · set · values · derive (SpEL,<br/>typed result) · bean (a RecordTransform from the app,<br/>holding RESOURCES) · rules (when → set/bean/alert/drop,<br/>a hit counter per rule)<br/>in order; null drops the record<br/>any transform at all disables passthrough"]
+    TRF["TransformChain — transforms:<br/>keep · drop · rename · set · values · derive (SpEL,<br/>typed result) · bean (a RecordTransform from the app,<br/>holding RESOURCES) · rules (when → set/bean/alert/drop,<br/>a hit counter per rule)<br/>in order; null drops the record; each step edits its OWN<br/>copy — Fields.copy: a LinkedHashMap, or a FieldView over<br/>a CLONED builder; keep and rename build a plain map<br/>any transform at all disables passthrough"]
 
     KEY["KeyExtractor — amps.key:<br/>SERVER: check the key fields are present, send no SowKey<br/>PUBLISHER: join the key fields (or take the source's<br/>own key) and send it as the SowKey<br/>undeterminable → rejected, never published unkeyed"]
 
-    ENC["PayloadEncoder — amps.message-type:<br/>json / fix / nvfix, chosen by the TARGET not the source<br/>passthrough AUTO: the original bytes when the formats<br/>match and nothing touched the record"]
+    ENC["PayloadEncoder — amps.payload-type names a codec's<br/>encoder (the wire form straight from the builder; a plain<br/>map is rebuilt first), else amps.message-type:<br/>json / fix / nvfix, chosen by the TARGET not the source<br/>passthrough AUTO: the original text or bytes when the type<br/>in is the type out and nothing touched the record<br/>→ OutboundRecord(topic, command, data, type, sowKey,<br/>deleteFilter), paired with the InboundRecord as ONE<br/>MessageContext"]
 
-    BAT["Spring Integration aggregator + BatchPublisher<br/>release by amps.batch.max-messages (on the SOURCE<br/>thread — the back-pressure) or flush-interval<br/>(on the connector's own deadline thread — the quiet<br/>feed's insurance) every command in order, then ONE flush"]
+    BAT["Spring Integration aggregator + BatchPublisher<br/>release by amps.batch.max-messages (on the SOURCE<br/>thread — the back-pressure) or flush-interval<br/>(on the connector's own deadline thread — the quiet<br/>feed's insurance); every command in order, the AMPS<br/>client sequence it was assigned written onto its<br/>context (dataOutSeqno) · ack-mode FLUSH: then ONE<br/>flush · PERSISTED: park in the PersistedAckTracker,<br/>no wait; over batch.max-pending → flush and wait"]
 
-    PUB["HaAmpsPublisher — one HAClient per connector<br/>URI tcp://host:port/amps/&lt;message-type&gt;<br/>publish store replays what a reconnect left in doubt"]
+    PUB["HaAmpsPublisher — one HAClient per connector<br/>URI tcp://host:port/amps/&lt;message-type&gt;<br/>publish store replays what a reconnect left in doubt;<br/>wrapped in an ObservingStore, so every persisted ack the<br/>client hands it (discardUpTo) is seen; a FailedWriteHandler<br/>reports a publish the server refused → PUBLISH_REJECTED"]
 
     subgraph TGT["the AMPS topic — amps.topic + amps.command"]
         direction TB
@@ -134,22 +135,44 @@ flowchart LR
     PUB --> KEYED
     PUB --> UNKEYED
     PUB --> JRN
-    BAT -. "flush succeeded → record.acknowledge()" .-> SUB
+    BAT -. "ack-mode: FLUSH — flush succeeded → ctx.ack() on every record of the batch" .-> SUB
+    PUB -. "ack-mode: PERSISTED — the server's persisted ack, discardUpTo(seq) → tracker → ack(seqno) / ackBatch(from, to)" .-> SUB
 ```
 
 Reading the two ends against each other:
 
 - **Any source can feed any format can feed any topic shape.** The middle of the pipeline never
   asks which transport delivered the record or which topic will receive it.
+- **One record, two halves, one context.** The three channels of the flow carry three types. A
+  source builds an `InboundRecord` — the payload as delivered (text, bytes or a typed object),
+  its `PayloadType`, the source's own key, `UPSERT` or `DELETE`, its position in the source's
+  stream (`seqno`), transport attributes, and the one `Acknowledger` its stream shares. The
+  pipeline returns a `MessageContext`: that record paired with the `OutboundRecord` it became
+  (topic, command, the payload in the target's wire form, its type, the SowKey or the delete
+  filter) — or `null`, because a record the pipeline filtered, dropped or rejected never
+  becomes a context. The aggregator carries `List<MessageContext>` to the `BatchPublisher`,
+  which writes the AMPS client sequence each command was assigned onto its context
+  (`dataOutSeqno`: `0` until published, always `0` with `publish-store: NONE`) and
+  acknowledges the source *through* the context. The two seqnos are different numbers about
+  different streams; only the in-side one ever reaches a source.
 - **`format` and `message-type` are different questions.** `format` is what the source's bytes
   *are*; `message-type` is what AMPS is told they are — and it also picks the client URI, so a
   FIX connector and a JSON connector in one application hold two connections. A connector that
-  reads FIX and publishes `json` is exactly the translation this framework exists to do.
+  reads FIX and publishes `json` is exactly the translation this framework exists to do. A
+  `payload-type` on either side is a third question — *which codec* — and it overrides the
+  other two for that side: `source.kafka.payload-type` says the topic's values are the
+  serialized form of a registered type, `amps.payload-type` says a codec writes what the topic
+  receives. Text is the `0/0` default of both; see "Payload types and codecs".
 - **Removal only exists where there is a SOW**, which is why `on-delete: IGNORE` is the honest
   setting for a journal topic rather than a default nobody reads.
-- **The acknowledgment travels backwards.** It is the batch's flush, not the publish, that
-  tells a source a record is safe — which is why Kafka's offsets and a JDBC watermark move on
-  a batch boundary and not a record boundary.
+- **The acknowledgment travels backwards.** It is never the publish that tells a source a
+  record is safe. In `ack-mode: FLUSH`, the default, it is the batch's flush, which is why
+  Kafka's offsets and a JDBC watermark move on a batch boundary and not a record boundary; in
+  `ack-mode: PERSISTED` it is the server's persisted ack for that record, observed through the
+  publish store on the client's receive thread, so they move as AMPS confirms and the source
+  thread never waits for a batch. Either way the acknowledgment is cumulative per stream —
+  `ack(seqno)`, or `ackBatch(from, to)` for a run — which is why a Kafka partition has one
+  acknowledger rather than one closure per record.
 - **AMPS is a source too.** `source.amps` subscribes to a topic — of the same instance the
   application publishes into, or of another one — through a second client of its own, so a
   connector whose two ends are both AMPS is a bridge, and the control channel below is a
@@ -192,15 +215,21 @@ keys at all, so they are counted and logged rather than turned into guessed dele
 
 | stage | configured by | what it does | what a failure counts as |
 |---|---|---|---|
-| decode | `format`, `field-separator` | payload → ordered `Map<String, Object>`, nesting and types intact | `rejected` |
+| decode | the record's `type`; `format`, `field-separator` | payload → ordered `Map<String, Object>`, nesting and types intact. A record whose payload type is set is decoded by the codec registered for it, into a lazy `FieldView` over the object; one whose type is `0/0` — every text source — by the connector's `format` | `rejected`, a type no codec decodes included |
 | filter | `filter:` | rules (ALL/ANY) **and** a SpEL expression; addresses fields as the *source* names them | `filtered` |
-| transform | `transforms:` | `keep` `drop` `rename` `set` `values` `derive` `bean` `rules`, in order; `null` drops the record. A `bean` is code from the app and may hold resources; a `rules` step is `when` → `set`/`bean`/`alert`/`drop`, counting hits per rule | `dropped`; a SpEL evaluation failure (`derive`, a rule's `when`) is `rejected` |
+| transform | `transforms:` | `keep` `drop` `rename` `set` `values` `derive` `bean` `rules`, in order; `null` drops the record. A `bean` is code from the app and may hold resources; a `rules` step is `when` → `set`/`bean`/`alert`/`drop`, counting hits per rule. Each step edits its own copy, taken through `Fields.copy` — a `LinkedHashMap` for text, a view over a *cloned* builder for a typed record; `keep` and `rename` build a plain map | `dropped`; a SpEL evaluation failure (`derive`, a rule's `when`) is `rejected` |
 | key | `amps.key` | SERVER: check; PUBLISHER: build the SowKey — or refuse | `rejected` |
-| encode | `amps.message-type`, `passthrough` | field map → json/fix/nvfix, or the original bytes unchanged | `rejected` |
-| batch | `amps.batch` | accumulate, release by size or idle time, one flush per batch | `failed` batches, plus a `PUBLISH_FLUSH_TIMEOUT` alert |
+| encode | `amps.payload-type`, `amps.message-type`, `passthrough` | field map → json/fix/nvfix text, or the wire form (bytes or text) of the codec `payload-type` names, or the original text or bytes unchanged | `rejected` |
+| batch | `amps.batch`, `amps.ack-mode` | accumulate, release by size or idle time; every command in order, then `FLUSH`: one flush per batch and ack; `PERSISTED`: park until the server's persisted ack, flush only over `max-pending` | `failed` batches, plus a `PUBLISH_FLUSH_TIMEOUT` alert; a write the server refused is `publish-rejected`, plus a `PUBLISH_REJECTED` alert |
 
 Five counters rather than one, because "the topic has fewer records than the feed" has five
-different causes and they need telling apart. They are what the status line prints — one line
+different causes and they need telling apart — plus two about the publish side, printed in
+both ack modes so the line keeps one shape: `pending`, the records issued and still waiting
+for their persisted ack (always `0` in `FLUSH` mode), and `publish-rejected`, the writes the
+server refused after the client had accepted them (acknowledged to the source anyway, and
+alerted; see the acknowledgment contract). `published` counts records AMPS acknowledged as
+persisted — by the batch in `FLUSH` mode, one by one in `PERSISTED` mode, where it trails
+what was issued by `pending` until the acks land. They are what the status line prints — one line
 per connector, then one `rules[…]` per rules step with each rule's hits, then one line per
 resource under `resource status:`, because a connector that is `RUNNING` beside a table that
 is `UNAVAILABLE` is publishing unenriched records and the two lines belong next to each
@@ -208,8 +237,8 @@ other:
 
 ```
 connector status:
-  ticks-tcp                RUNNING   connectors/ticks             received=8120 published=8120 batches=17 failed=0 rejected=0 filtered=0 dropped=0 ignored-deletes=0
-  orders-enriched          RUNNING   sow/connectors/orders        received=412 published=380 batches=9 failed=0 rejected=0 filtered=32 dropped=0 ignored-deletes=0 rules[limit-without-price=12,large-notional=3]
+  ticks-tcp                RUNNING   connectors/ticks             received=8120 published=8120 batches=17 failed=0 rejected=0 filtered=0 dropped=0 ignored-deletes=0 pending=0 publish-rejected=0
+  orders-enriched          RUNNING   sow/connectors/orders        received=412 published=380 batches=9 failed=0 rejected=0 filtered=32 dropped=0 ignored-deletes=0 pending=0 publish-rejected=0 rules[limit-without-price=12,large-notional=3]
 resource status:
   instruments AVAILABLE rows=1234 loaded=2026-09-19T14:00:00Z reloads=3 failures=0
 ```
@@ -221,14 +250,189 @@ succeeded=… failed=… ignored=…`, from `AlertManager.status()` and
 puts the connector and resource lines into an alert, but neither counter set rides on the
 periodic status log.
 
+## Payload types and codecs
+
+Everything above reads as if a payload were text, and until recently it always was: a
+`String` from a socket, a JSON feed or a FIX session, decoded by `format` and re-encoded by
+`message-type`. A Kafka topic of protobuf messages and a Hazelcast map of
+`IdentifiedDataSerializable` values are not text, and rendering them to JSON on the way in —
+which is what the Hazelcast driver still does by default — is a lossy guess at what the feed
+meant. So a record's payload is an `Object` (text, `byte[]`, or the typed object itself), and
+every record says what it is.
+
+**Two ints name a type.** `PayloadType(factoryId, classId)` is the pair a codec is registered
+under: the factory id names the serialization family (a Hazelcast `DataSerializableFactory`, a
+Thrift `TBase` generation, a protobuf descriptor set — the test codec calls itself `100/1`,
+an application decides the rest), the class id the concrete type within it — exactly how
+Hazelcast's `IdentifiedDataSerializable` spells identity, and close enough to how everything
+else does. Two ints rather than a class name so that a driver can tag a payload without
+loading the type, and a codec bean and a source agree on a value rather than on a
+classloader. `0/0` is `UNSET`, and it is **not a codec**: it means "text, and the connector
+decides the format" — `format` on the way in, `message-type` on the way out — which is every
+connector that existed before payloads were typed. The four text formats (JSON, FIX, NVFIX,
+TEXT) are that default path, and a registry is only ever consulted for a set pair. A half-set
+pair (`0/n`, `n/0`) names nothing and is refused, by the record at construction and by the
+validator in configuration, as is a negative id.
+
+**A codec is a bean.** [`PayloadCodec`](core/src/main/java/com/demo/amps/connectors/codec/PayloadCodec.java)
+is `type()`, `decoder()` and `encoder()` (either side may be `null` for a codec that only
+reads or only writes), and the auto-configuration collects every `PayloadCodec` bean in the
+context into one
+[`PayloadCodecRegistry`](core/src/main/java/com/demo/amps/connectors/codec/PayloadCodecRegistry.java)
+that every connector's pipeline is built with. Two codecs claiming one type are refused (a
+record could not know which decodes it), a codec claiming `0/0` is refused, and a lookup that
+fails names the type and lists what *is* registered, because the answer is usually in that
+list. An application that reads a typed feed therefore declares a codec bean the way it
+declares a `RecordTransform`, in a module under `apps/`, and the framework itself ships none:
+the seam is proven with one test codec in core's tests (`codec/TestPojoCodec`, type `100/1`,
+a stand-in for a generated message class whose view *counts* every field read), and real
+Thrift and protobuf codecs are the follow-up modules (`codec-thrift`, `codec-protobuf`): a
+`PayloadCodec` bean each, plus one metadata-driven `FieldView` and encoder over `TBase` field
+metadata or a protobuf `Descriptor`, with no per-type code.
+
+**The field map stays the contract.** The pipeline works on `Map<String, Object>` and nothing
+in it knows a generated class; the codec is the bridge. Its decoder takes the object itself
+(what a Hazelcast map delivers) or its serialized bytes (what a Kafka topic delivers) and
+returns a [`FieldView`](core/src/main/java/com/demo/amps/connectors/codec/FieldView.java): a
+`Map<String, Object>` *over* the object's builder rather than a copy of it. `get(name)` reads
+one field when asked — a descriptor lookup and a getter, not a walk over the message;
+`keySet()` is the fields that are *set* (protobuf's `getAllFields` semantics, so
+`containsKey` means "present", which is what a filter's `present` rule means by it and what a
+proto3 scalar at its default value is not); a nested message is a nested view, a repeated
+field a `List`, an enum its name. Writes go to the builder: `put` is `setField` with the
+codec's coercion from a `String` or a `Number`, `remove` is `clearField`, and a `put` of a
+field the type does not have is an `IllegalArgumentException` the pipeline counts as
+rejected — the reference codec's rule, because a codec that silently ignored the write would
+turn a `set` into a no-op nobody could see. `type()` says which codec made the view,
+`target()` is the builder — the typed escape hatch for a code transform that would rather
+use generated accessors — and `copy()` is a view over a *cloned* builder. Occurrence keys
+(`55#2`) are a FIX idea and absent: a typed repeated field is a list, not a numbered set of
+keys.
+
+That last method is what keeps the copy rule cheap. The pipeline gives every step its own
+copy of the fields, and the one way it ever makes one is `Fields.copy(map)`: a `LinkedHashMap`
+copy for a plain map, `view.copy()` for a view. Every built-in step, every `rules` step and
+the documented `RecordTransform` contract copy through it, so a `set` on a protobuf record
+clones the builder and sets one field, reads nothing else, and never flattens the message —
+`RecordPipelineTest` asserts as much through the test codec's read counter. The object the
+source delivered (`record.data()`) shares its builder with the view only until that first
+copy, and is never touched by anything downstream of the decoder. Two steps build a genuinely
+new map rather than copying — `keep`, and `rename`, because a builder has no way to call a
+field by another name — and after either a typed record is a plain map: the codec's encoder
+accepts one and **rebuilds** the object from it first, the one path that materialises
+anything, taken only when a step asked for it.
+
+**The out side is the target's.** `amps.payload-type` names the codec whose encoder writes
+the payload; left at `0/0`, `message-type`'s text encoder writes the field map as it always
+has. An encoder handed a view of its own type builds the wire form straight from `target()`;
+handed a plain map, it rebuilds. What it returns — `byte[]` or `String` — is the wire form
+the codec is written for, a property of the codec bean and not of the framework: protobuf
+bytes for an AMPS `protobuf` topic, or JSON text (`JsonFormat`, say) for a `json` one.
+`HaAmpsPublisher` sends bytes as bytes, through the client's `byte[]` overloads, and anything
+else as text. `message-type` accepts `json`, `fix`, `nvfix`, `protobuf` and `binary`; the
+last two have no text encoder, so the validator refuses them without a set `payload-type`.
+A `payload-type` no registered codec encodes fails the connector's *start*, naming what is
+registered, while a record tagged with a type no codec decodes is rejected per record with
+the same message — the registry is the application's beans, which the static validator cannot
+see, and a source cannot see it either.
+
+The combinations that follow, and what each one runs:
+
+| in — `#r.type` | out — `amps.payload-type` | what runs |
+|---|---|---|
+| `0/0`, text by `format` | `0/0`, text by `message-type` | the format decoder and the text encoder: everything before this section |
+| `200/3`, a codec | `0/0`, `message-type: json` | the codec's decoder, then the `json` text encoder over the view — a typed feed translated onto a JSON topic |
+| `200/3` | `200/3`, `message-type: protobuf` | the codec both ways; with no transforms, the encoder writes the untouched builder straight out |
+| `0/0` | `200/3` | the format decoder, then the codec's encoder rebuilding its object from the map — a JSON feed onto a protobuf topic, if the fields fit |
+
+**Passthrough has a narrower meaning now.** `passthrough: AUTO` publishes the original payload
+when the type in *is* the type out and no transform touched the record: for two `0/0` sides
+that is still "`format` matches `message-type`" (TEXT never matches, as before); with a set
+type on either side the two types are compared. And whatever the setting says — `ALWAYS`
+included — only a `String` or a `byte[]` can pass through, because only they *are* a wire
+form. A typed object (a Hazelcast value handed through as itself) is not: publishing it
+untouched would put `String.valueOf(object)` on the topic, so it always goes through the
+codec's encoder, which for a same-type target builds the wire form from the object with no
+field map in between — as cheap as passthrough is for bytes, and honest.
+
+**Where typed payloads come from.** Two sources carry them; the others stay text.
+
+- **Kafka**: `source.kafka.payload-type: { factory-id, class-id }` says the topic's values are
+  the serialized form of that type. The value deserializer becomes `ByteArrayDeserializer`,
+  every record is tagged with the type — tombstones too, so every record of one stream says
+  the same thing about what it carries — and the codec decodes the `byte[]`.
+- **Hazelcast**: a `String` or a `HazelcastJsonValue` is text under `0/0`, as before. Anything
+  else is an object the cluster stored as one, and `source.hazelcast.typed-values` decides its
+  fate: `JSON` (the default) renders it with Gson and hands the text to `format: JSON`;
+  `OBJECT` hands an `IdentifiedDataSerializable` through **as the object**, under
+  `PayloadType.of(factoryId, classId)`, for the codec registered under those ids. Either way
+  the ids ride along as the `factoryId` and `classId` attributes, so a rule can tell one class
+  of value from another without decoding it. The client can only deliver such a value once it
+  can deserialize it, which is what `serialization-factories: { <factoryId>: <bean name> }`
+  is for: the application's `DataSerializableFactory` beans, registered on the *client's*
+  serialization config when the source is built — a name that is not such a bean fails the
+  connector's start, naming the connector and the id — and the validator refuses `OBJECT` with
+  no factory, a mode that could never engage. An `IdentifiedDataSerializable` whose ids cannot
+  spell a type (a class id of zero, or one of the negative ids Hazelcast keeps for its own
+  classes) is rendered as JSON and warned about once.
+
+What a codec looks like, cut down from `TestPojoCodec` to the shape a generated message class
+would give it — the decoder returns a view, the view reads and writes the builder, the encoder
+writes the builder out or rebuilds one from a plain map:
+
+```java
+public final class OrderCodec implements PayloadCodec {
+
+    static final PayloadType TYPE = PayloadType.of(200, 3);
+
+    @Override public PayloadType type() { return TYPE; }
+
+    /** The object itself (a Hazelcast value) or its bytes (a Kafka value) -> a view over a builder. */
+    @Override public RecordDecoder decoder() {
+        return payload -> payload instanceof Order order
+                ? new OrderView(order.toBuilder())
+                : new OrderView(Order.parseFrom(Payloads.bytes(payload)).toBuilder());   // malformed -> IllegalArgumentException
+    }
+
+    /** A view of this type -> the wire form straight from its builder; a plain map (after a keep) -> rebuild first. */
+    @Override public PayloadEncoder encoder() {
+        return fields -> fields instanceof OrderView view
+                ? view.builder.build().toByteArray()
+                : Order.fromMap(fields).toByteArray();
+    }
+
+    /** Reads on demand, writes to the builder, copy() clones it; keySet() is the SET fields, in schema order. */
+    private static final class OrderView extends AbstractMap<String, Object> implements FieldView {
+        private final Order.Builder builder;
+        OrderView(Order.Builder builder) { this.builder = builder; }
+        @Override public PayloadType type() { return TYPE; }
+        @Override public Object target() { return builder; }
+        @Override public FieldView copy() { return new OrderView(builder.clone()); }
+        @Override public boolean containsKey(Object key) { return builder.isSet(name(key)); }
+        @Override public Object get(Object key) { return builder.isSet(name(key)) ? builder.get(name(key)) : null; }   // a nested message as a nested view, a repeated field as a List
+        @Override public Object put(String key, Object value) { return builder.set(key, value); }   // coerces; an unknown field -> IllegalArgumentException
+        @Override public Object remove(Object key) { return builder.clear(name(key)); }
+        @Override public Set<String> keySet() { return builder.setFields(); }
+        @Override public Set<Map.Entry<String, Object>> entrySet() { /* lazy: one entry per set field, its value read on demand -- TestPojoCodec.LazyEntries */ }
+        @Override public int size() { return keySet().size(); }
+        private static String name(Object key) { return String.valueOf(key); }
+    }
+}
+```
+
+`#r.type.factoryId` and `#r.type.classId` are the pair as SpEL sees it, `0` and `0` for text,
+and `#r.text` is the payload as text whatever it arrived as — a diagnostic for a typed object,
+never its wire form.
+
 ## Batching and the acknowledgment contract
 
-A connector does not publish records, it publishes **batches**, and the batch is also the unit
-of durability:
+A connector does not publish records, it publishes **batches**, and the batch is the unit of
+durability — or, in the second acknowledgment mode, the unit of *issue*:
 
-1. Each record the pipeline accepts is sent into a `DirectChannel`, so the **source's own
-   thread** carries it through decode, filter, transforms, key and encode.
-2. A Spring Integration **aggregator** holds the results. It releases when
+1. Each record the pipeline accepts becomes a `MessageContext` sent into a `DirectChannel`,
+   so the **source's own thread** carries it through decode, filter, transforms, key and
+   encode.
+2. A Spring Integration **aggregator** holds the contexts. It releases when
    `amps.batch.max-messages` have accumulated — on that same source thread, which is where the
    back-pressure comes from: a source that outruns AMPS ends up waiting in its own reader loop
    instead of growing a queue — or when `amps.batch.flush-interval` has passed since the
@@ -236,27 +440,86 @@ of durability:
    feed's last record does not sit unsent and a busy neighbour cannot make it wait.
 3. `BatchPublisher` issues every command of the batch in order (publish, delta_publish,
    sow_delete — order is preserved, because a delete and the publish beside it are not
-   commutative), and then waits **once** on `publishFlush` for `amps.flush-timeout`.
-4. **Only if that flush returns** does it call `acknowledge()` on every record in the batch.
+   commutative). Every command answers with the **AMPS client sequence** the publish store
+   assigned it — the number the store keys its replay by and the server's persisted acks
+   count up to — and it is written onto the context as `dataOutSeqno` (`0` without a store,
+   and then nothing is written).
+4. What happens next is `amps.ack-mode`:
+   - **`FLUSH`**, the default: the batch waits **once** on `publishFlush` for
+     `amps.flush-timeout`, and **only if that flush returns** does it call `ack()` on every
+     context — all of the batch or none of it, on the thread that published it.
+   - **`PERSISTED`**: the batch does not wait. Each context is parked in a
+     `PersistedAckTracker` under its out-side sequence and the source thread goes back to
+     reading. The AMPS client has no "persisted" callback of its own, but it has the publish
+     store: every persisted ack the server sends — cumulative, "everything up to *n* is in the
+     transaction log" — reaches the store as `discardUpTo(n)`, on the client's receive thread,
+     and the connector's store is wrapped in an `ObservingStore` that passes the number on
+     after the real store has discarded. The tracker drains every context at or below *n* in
+     sequence order and acknowledges each to its source, **coalescing** consecutive contexts
+     that share an `Acknowledger` — one Kafka partition, one JDBC poll loop — into a single
+     `ackBatch(first, last)` over their in-side positions; a run of one is a plain `ack()`.
+     Identity, not equality: two partitions' acknowledgers are two objects, and a range across
+     them would mean nothing. What bounds the mode is `amps.batch.max-pending` (10,000 by
+     default, twenty full batches): once more than that many records are waiting, the batch
+     that crossed the line flushes on its own thread until AMPS has caught up — the same
+     back-pressure `FLUSH` applies to every batch, applied only when AMPS falls behind. A
+     flush that times out there is counted and logged; the records stay parked, and the next
+     ack or the next flush covers them. The logon after a reconnect goes through the same
+     `discardUpTo`, which is what covers acks that were in flight when the connection dropped.
 5. Stopping a connector closes the source, then forces the aggregator's partial batch out
-   *synchronously*, then unregisters the flow, then disconnects. Reversed, the last few records
-   the source had already read would be dropped on the floor at every shutdown.
+   *synchronously* (published and, in `FLUSH` mode, acknowledged before the call returns),
+   then — `PERSISTED` only — **drains**: one flush of `flush-timeout` while the client is still
+   connected, so the last acks can land, and a WARN saying how many records were published but
+   not acknowledged if they did not (they will be re-read). Then it unregisters the flow and
+   disconnects. Reversed, the last few records the source had already read would be dropped on
+   the floor at every shutdown.
 
-What an acknowledgment means is the source's business: **Kafka** commits offsets from its poll
-thread for acknowledged records only (`enable.auto.commit=false`), and **JDBC INCREMENTAL**
-persists its watermark. TCP and Hazelcast have nothing to acknowledge to, so their records
-carry no ack at all.
+A publish the **server** refuses after the client accepted it is a third fate, and both modes
+handle it the same way: the client reports it on its receive thread through a
+`FailedWriteHandler`, with the command's sequence and a reason. The client discards the entry
+— nothing will retry it — so the record is acknowledged to its source (re-reading it would
+fail the same way), counted as `publish-rejected` on the status line, and raised as
+`PUBLISH_REJECTED` (ERROR, with `seqno`, `reason` and `reasonText`), because no batch counter
+ever fails over it. A `Duplicate` is not one of those: it is a replayed publish the server
+already had, the normal aftermath of a reconnect, counted apart and not alerted. Before this
+handler existed, a write the server refused was acknowledged in silence; it is installed in
+both modes, so the loss is a counter and an alert in `FLUSH` mode too.
 
-The contract is **at-least-once**. A crash between a publish and its flush re-reads those
-records; a flush that times out is not data loss either — the HAClient's publish store still
-holds everything unacknowledged and replays it after a reconnect — it only means the batch's
-records are not acknowledged *yet*. Duplicates are harmless on a keyed topic (the second
-publish is the same upsert) and visible on a journal topic, which is the trade a journal topic
-makes anyway.
+What an acknowledgment means is the source's business, and the argument is the record's own
+`seqno`, cumulative per stream. **Kafka** keeps one `Acknowledger` per partition (an offset
+means nothing outside its partition), records `offset + 1` for it, and commits from its poll
+thread for acknowledged records only (`enable.auto.commit=false`); an acknowledger whose
+partition was revoked or lost since the record was read moves nothing, so a rebalance can
+cost a duplicate re-read but never a stale commit over another member's position. **JDBC
+INCREMENTAL** numbers its rows with a delivery counter, parks each row's mark under that number
+*before* handing it over, and on `ack(n)` folds every mark at or below *n* into the watermark
+the poll thread persists — the exact position stays inside the driver and in the record's
+`watermark` attribute, and the number the framework sees is one it can compare. TCP, Hazelcast,
+AMPS-as-a-source and a SNAPSHOT query have nothing to acknowledge to, so their records carry
+`Acknowledger.NONE` — numbered still, for `#r.seqno`, but with nothing behind the number.
+
+The contract is **at-least-once**, in both modes. A crash between a publish and its
+acknowledgment re-reads those records; a flush that times out is not data loss either — the
+HAClient's publish store still holds everything unacknowledged and replays it after a
+reconnect with its original sequences, which the server's cumulative ack then covers — it only
+means the records are not acknowledged *yet*. Duplicates are harmless on a keyed topic (the
+second publish is the same upsert) and visible on a journal topic, which is the trade a
+journal topic makes anyway. What `PERSISTED` buys is the removal of the stall per batch; what
+it costs is `max-pending` as the new bound on what is in flight (and re-read after a crash),
+the tracker as one more place to reason about at-least-once, and acknowledgments that run on
+the AMPS receive thread, where a source's `Acknowledger` has to stay cheap (Kafka's is a map
+merge, JDBC's an atomic reference). One number worth knowing before choosing: measured on
+5.3.5.135, the server sends its persisted acks on a timer of roughly **one second**, so a
+`FLUSH`-mode batch, a back-pressure flush and the drain at stop each wait about that long
+whatever the batch size — which is why `max-messages` and `flush-interval` set throughput and
+latency together, and why a `PERSISTED` connector that never crosses `max-pending` never
+waits at all. `PersistedAckIT` shows both: two hundred records acknowledged by the acks alone
+in about a second, and fifty records with `max-pending: 5` taking a second per batch.
 
 `publish-store: MEMORY` survives a reconnect, `FILE` survives a restart for the price of a
 synchronous write per publish, and `NONE` turns the whole thing off and makes the connector
-fire-and-forget.
+fire-and-forget — which is why the validator refuses `ack-mode: PERSISTED` beside it: there
+would be no store to observe an ack through, and nothing would ever be acknowledged.
 
 ## The two key modes, and the trap one of them exists to avoid
 
@@ -321,8 +584,11 @@ and less than code:
 
 `when` is SpEL in the one dialect every expression here speaks — `#f` is the field map as the
 earlier steps *and the earlier rules* left it, `#r` is the `InboundRecord` (`#r.key`,
-`#r.action`, `#r.attributes['topic']`), `#num(x)` and `#str(x)` coerce — and it has to answer
-a boolean. `then` names one or more actions, and they always run in the one order that makes
+`#r.action`, `#r.attributes['topic']`, and now `#r.seqno`, the record's position in its
+source's stream, `#r.type.factoryId` and `#r.type.classId`, what the payload is — `0` and `0`
+for text — and `#r.text`, the payload as text; every accessor of the record is an expression
+for free, because the record is bound as itself), `#num(x)` and `#str(x)` coerce — and it has
+to answer a boolean. `then` names one or more actions, and they always run in the one order that makes
 sense: **`set`** the literal fields, run the **`bean`** (a `RecordTransform` bean, by name),
 raise the **`alert`**, and only then **`drop`**. The alert comes before the drop on purpose:
 the record a rule discards is exactly the one somebody wants to hear about, and it will never
@@ -347,7 +613,9 @@ Failures keep the pipeline's distinction. A `when` or a template that cannot be 
 a method that does not exist on the value it was given, a `when` that answered a string — is
 an `IllegalArgumentException` the pipeline counts as **rejected**, like a `derive` that fails;
 a rule that drops is counted as **dropped**, like any transform returning `null`. The input
-map is never written to: every `set` lands in a copy. Everything that can be wrong with the
+map is never written to: every `set` lands in a copy taken through `Fields.copy`, so a typed
+record's view is cloned rather than flattened, and a rule that names one field of a protobuf
+message reads that field and no other. Everything that can be wrong with the
 *configuration* is wrong at startup: `ConnectorValidator` refuses a rules step with no rules,
 a rule with no name or a name used twice in the step, a `when` that does not parse, a `then`
 with no action ("it would do nothing but count"), an alert without a code, a message that does
@@ -536,6 +804,7 @@ Every code the framework raises, and what to expect in `details`:
 | `SOURCE_ERROR` | WARN | `Connector` | a record threw on the way from the source into the flow — a path that should be unreachable, which is why it is worth an alert | `error`, `sourceErrors` |
 | `PUBLISH_FAILED` | ERROR | `AlertingAmpsPublisher` | a `publish`, `delta_publish` or `sow_delete` threw; the exception is rethrown and the batch fails as before | `operation`, `topic`, `error` |
 | `PUBLISH_FLUSH_TIMEOUT` | WARN | `AlertingAmpsPublisher` | a batch's flush did not complete within `flush-timeout`; not data loss — the publish store replays — but the batch stays unacknowledged and will be re-read | `timeout` |
+| `PUBLISH_REJECTED` | ERROR | `AlertingAmpsPublisher` | the server refused a publish the client had accepted, reported later on the receive thread as a failed write; the client discards it and nothing retries it, so the record is acknowledged to its source anyway and only this alert and the `publish-rejected` counter say so. A `Duplicate` — a replay the server already had — is counted apart and not alerted | `seqno` (the AMPS client sequence), `reason`, `reasonText` |
 | `CONNECTOR_START_FAILED` | WARN | `ConnectorManager` | a connector's start attempt failed (AMPS refused the logon, the source would not start); raised on every five-second retry and left to suppression to collapse | `error`, `retryIn` |
 | `RESOURCE_START_FAILED` | ERROR | `ResourceRegistry` | a resource's `start()` threw; the others still start | `resource`, `error` |
 | `RESOURCE_LOAD_FAILED` | ERROR | `JdbcLookupTable` | the first load, in `start()`, failed; the table is unavailable until a reload succeeds | `resource`, `error` |
@@ -555,8 +824,11 @@ not told which connector runs it (see "Writing a code transform").
 Where the pieces meet the pipeline: the AMPS client of every connector is wrapped in an
 [`AlertingAmpsPublisher`](core/src/main/java/com/demo/amps/connectors/alert/AlertingAmpsPublisher.java)
 inside `Connector`'s constructor — a decorator, so `BatchPublisher`, which is about the
-at-least-once contract, stays ignorant of who is listening — and a `rules` step raises under
-its connector's name because the `TransformContext` it was compiled with carries it.
+at-least-once contract, stays ignorant of who is listening; the `PublishListener` the batch
+publisher registers (its `PersistedAckTracker`) passes through the same decorator, which is
+where a failed write becomes `PUBLISH_REJECTED` on its way to the tracker — and a `rules` step
+raises under its connector's name because the `TransformContext` it was compiled with carries
+it.
 
 ## Control channel
 
@@ -658,9 +930,10 @@ amps-connectors:
     client-name-prefix: amps-connectors   # client name = "<prefix>-<connector name>"
     logon-timeout: 10s             # the logon ack, AND how long a FIRST connect keeps trying
     reconnect-delay: 5s            # HAClient reconnect backoff
-    publish-store: MEMORY          # MEMORY | FILE | NONE
+    publish-store: MEMORY          # MEMORY | FILE | NONE (NONE refuses ack-mode: PERSISTED)
     publish-store-dir: build/client-state/amps-connectors   # FILE only
-    flush-timeout: 10s             # how long a batch waits for the persisted ack
+    flush-timeout: 10s             # how long a FLUSH-mode batch, a PERSISTED back-pressure
+                                   #   flush and the drain at stop wait for the persisted ack
     publish-batch-bytes: 0         # >0 → client-side coalescing (setPublishBatching)
     publish-batch-delay: 10ms
   connectors: []                   # the list an instance file owns; NEVER in common/
@@ -728,6 +1001,9 @@ publish store nobody replays would be the wrong outcome of a long outage.
           poll-timeout: 500ms
           max-poll-records: 500
           reconnect-delay: 5s
+          # payload-type: { factory-id: 200, class-id: 3 }   # a topic of serialized messages:
+          #                               #   values read as bytes and tagged with the type,
+          #                               #   decoded by the codec registered for the pair
           properties: {}                  # raw consumer properties, applied last
         jdbc:                             # ── a polled query (format: JSON required) ───
           url: "jdbc:postgresql://${JDBC_HOST:localhost}:5432/trading"
@@ -754,6 +1030,13 @@ publish store nobody replays would be the wrong outcome of a long outage.
           #                               #   that repairs an entry event nobody received
           # predicate: "quantity > 0"     #   map only: a Hazelcast SQL predicate narrowing
           #                               #   the listener AND the snapshot, cluster-side
+          # serialization-factories: { 1000: positionFactory }   # factory id -> the bean name
+          #                               #   of a DataSerializableFactory, registered on the
+          #                               #   CLIENT so it can deserialize the values at all
+          # typed-values: JSON            # what a value that is an OBJECT becomes: JSON
+          #                               #   (default) renders it as text for format: JSON;
+          #                               #   OBJECT hands an IdentifiedDataSerializable
+          #                               #   through as itself, under its factory/class ids
           connection-timeout: 5s
           reconnect-delay: 5s
         amps:                             # ── an AMPS topic (a second client) ──────────
@@ -781,11 +1064,33 @@ template writes `|` between its fields and the generator swaps it for the connec
 A **JDBC** row has no wire format, so the source synthesises one — a flat JSON object keyed by
 result-set column *label*, aliases included, numbers left as numbers — which is why
 `format: JSON` is required there. A **Kafka** null value is a tombstone and becomes a DELETE;
-the message key becomes the record's key. **TCP** frames carry no key and never delete. A
-**Hazelcast map** value reaches the pipeline as text — a `String` passes through unchanged, a
-`HazelcastJsonValue` contributes its JSON, and a `Map`, a `List` or a POJO is serialised to
-JSON — so `format: JSON` is the setting that matches a cache of objects; its **topic** half
-bridges each message's `toString()` and never keys or deletes anything.
+the message key becomes the record's key; with a `payload-type` the values arrive as bytes for
+the codec instead of as text for `format`. **TCP** frames carry no key and never delete. A
+**Hazelcast** value — a map entry's or a topic message's, by one rule — reaches the pipeline
+as text unless told otherwise: a `String` passes through unchanged, a `HazelcastJsonValue`
+contributes its JSON, and a `Map`, a `List`, a POJO or an `IdentifiedDataSerializable` is
+rendered to JSON by Gson, so `format: JSON` is the setting that matches a cache of objects;
+`typed-values: OBJECT` instead hands an `IdentifiedDataSerializable` through as the object,
+under its own ids, for a registered codec (see "Payload types and codecs"). The **topic** half
+never keys or deletes anything.
+
+What every source says about a record, as `#r` sees it — the key it carries, the number it
+gives the record (`#r.seqno`), the attributes it attaches, and what an acknowledgment moves:
+
+| source | `#r.key` | `#r.seqno` | `#r.attributes` | an acknowledgment moves |
+|---|---|---|---|---|
+| `tcp` | none | a frame counter for the life of the source, across reconnects and, in `LISTEN`, across clients | `remote` | nothing (`Acknowledger.NONE`) |
+| `kafka` | the message key | the **offset** | `topic`, `partition`, `offset` | the partition's committed offset: one acknowledger per partition, `ack(offset)` records `offset + 1` and the poll thread commits it |
+| `jdbc` | the joined `key-columns`, or none | a delivery counter for the life of the source — rows and vanish-deletes in one sequence | `poll`; INCREMENTAL adds `watermark`, the row's own mark | INCREMENTAL: the persisted watermark, folded from the marks parked at or below the seqno; SNAPSHOT: nothing |
+| `hazelcast` topic | none | reliable: the **ringbuffer sequence**; plain: a delivery counter | `publishTime`, `member`; `factoryId`, `classId` for an `IdentifiedDataSerializable` value | nothing |
+| `hazelcast` map | `String.valueOf(entry key)` | a delivery counter, snapshot rows and entry events in one sequence | `map`, `event` (`ADDED`, `UPDATED`, `REMOVED`, `EVICTED`, `EXPIRED`, `SNAPSHOT`), `member`; `factoryId`, `classId` | nothing |
+| `amps` | the SowKey, or none | a delivery counter over the commands that carry a record — markers, acks and heartbeats take no number | `topic`, `command`, `bookmark` | nothing: the bookmark store is discarded on delivery |
+| `driver: SIMULATED` | `K-<n>` | the tick | none | nothing |
+
+A counter restarts with the process; the exact position — the AMPS bookmark, the JDBC mark —
+stays in the attributes and inside the driver, and the number is what the framework can
+compare and coalesce, which is what `ackBatch(from, to)` needs. Every source tags its records
+`0/0` except Kafka with a `payload-type` and Hazelcast under `typed-values: OBJECT`.
 
 An **AMPS** source has no message type of its own: the connector's `format` already says what
 the payload is, and in AMPS the message type belongs to the connection URI, so `format: FIX`
@@ -877,7 +1182,10 @@ a syntax error is a startup failure, not a per-record surprise. Filters see `#f`
 ```yaml
       amps:
         topic: sow/connectors/orders      # must exist in the server's flow configuration
-        message-type: fix                 # json | fix | nvfix — the encoder AND the URI
+        message-type: fix                 # json | fix | nvfix | protobuf | binary — the encoder
+                                          #   AND the URI; protobuf/binary need a payload-type
+        # payload-type: { factory-id: 200, class-id: 3 }   # the codec that writes the payload;
+                                          #   0/0 (default): message-type's text encoder does
         command: PUBLISH                  # PUBLISH | DELTA_PUBLISH (needs a key)
         key:
           fields: [ "11" ]                # SERVER: the fields to check. PUBLISHER: to join
@@ -885,16 +1193,23 @@ a syntax error is a startup failure, not a per-record surprise. Filters see `#f`
           mode: SERVER                    # SERVER | PUBLISHER — see the table above
         on-delete: SOW_DELETE             # SOW_DELETE | IGNORE
         passthrough: AUTO                 # AUTO | ALWAYS | NEVER
+        ack-mode: FLUSH                   # FLUSH: ack the batch after its one flush |
+                                          #   PERSISTED: ack each record on the server's
+                                          #   persisted ack, no wait per batch (needs a store)
         batch:
           max-messages: 500               # a full batch publishes on the source thread
           flush-interval: 250ms           # a partial batch publishes on the connector's own thread
+          max-pending: 10000              # PERSISTED only: records waiting for their ack before
+                                          #   the publishing thread flushes and waits
 ```
 
-`passthrough: AUTO` publishes the **original payload bytes** when the source format matches the
-message type and no transform touched the record — the record reaches AMPS byte for byte as the
-feed wrote it. Decoding still happens (the filter, the key and the counters need the fields);
-only the re-encoding is skipped. Any transform at all turns it off: once the field map has been
-edited, the original bytes are no longer what the connector means to publish.
+`passthrough: AUTO` publishes the **original payload** when the type in is the type out — for
+text, when the source format matches the message type — and no transform touched the record:
+the record reaches AMPS byte for byte as the feed wrote it. Decoding still happens (the filter,
+the key and the counters need the fields); only the re-encoding is skipped. Any transform at
+all turns it off: once the field map has been edited, the original bytes are no longer what
+the connector means to publish. Only text and bytes ever pass through; a typed object is
+always written by its codec's encoder, whatever the setting says.
 
 ### `resources:` — shared lookup tables
 
@@ -976,10 +1291,20 @@ carry on with, or `null` to drop the record. The contract is short and every cla
 reason: it must be **stateless and thread-safe**, because one instance serves every connector
 that names it and it runs on the source's reader thread (of which a `LISTEN` TCP connector has
 one per client); it **must not mutate the map it is given**, because the chain hands each step
-its own copy and the next step is reading the evidence; and it **sees `DELETE` records too**,
-because a delete's key is extracted from its fields the same way an upsert's is — a transform
-that derives a key field has to derive it for deletes too, or the removal cannot be addressed.
-A `null` return is counted as `dropped`, a thrown exception as `rejected`.
+its own copy and the next step is reading the evidence — so it returns a new map, and takes it
+through **`Fields.copy(fields)`** rather than `new LinkedHashMap<>(fields)`, because for a
+typed record the map is a `FieldView` and `Fields.copy` clones the builder behind it instead
+of flattening the object into a map the encoder would have to rebuild from; and it **sees
+`DELETE` records too**, because a delete's key is extracted from its fields the same way an
+upsert's is — a transform that derives a key field has to derive it for deletes too, or the
+removal cannot be addressed. A `null` return is counted as `dropped`, a thrown exception as
+`rejected`. The record is the in-half only: `record.text()` is the payload as text whatever it
+arrived as (a `byte[]` decoded as UTF-8; never `(String) record.data()`, which throws on a
+typed record), `record.seqno()`, `record.type()` and `record.attributes()` say where it came
+from, and for a typed record `record.data()` is the object itself and `FieldView.target()` the
+builder the map writes to — the escape hatch for a transform that would rather use generated
+accessors. Neither should be kept past `apply`: a view shares its builder with the record's
+object only until the first copy, and what the next step edits is a clone.
 
 The wiring is one annotation and one line of YAML. The bean lives in a module under
 [`apps/`](apps/README.md) — `apps/<name>/build.gradle.kts` is `plugins { id("amps.connector-app") }`
@@ -1028,7 +1353,9 @@ written happily by AMPS and then be unaddressable by any filter or `<Key>`. An e
 feeds a FIX topic therefore writes **numeric tags**: `48` (SecurityID), `22`
 (SecurityIDSource, `2` = SEDOL), `15` (Currency). Tag `10`, the session checksum, is dropped
 in the example configuration for the same reason `orders-kafka` drops it: re-encoded, it can
-only disagree with its own payload. And **the bean graph has a direction**: the
+only disagree with its own payload. (For a typed record the re-encoding is the codec's: a
+`put` of a field the type does not have is refused by the view, and the encoder writes the
+edited builder straight out.) And **the bean graph has a direction**: the
 `TransformRegistry` is built by instantiating every `RecordTransform`, an enricher holds a
 resource from the `ResourceRegistry`, the registry is built from the resources, the factories
 and the `AlertManager`, and the manager from the sinks. That is a chain, not a cycle, as long
@@ -1069,8 +1396,9 @@ enricher:
 ```
 
 `InstrumentEnricher.apply` is the whole example: a `DELETE`, or a record with no symbol, goes
-through unchanged; a hit returns a new map with the `set` columns and the `literals` written
-(through `Fields.put`, so the tags land as numeric FIX fields); a miss counts, raises
+through as a copy; a hit returns a copy (`Fields.copy`, so a typed record's view would be
+cloned, not flattened) with the `set` columns and the `literals` written (through
+`Fields.put`, so the tags land as numeric FIX fields); a miss counts, raises
 `UNKNOWN_SYMBOL` (WARN, `{symbol, clOrdId}`) and either passes the record through unenriched
 (`PASS`, the default — a topic missing a SEDOL is better than a topic missing an order) or
 drops it (`DROP`); and a table with no snapshot yet raises `RESOURCE_UNAVAILABLE` instead and
@@ -1295,8 +1623,62 @@ prove a broken sink costs a counter) and `FakeResource`:
   flush) and `KafkaAlertAutoConfigurationTest`.
 - **apps/instrument-enricher**: `InstrumentEnricherTest` (an H2-backed table: a hit sets
   `48`/`22`/`15`, a miss under `PASS` and `DROP`, the alert's details, a delete untouched, the
-  input not mutated) and `InstrumentEnricherContextTest` (a `@SpringBootTest` binding the real
+  input not mutated, a typed record's `FieldView` copied through its own `copy()` and never
+  flattened) and `InstrumentEnricherContextTest` (a `@SpringBootTest` binding the real
   `config/local` files with a `RecordingAmpsPublisher` and a `RecordingAlertSink`).
+
+The typed payloads, the sequence numbers and the persisted-ack mode are tested at the same
+level, with `RecordingAmpsPublisher` grown to answer every command with a sequence (`1, 2,
+3…`, the way a client with a store does), to tell its `PublishListener` that a flush
+persisted everything, and — under `manualPersistedAcks` — to say exactly what the server
+confirmed (`persistUpTo`) or refused (`failWrite`):
+
+- **core, the types**: `PayloadTypeTest` (`0/0` is the text default, a half-set or negative
+  pair is refused), `PayloadCodecRegistryTest` (unknown, duplicate and `0/0` codecs; a one-way
+  codec), `PayloadsTest`, `InboundRecordTest` (the factories, the defaults, `text()` against
+  `data()`, `ack()` with the record's own seqno, `ackBatch`'s cumulative default),
+  `MessageContextTest` (the two halves' accessors, the write-once out-side sequence, a
+  delete's `null` payload), `TransformChainTest` and `RuleSetTest` (a step or a `set` edits a
+  clone of a typed record's builder, reading only what it named), `FieldExpressionsTest`
+  (`#r.seqno`, `#r.type`, `#r.text`), and `RecordPipelineTest` driven through
+  `codec/TestPojoCodec` — the decoder chosen by the record's type, the codec decoding its
+  bytes as well as its object, passthrough only when the type in is the type out and nothing
+  touched the record, a `keep` yielding a plain map the encoder rebuilds from, a type nobody
+  registered rejected rather than published as text, a target `payload-type` nobody encodes
+  failing at construction, `protobuf`/`binary` without a codec refused; `ConnectorFlowTest`
+  proves a typed payload reaches the publisher as the codec's wire form with its sequence.
+- **core, the acknowledgments**: `PersistedAckTrackerTest` (a cumulative drain in sequence
+  order; a run on one stream as one `ackBatch(first, last)`, cut where the acknowledger
+  *instance* changes; repeated or lower acks idempotent; a rejected write acknowledged and
+  counted, a duplicate counted apart; an ack that lands before its context is parked still
+  acknowledged exactly once; a throwing acknowledger contained; receive-thread acks racing
+  publishing-thread tracking), `ObservingStoreTest` (against a real `MemoryPublishStore`, no
+  server: the store assigns the sequence, `discardUpTo` reports it, every other method
+  delegates untouched), `BatchPublisherTest` (the sequence written onto each context, `0`
+  without a store; acks after the flush and none after a failed one; in `PERSISTED` mode no
+  flush per batch, nothing acknowledged until the acks arrive, `max-pending` forcing one
+  flush, `drain`), `HaAmpsPublisherTest` (a listener accepted before `connect()` with every
+  kind of store), `AlertingAmpsPublisherTest` (`PUBLISH_REJECTED` with its sequence and reason,
+  a duplicate without), `ConnectorFlowTest` (a `PERSISTED` flow acknowledges on the persisted
+  ack, not on the release, and `stop()` drains), `ConnectorValidatorTest` and
+  `SourcePayloadValidationTest` (`PERSISTED` with `publish-store: NONE` refused; the payload
+  type's shape on both sides; Hazelcast's factories and `typed-values`),
+  `ConnectorsAutoConfigurationTest` (a `PayloadCodec` bean lands in the registry every
+  pipeline is built with).
+- **the drivers**: `KafkaRecordSourceTest` (`payload-type` reads bytes and tags every record;
+  `ack(offset)` through the partition's acknowledger commits `offset + 1`, `ackBatch(first,
+  last)` commits `last + 1`, each partition's acknowledger moves only its own, a revoked
+  partition is committed synchronously and then forgotten), `JdbcRecordSourceTest` (every
+  delivery numbered across polls and deletes; acknowledging a seqno persists that row's mark
+  and covers the rows before it), `AmpsRecordSourceTest` (records numbered as delivered,
+  markers and failures take no number), `HazelcastRecordSourceTest` and
+  `HazelcastMapRecordSourceTest` (a reliable topic's seqno *is* its ringbuffer sequence, even
+  after `NEWEST` skipped the backlog; `typed-values: OBJECT` hands an
+  `IdentifiedDataSerializable` through as itself under its ids, from the snapshot and the feed
+  alike; `JSON` renders the same value and keeps the ids as attributes),
+  `HazelcastSourceFactoryTest` (a named factory
+  resolved to its bean and registered on the client; an unknown name fails the build naming
+  the connector and the id), `TcpRecordSourceTest` (frames as keyless upserts, numbered).
 
 Against a real AMPS, in a throwaway container:
 
@@ -1332,7 +1714,14 @@ SOW already held arrive, a later publish follows live, and a `sow_delete` on the
 out of focus and removes the mirror's record), and `ticks-replay`, a bookmark subscription
 from the epoch on a journal-only topic — chained so a tick travels journal → SOW → mirror
 through four AMPS clients, which is also the proof that a subscribing client and a publishing
-client of one connector can both log on. `InstrumentEnricherIT` (the app module's own suite)
+client of one connector can both log on. `PersistedAckIT` runs `ack-mode: PERSISTED` against
+the real client's publish store: two hundred positions on a connector that never crosses
+`max-pending` land in the SOW and are acknowledged by the server's acks alone — `published=200
+pending=0 publish-rejected=0` on the status line, `persisted` equal to the record count on the
+tracker, no back-pressure flush, no unsequenced command — and fifty events on a connector with
+`max-pending: 5` cross the line on every batch, flush on the publishing thread, and still
+leave the same SOW and the same `pending=0` behind; visibly slower, because every one of
+those flushes waits for the ack timer. `InstrumentEnricherIT` (the app module's own suite)
 seeds H2, runs the enricher with a simulated feed and real `control`/`alerts` topics, and
 asserts the enriched SOW, the `UNKNOWN_SYMBOL` alert, a `reload` command picking up an insert
 and a `status` command's `STATUS` alert. All of them skip rather than fail when `AMPS_IMAGE`
@@ -1427,9 +1816,11 @@ Spring Integration earns its place for exactly one job — the **batch**:
   so connectors stay **config-driven** — fifty connectors are fifty registrations, not fifty
   beans.
 
-The pipeline itself (`RecordPipeline`) is a plain function — `InboundRecord` in, `OutboundRecord`
-or `null` out — so everything interesting about decoding, filtering, transforming and keying is
-unit-tested with no framework at all.
+The pipeline itself (`RecordPipeline`) is a plain function — `InboundRecord` in,
+`MessageContext` (the record paired with the `OutboundRecord` it became) or `null` out — so
+everything interesting about decoding, filtering, transforming and keying is unit-tested with
+no framework at all; and the acknowledgment side is plain Java too, a tracker fed by the AMPS
+client's own store callback, tested against a real `MemoryPublishStore` with no server.
 
 **Resources, alerts and the control channel are plain beans and plain threads too**, not
 integration flows, for the same reason the sources are. None of them has the shape an
@@ -1445,8 +1836,9 @@ clock, `JdbcLookupTableTest` against H2 and `CommandDispatcherTest` against a
 `FakeRecordSource`, all of them in milliseconds and none of them with a context.
 
 **Why every connector has its own deadline thread.** The flush-interval release is not just a
-timer firing: it runs the whole publish, and a publish ends in `publishFlush`, which waits for
-the server's persisted ack — half a second and more against a real AMPS. Spring Boot builds
+timer firing: it runs the whole publish, and in `FLUSH` mode a publish ends in `publishFlush`,
+which waits for the server's persisted ack — half a second and more against a real AMPS, about
+a second on 5.3.5.135's ack timer. Spring Boot builds
 Spring Integration's shared `taskScheduler` with `spring.task.scheduling.pool.size` threads,
 **one** by default, so on it every connector's deadline queues behind whichever connector is
 mid-flush. Late would be tolerable; what actually happens is worse. The aggregator re-arms the
@@ -1476,14 +1868,20 @@ back-pressure becomes a queue depth and a rejection policy rather than a blocked
 ordering guarantee weakens the moment the poller has more than one thread, and records sitting
 in the queue at a crash are unacknowledged *and* unpublished, which is a second place to reason
 about at-least-once. For a connector whose source can replay, blocking the reader is the
-simpler correct answer.
+simpler correct answer. `ack-mode: PERSISTED` is the acknowledgment half of that change
+without the queue: the publish still runs on the source thread, in order, but the wait for the
+server's ack does not — the acks arrive on the client's receive thread and the tracker turns
+them into acknowledgments, so the reader blocks only when more than `max-pending` records are
+in flight.
 
 ## Custom applications
 
 An application that needs **code** — a `RecordTransform` bean named by a `transforms: [ { bean:
 … } ]` step, an `AppResource` bean for a client with no generic configuration, a
-`CommandHandler` or an `AlertSink` of its own, a decoder for a format nobody else speaks, a
-JDBC driver other than the blessed one — gets its own module under [`apps/`](apps/README.md).
+`CommandHandler` or an `AlertSink` of its own, a `PayloadCodec` bean for a typed payload
+(protobuf, Thrift, an `IdentifiedDataSerializable`) or a decoder for a format nobody else
+speaks, a JDBC driver other than the blessed one — gets its own module under
+[`apps/`](apps/README.md).
 The root `settings.gradle.kts` discovers every directory there that has a `build.gradle.kts`,
 and the `amps.connector-app` convention plugin means that file is about five lines. Everything
 else — a `rules` step, a `jdbc` resource, an alerts topic, a control channel — stays a
