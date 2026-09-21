@@ -232,6 +232,7 @@ public final class ConnectorValidator {
         errors.addAll(validateFilter(id, connector));
         errors.addAll(validateTransforms(id, connector));
         errors.addAll(validateKey(id, connector));
+        errors.addAll(validateSourcePayloads(id, connector));
         return errors;
     }
 
@@ -736,5 +737,62 @@ public final class ConnectorValidator {
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    /**
+     * The settings that type a source's payloads: Kafka's {@code payload-type} and Hazelcast's
+     * {@code serialization-factories} / {@code typed-values}.
+     *
+     * <p>Judged on shape alone, like the target's {@code payload-type}: whether a codec is
+     * registered for the pair, or a bean exists under the name, is a question about the
+     * application's beans that this static check cannot see, and the pipeline and the source
+     * factory each fail the connector's start with a readable message when the answer is no.
+     * What <em>can</em> be said here is that a half-set pair names nothing, that a factory id
+     * of zero or less can never spell a payload type (zero is the unset half of {@code 0/0},
+     * and Hazelcast keeps the negative ids for itself), and that {@code typed-values: OBJECT}
+     * with no factory registered is a mode that can never engage -- the client cannot
+     * deserialize an {@code IdentifiedDataSerializable} it has no factory for, so no value
+     * would ever reach the branch that hands it through.
+     */
+    private static List<String> validateSourcePayloads(String id, ConnectorProperties connector) {
+        List<String> errors = new ArrayList<>();
+        KafkaSourceProperties kafka = connector.getSource().getKafka();
+        if (kafka != null) {
+            AmpsTargetProperties.PayloadTypeProperties payloadType = kafka.getPayloadType();
+            if (payloadType.getFactoryId() < 0 || payloadType.getClassId() < 0) {
+                errors.add(id + "source.kafka.payload-type " + payloadType + ": factory-id and "
+                        + "class-id are non-negative");
+            } else if ((payloadType.getFactoryId() == 0) != (payloadType.getClassId() == 0)) {
+                errors.add(id + "source.kafka.payload-type " + payloadType + " names nothing: "
+                        + "set both factory-id and class-id to name the codec that decodes the "
+                        + "topic's bytes, or neither for text by format");
+            }
+        }
+        HazelcastSourceProperties hazelcast = connector.getSource().getHazelcast();
+        if (hazelcast != null) {
+            for (Map.Entry<Integer, String> factory
+                    : hazelcast.getSerializationFactories().entrySet()) {
+                if (factory.getKey() == null || factory.getKey() <= 0) {
+                    errors.add(id + "source.hazelcast.serialization-factories names factory id "
+                            + factory.getKey() + ", but a factory id is positive: zero is the "
+                            + "unset payload type and Hazelcast reserves the negative ids");
+                }
+                if (isBlank(factory.getValue())) {
+                    errors.add(id + "source.hazelcast.serialization-factories[" + factory.getKey()
+                            + "] names a blank bean: it has to be the name of a "
+                            + "DataSerializableFactory bean the client can register");
+                }
+            }
+            if (hazelcast.getTypedValues() == null) {
+                errors.add(id + "source.hazelcast.typed-values must be one of JSON/OBJECT");
+            } else if (hazelcast.getTypedValues() == HazelcastSourceProperties.TypedValues.OBJECT
+                    && hazelcast.getSerializationFactories().isEmpty()) {
+                errors.add(id + "source.hazelcast.typed-values: OBJECT needs "
+                        + "source.hazelcast.serialization-factories: a value is handed through "
+                        + "as an object only once the client has deserialized it, and without a "
+                        + "factory the client cannot -- so the mode would never engage");
+            }
+        }
+        return errors;
     }
 }

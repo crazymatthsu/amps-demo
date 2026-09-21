@@ -29,8 +29,11 @@ import org.slf4j.LoggerFactory;
  * application at boot rather than every record at runtime. It is stateless apart from two
  * counters, because one instance serves every connector that names it and runs on each
  * source's own reader thread. And it never writes into the map it is given: every outcome
- * is a fresh copy, which is the contract that lets the chain hand each step the previous
- * step's result without defensive copying of its own.
+ * is a fresh copy taken through {@link Fields#copy}, which is the contract that lets the
+ * chain hand each step the previous step's result without defensive copying of its own --
+ * and, because {@code Fields.copy} copies a typed record's {@code FieldView} through the
+ * view's own {@code copy()}, the contract that keeps a protobuf or Thrift order an object
+ * rather than flattening it into a map on its way through this transform.
  *
  * <p>Three outcomes, and what each says about the record:
  *
@@ -215,8 +218,9 @@ public final class InstrumentEnricher implements RecordTransform {
         return properties.getOnMiss() == EnricherProperties.OnMiss.DROP;
     }
 
+    /** The one copy: a {@code LinkedHashMap} of a plain map, the view's own copy of a typed one. */
     private static Map<String, Object> copy(Map<String, Object> fields) {
-        return new LinkedHashMap<>(fields);
+        return Fields.copy(fields);
     }
 
     private static String clOrdId(Map<String, Object> fields) {

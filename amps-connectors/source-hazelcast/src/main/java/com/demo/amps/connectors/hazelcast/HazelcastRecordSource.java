@@ -11,7 +11,10 @@ import com.hazelcast.cluster.Address;
 import com.hazelcast.cluster.Member;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.core.LifecycleEvent;
+import com.hazelcast.nio.serialization.DataSerializableFactory;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,12 +46,25 @@ import org.slf4j.LoggerFactory;
  *       <td>at-most-once events, unordered across partitions, repaired by the snapshot</td></tr>
  *   <tr><td>attributes</td><td>{@code publishTime}, {@code member}</td>
  *       <td>{@code map}, {@code event}, {@code member}</td></tr>
+ *   <tr><td>seqno</td><td>the ringbuffer sequence (reliable); a delivery counter (plain)</td>
+ *       <td>a delivery counter over events and snapshot rows alike</td></tr>
  *   <tr><td>acknowledgment</td><td colspan="2">none: neither structure has a position the
  *       connector could ask Hazelcast to go back to</td></tr>
+ *   <tr><td>a typed value</td><td colspan="2">an {@code IdentifiedDataSerializable} is
+ *       handed through as the object under its ids with {@code typed-values: OBJECT}, else
+ *       rendered as JSON; its ids ride along as {@code factoryId}/{@code classId} either way
+ *       ({@link HazelcastValues})</td></tr>
  * </table>
  *
  * <p>Exactly one of them is configured -- the validator refuses both and neither -- and the
  * choice is made once, here, when the source is built.
+ *
+ * <p>A value that is an {@code IdentifiedDataSerializable} can only reach either listener
+ * once the <em>client</em> can deserialize it, and a client is built from configuration, not
+ * from the application's classpath: the {@code DataSerializableFactory} beans named under
+ * {@code serialization-factories} are registered on the client's serialization config here,
+ * and a connector that names a factory nobody supplied is refused when the source is built
+ * rather than when the first value fails to arrive.
  *
  * <h2>Connecting is this source's own job</h2>
  *
@@ -94,6 +110,12 @@ public class HazelcastRecordSource implements RecordSource {
      */
     public static final String ATTRIBUTE_EVENT = "event";
 
+    /** Attribute carrying an {@code IdentifiedDataSerializable} value's factory id. Typed values only. */
+    public static final String ATTRIBUTE_FACTORY_ID = "factoryId";
+
+    /** Attribute carrying an {@code IdentifiedDataSerializable} value's class id. Typed values only. */
+    public static final String ATTRIBUTE_CLASS_ID = "classId";
+
     /** How long {@link #close()} waits for the source thread before giving up on it. */
     private static final long CLOSE_JOIN_MILLIS = 5_000;
 
@@ -106,6 +128,9 @@ public class HazelcastRecordSource implements RecordSource {
     private final ConnectorProperties connector;
     private final HazelcastSourceProperties source;
     private final HazelcastSubscription subscription;
+
+    /** The factories the client registers, by factory id: what deserializes a typed value. */
+    private final Map<Integer, DataSerializableFactory> factories;
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean connected = new AtomicBoolean(false);
@@ -122,9 +147,41 @@ public class HazelcastRecordSource implements RecordSource {
     private volatile HazelcastInstance client;
     private volatile Thread thread;
 
+    /**
+     * A source for a connector whose values need no factory of the application's.
+     *
+     * @param connector the connector configuration
+     * @throws IllegalArgumentException if the connector names a serialization factory -- it
+     *     needs the constructor that takes them, which is what {@link HazelcastSourceFactory}
+     *     calls
+     */
     public HazelcastRecordSource(ConnectorProperties connector) {
+        this(connector, Map.of());
+    }
+
+    /**
+     * @param connector the connector configuration
+     * @param factories the application's {@code DataSerializableFactory} beans by factory id,
+     *     resolved from {@code serialization-factories}; registered on every client this
+     *     source builds
+     * @throws IllegalArgumentException if the connector names a factory id these do not
+     *     supply -- a client without it would fail on the first typed value, and say so on a
+     *     Hazelcast event thread rather than at start
+     */
+    public HazelcastRecordSource(
+            ConnectorProperties connector, Map<Integer, DataSerializableFactory> factories) {
         this.connector = connector;
         this.source = connector.getSource().getHazelcast();
+        this.factories = new LinkedHashMap<>(factories);
+        for (Map.Entry<Integer, String> named : source.getSerializationFactories().entrySet()) {
+            if (!this.factories.containsKey(named.getKey())) {
+                throw new IllegalArgumentException("connector '" + connector.getName()
+                        + "': source.hazelcast.serialization-factories names factory "
+                        + named.getKey() + " ('" + named.getValue() + "'), but no factory was "
+                        + "supplied for it -- the source has to be built through "
+                        + "HazelcastSourceFactory, which resolves the bean");
+            }
+        }
         // Once, here: which structure a connector reads is configuration, not something to
         // re-decide per event or per reconnect.
         this.subscription = source.getMap() != null
@@ -220,6 +277,11 @@ public class HazelcastRecordSource implements RecordSource {
      * never comes up, and {@link #isConnected()} would have nothing to report. Bounded, a
      * failed attempt falls into this source's own backoff instead.
      *
+     * <p>The serialization factories are the application's, registered here because a
+     * client deserializes every value before its listener sees it: without the factory for an
+     * {@code IdentifiedDataSerializable} the client cannot deliver the value at all, in either
+     * {@code typed-values} mode.
+     *
      * @return the client configuration for this connector
      */
     ClientConfig clientConfig() {
@@ -228,6 +290,8 @@ public class HazelcastRecordSource implements RecordSource {
         config.setInstanceName(connector.getName() + "-hazelcast");
         // The connector's logging, not Hazelcast's own JUL default.
         config.setProperty("hazelcast.logging.type", "slf4j");
+        factories.forEach((id, factory) ->
+                config.getSerializationConfig().addDataSerializableFactory(id, factory));
         config.getNetworkConfig()
                 .setAddresses(source.getMembers())
                 .setConnectionTimeout((int) source.getConnectionTimeout().toMillis());

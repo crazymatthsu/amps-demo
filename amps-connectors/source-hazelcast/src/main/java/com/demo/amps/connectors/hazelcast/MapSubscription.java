@@ -2,13 +2,11 @@ package com.demo.amps.connectors.hazelcast;
 
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.HazelcastSourceProperties;
-import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.InboundRecord;
-import com.google.gson.Gson;
+import com.demo.amps.connectors.source.RecordHandler;
 import com.hazelcast.cluster.Member;
 import com.hazelcast.core.EntryEvent;
 import com.hazelcast.core.HazelcastInstance;
-import com.hazelcast.core.HazelcastJsonValue;
 import com.hazelcast.map.IMap;
 import com.hazelcast.map.IMapEvent;
 import com.hazelcast.map.MapEvent;
@@ -67,10 +65,13 @@ import org.slf4j.LoggerFactory;
  * <p>Entry events are fire-and-forget. Hazelcast does not queue them for a client that is not
  * there, does not replay them, and does not acknowledge them: an event raised while the client
  * was disconnected -- or dropped by a full event queue on the member -- is simply gone, which
- * is why records from here carry no
- * {@link com.demo.amps.connectors.source.Acknowledgment}. Ordering holds per key (one key
+ * is why records from here carry
+ * {@link com.demo.amps.connectors.source.Acknowledger#NONE}. Ordering holds per key (one key
  * lives on one partition and its events are delivered in order), and holds for nothing else:
  * two keys on two partitions arrive in whatever order their members' event threads produce.
+ * Nor is there a sequence: a map event has no position in anything, so each record's seqno
+ * is a delivery counter that runs for the life of the subscription -- the snapshot's rows and
+ * the live events numbered by one counter, in the order they were handed over.
  *
  * <p>The snapshot is what makes that survivable. Every (re)connect re-reads the map, so a lost
  * event costs the SOW accuracy only until the next connect rather than permanently -- and a
@@ -83,14 +84,19 @@ import org.slf4j.LoggerFactory;
  * <table border="1">
  *   <caption>Map events as records</caption>
  *   <tr><th>Hazelcast</th><th>record</th><th>{@code event} attribute</th></tr>
- *   <tr><td>added / updated</td><td>{@code InboundRecord.of(value, key)}</td>
+ *   <tr><td>added / updated</td><td>an upsert of the value, keyed by the entry key</td>
  *       <td>{@code ADDED} / {@code UPDATED}</td></tr>
  *   <tr><td>removed / evicted / expired</td><td>{@code InboundRecord.delete("", key)}</td>
  *       <td>{@code REMOVED} / {@code EVICTED} / {@code EXPIRED}</td></tr>
- *   <tr><td>the snapshot's rows</td><td>{@code InboundRecord.of(value, key)}</td>
+ *   <tr><td>the snapshot's rows</td><td>an upsert of the value, keyed by the entry key</td>
  *       <td>{@code SNAPSHOT}</td></tr>
  *   <tr><td>map cleared / map evicted</td><td>none -- a WARN and a counter</td><td></td></tr>
  * </table>
+ *
+ * <p>What the upsert's payload is follows {@link HazelcastValues}: text as it is, an object
+ * rendered as JSON, or -- under {@code typed-values: OBJECT} -- an
+ * {@code IdentifiedDataSerializable} handed through as itself under its ids, which also ride
+ * along as the {@code factoryId} and {@code classId} attributes.
  *
  * <p>A cleared or evicted map is a map-wide event: Hazelcast reports how many entries went,
  * and not one of the keys. Fabricating deletes from the connector's own idea of what the map
@@ -105,11 +111,12 @@ final class MapSubscription implements HazelcastSubscription {
     /** Keys per {@code getAll} round trip: a whole large map in one call is a whole map in one heap. */
     private static final int SNAPSHOT_CHUNK = 500;
 
-    /** Thread-safe and stateless; one instance rather than one per value. */
-    private static final Gson GSON = new Gson();
-
     private final ConnectorProperties connector;
     private final HazelcastSourceProperties source;
+    private final HazelcastValues values;
+
+    /** Numbers every record handed over -- events and snapshot rows alike -- for the subscription's life. */
+    private final AtomicLong delivered = new AtomicLong();
 
     /**
      * The configured predicate, compiled once: the listener and the snapshot are narrowed by
@@ -133,6 +140,7 @@ final class MapSubscription implements HazelcastSubscription {
     MapSubscription(ConnectorProperties connector) {
         this.connector = connector;
         this.source = connector.getSource().getHazelcast();
+        this.values = new HazelcastValues(connector);
         String sql = source.getPredicate();
         this.predicate = sql == null || sql.isBlank() ? null : Predicates.sql(sql);
     }
@@ -251,8 +259,9 @@ final class MapSubscription implements HazelcastSubscription {
     /** One snapshot row. Failures are per-entry: a map is not abandoned over one value. */
     private void emit(Object key, Object value, String member, RecordHandler handler) {
         try {
-            handler.onRecord(InboundRecord.of(text(value), String.valueOf(key))
-                    .withAttributes(attributes("SNAPSHOT", member)));
+            handler.onRecord(values.upsert(value, String.valueOf(key))
+                    .withSeqno(delivered.incrementAndGet())
+                    .withAttributes(attributes("SNAPSHOT", member, value)));
         } catch (RuntimeException e) {
             log.error("[{}] failed to handle Hazelcast map entry '{}'",
                     connector.getName(), key, e);
@@ -326,9 +335,10 @@ final class MapSubscription implements HazelcastSubscription {
     /** An entry that exists with this value. */
     private void upsert(EntryEvent<Object, Object> event, String kind, RecordHandler handler) {
         try {
-            handler.onRecord(InboundRecord
-                    .of(text(event.getValue()), String.valueOf(event.getKey()))
-                    .withAttributes(attributes(kind, memberOf(event))));
+            Object value = event.getValue();
+            handler.onRecord(values.upsert(value, String.valueOf(event.getKey()))
+                    .withSeqno(delivered.incrementAndGet())
+                    .withAttributes(attributes(kind, memberOf(event), value)));
         } catch (RuntimeException e) {
             // One bad record is not a reason to drop the subscription.
             log.error("[{}] failed to handle Hazelcast map {} event for key '{}'",
@@ -348,7 +358,8 @@ final class MapSubscription implements HazelcastSubscription {
     private void removed(EntryEvent<Object, Object> event, String kind, RecordHandler handler) {
         try {
             handler.onRecord(InboundRecord.delete("", String.valueOf(event.getKey()))
-                    .withAttributes(attributes(kind, memberOf(event))));
+                    .withSeqno(delivered.incrementAndGet())
+                    .withAttributes(attributes(kind, memberOf(event), null)));
         } catch (RuntimeException e) {
             log.error("[{}] failed to handle Hazelcast map {} event for key '{}'",
                     connector.getName(), kind, event.getKey(), e);
@@ -372,42 +383,24 @@ final class MapSubscription implements HazelcastSubscription {
                 event.getNumberOfEntriesAffected());
     }
 
-    // ---- values, keys and metadata ------------------------------------------------------
+    // ---- keys and metadata --------------------------------------------------------------
 
     /**
-     * A map value as the payload the pipeline decodes.
+     * The attributes every record from this subscription carries, plus the value's own ids
+     * when it has them.
      *
-     * <p>A {@code String} is already whatever the feed writes -- JSON, FIX, a line of text --
-     * and passes through untouched. A {@link HazelcastJsonValue} is a string Hazelcast knows is
-     * JSON (it indexes and queries inside it), so it is its own text. Anything else is a
-     * {@code Map}, a {@code List} or a POJO the cluster stores as an object, and Gson renders
-     * it as JSON -- which is why a map connector is configured {@code format: JSON} unless the
-     * values really are strings in another format.
-     *
-     * @param value the value from an event or the snapshot
-     * @return the payload; {@code ""} for a null value, which only a delete should carry
+     * @param event what happened to the entry
+     * @param member where it happened, or {@code null}
+     * @param value the value, or {@code null} for a removal, which carries none
      */
-    private static String text(Object value) {
-        if (value == null) {
-            return "";
-        }
-        if (value instanceof String string) {
-            return string;
-        }
-        if (value instanceof HazelcastJsonValue json) {
-            return json.getValue();
-        }
-        return GSON.toJson(value);
-    }
-
-    /** The attributes every record from this subscription carries. */
-    private Map<String, String> attributes(String event, String member) {
-        Map<String, String> attributes = new LinkedHashMap<>(4);
+    private Map<String, String> attributes(String event, String member, Object value) {
+        Map<String, String> attributes = new LinkedHashMap<>(6);
         attributes.put(HazelcastRecordSource.ATTRIBUTE_MAP, source.getMap());
         attributes.put(HazelcastRecordSource.ATTRIBUTE_EVENT, event);
         if (member != null) {
             attributes.put(HazelcastRecordSource.ATTRIBUTE_MEMBER, member);
         }
+        HazelcastValues.describe(value, attributes);
         return attributes;
     }
 

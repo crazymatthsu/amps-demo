@@ -1,6 +1,7 @@
 package com.demo.amps.connectors.jdbc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
@@ -22,6 +23,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.LongStream;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -33,8 +35,9 @@ import org.junit.jupiter.api.io.TempDir;
  * <p>What is worth asserting here is everything the source decides for itself: the JSON it
  * synthesises from a result set and the types it keeps, what a key that stopped appearing
  * turns into (and that the removal still carries the columns a SERVER-keyed topic needs to
- * build its filter), and where the incremental mark leaves off -- on disk, only once AMPS has
- * confirmed the row. The driver's own behaviour is H2's to test.
+ * build its filter), how the rows are numbered, and where the incremental mark leaves off --
+ * on disk, only once AMPS has confirmed the row, and moved by a cumulative acknowledgment
+ * that names a seqno rather than a mark. The driver's own behaviour is H2's to test.
  *
  * <p>Identifiers are quoted in the DDL because H2 folds unquoted ones to upper case: a
  * connector addresses columns by the label {@code ResultSetMetaData} reports, so the tests
@@ -162,6 +165,9 @@ class JdbcRecordSourceTest {
             // A snapshot has no position to remember: the next poll re-reads the row whatever
             // AMPS said about this one, so there is nothing an acknowledgment could advance.
             assertThat(record.acknowledger()).isSameAs(Acknowledger.NONE);
+            // Numbered all the same -- the first delivery is 1 -- but with no mark to carry.
+            assertThat(record.seqno()).isEqualTo(1L);
+            assertThat(record.attributes()).doesNotContainKey("watermark");
             // Which poll a row came from is the only transport metadata a query has.
             assertThat(Long.parseLong(record.attributes().get("poll"))).isGreaterThanOrEqualTo(1);
 
@@ -239,6 +245,44 @@ class JdbcRecordSourceTest {
             assertThat(received.get(0).key()).isEqualTo("ACC-1|AAPL");
             assertThat(received.get(1).key()).isNull();
             assertThat(text(received.get(1), "account")).isEqualTo("ACC-2");
+        }
+    }
+
+    @Test
+    @DisplayName("every delivery is numbered, in order, across polls and across deletes")
+    void deliveriesAreNumberedAcrossPolls() throws Exception {
+        String url = database();
+        execute(url,
+                "CREATE TABLE positions (\"account\" VARCHAR(16), \"quantity\" INTEGER)",
+                "INSERT INTO positions VALUES ('ACC-1', 1)",
+                "INSERT INTO positions VALUES ('ACC-2', 2)");
+
+        ConnectorProperties connector = keyedOn(
+                connector(url, "SELECT * FROM positions ORDER BY \"account\""), "account");
+
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
+            source.start(received::add);
+            awaitRecords(received, 2);
+            execute(url, "DELETE FROM positions WHERE \"account\" = 'ACC-2'");
+            Awaitility.await().atMost(Duration.ofSeconds(5))
+                    .until(() -> !deletes(received).isEmpty());
+
+            // The counter runs for the life of the source, not per poll, and a vanish-delete
+            // takes a number like any other delivery: a seqno is a position in the source's
+            // stream, and the stream is everything it handed over -- so the n-th record is
+            // numbered n, however many polls it took to get there.
+            List<InboundRecord> delivered = List.copyOf(received);
+            assertThat(delivered).extracting(InboundRecord::seqno)
+                    .containsExactlyElementsOf(
+                            LongStream.rangeClosed(1, delivered.size()).boxed().toList());
+            assertThat(delivered.subList(0, 2)).extracting(InboundRecord::key, InboundRecord::action)
+                    .containsExactly(
+                            tuple("ACC-1", InboundRecord.Action.UPSERT),
+                            tuple("ACC-2", InboundRecord.Action.UPSERT));
+            InboundRecord delete = deletes(delivered).get(0);
+            assertThat(delete.key()).isEqualTo("ACC-2");
+            assertThat(delete.seqno()).isEqualTo(delivered.indexOf(delete) + 1L);
         }
     }
 
@@ -321,9 +365,71 @@ class JdbcRecordSourceTest {
                     .containsExactly("T-1", "T-2", "T-3");
             assertThat(received).extracting(InboundRecord::action)
                     .containsOnly(InboundRecord.Action.UPSERT);
-            // Unlike a snapshot row, this one has a position worth remembering.
+            // Unlike a snapshot row, this one has a position worth remembering -- carried as
+            // the `watermark` attribute in the form the state file would hold it, and
+            // acknowledged through ONE acknowledger for the whole feed, because the
+            // acknowledgment is cumulative by seqno rather than per row.
             assertThat(received).extracting(InboundRecord::acknowledger)
                     .doesNotContain(Acknowledger.NONE);
+            assertThat(received.get(1).acknowledger()).isSameAs(received.get(0).acknowledger());
+            assertThat(received.get(2).acknowledger()).isSameAs(received.get(0).acknowledger());
+            assertThat(received).extracting(InboundRecord::seqno).containsExactly(1L, 2L, 3L);
+            assertThat(received).extracting(record -> record.attributes().get("watermark"))
+                    .containsExactly("1", "2", "3");
+        }
+    }
+
+    @Test
+    @DisplayName("acknowledging a seqno persists that row's mark and covers the rows before it")
+    void acknowledgingASeqnoMovesTheWatermarkCumulatively(@TempDir Path directory)
+            throws Exception {
+        String url = database();
+        execute(url,
+                "CREATE TABLE trades (\"trade_id\" VARCHAR(16), \"seq\" BIGINT)",
+                "INSERT INTO trades VALUES ('T-1', 10)",
+                "INSERT INTO trades VALUES ('T-2', 20)",
+                "INSERT INTO trades VALUES ('T-3', 30)",
+                "INSERT INTO trades VALUES ('T-4', 40)");
+
+        Path stateFile = directory.resolve("trades.watermark");
+        ConnectorProperties connector =
+                incremental(connector(url, "SELECT * FROM trades ORDER BY \"seq\""), "seq");
+        connector.getSource().getJdbc().setStateFile(stateFile.toString());
+
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
+            source.start(received::add);
+            awaitRecords(received, 4);
+            assertThat(received).extracting(InboundRecord::seqno).containsExactly(1L, 2L, 3L, 4L);
+
+            // ack(3) says rows 1..3 reached AMPS: the mark lands on the THIRD row's position,
+            // not the first's, and the rows before it are covered without a call each.
+            received.get(2).ack();
+            awaitWatermark(stateFile, "30");
+
+            // A lower seqno afterwards is already covered: the mark never walks backwards.
+            received.get(0).ack();
+            severalMorePolls();
+            assertThat(Files.readString(stateFile, StandardCharsets.UTF_8).strip()).isEqualTo("30");
+
+            // A run is one call, and it is the last position that counts.
+            received.get(3).ackBatch(4L, 4L);
+            awaitWatermark(stateFile, "40");
+        }
+
+        // The persisted mark is what a restart resumes past.
+        execute(url, "INSERT INTO trades VALUES ('T-5', 50)");
+        List<InboundRecord> resumed = new CopyOnWriteArrayList<>();
+        try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
+            source.start(resumed::add);
+            awaitRecords(resumed, 1);
+            severalMorePolls();
+
+            assertThat(resumed).extracting(record -> text(record, "trade_id")).containsExactly("T-5");
+            // A new source, a new counter: the number is a delivery count, the mark is the
+            // position, and only the mark was ever on disk.
+            assertThat(resumed.get(0).seqno()).isEqualTo(1L);
+            assertThat(resumed.get(0).attributes()).containsEntry("watermark", "50");
         }
     }
 

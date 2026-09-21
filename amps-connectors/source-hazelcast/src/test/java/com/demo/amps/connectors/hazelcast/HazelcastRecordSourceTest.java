@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.demo.amps.connectors.TestConnectors;
+import com.demo.amps.connectors.codec.PayloadType;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.HazelcastSourceProperties;
 import com.demo.amps.connectors.source.Acknowledger;
@@ -15,9 +16,12 @@ import com.hazelcast.config.JoinConfig;
 import com.hazelcast.config.NetworkConfig;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.ringbuffer.Ringbuffer;
+import com.hazelcast.ringbuffer.impl.RingbufferService;
 import com.hazelcast.topic.ITopic;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -41,9 +45,10 @@ import org.junit.jupiter.api.TestMethodOrder;
  *
  * <p>A mock would prove nothing here: the questions worth asking are whether a plain topic
  * really does lose what was published before the subscription, whether a reliable one really
- * does replay it, and whether the client really does wait for a cluster that is not up yet.
- * All three are Hazelcast's behaviour rather than this driver's, so the driver is tested
- * against Hazelcast.
+ * does replay it -- and number each message with the ringbuffer sequence it sits at --
+ * whether a typed value really does arrive as the object once the client has its factory,
+ * and whether the client really does wait for a cluster that is not up yet. All of them are
+ * Hazelcast's behaviour rather than this driver's, so the driver is tested against Hazelcast.
  *
  * <p>One member for the whole class, on its own cluster name (this JVM's pid), bound to
  * loopback with every join mechanism off -- otherwise a colleague running Hazelcast on the
@@ -95,6 +100,11 @@ class HazelcastRecordSourceTest {
         // The test shuts its own members down; a hook would fight the JVM's exit.
         config.setProperty("hazelcast.shutdownhook.enabled", "false");
 
+        // The member never deserializes a Trade itself, but a test that reads one back
+        // through the member would, and a member that knows the factory cannot surprise one.
+        config.getSerializationConfig()
+                .addDataSerializableFactory(Trades.FACTORY_ID, new Trades.Factory());
+
         NetworkConfig network = config.getNetworkConfig();
         network.setPort(port).setPortAutoIncrement(autoIncrement);
         network.getInterfaces().setEnabled(true).clear().addInterface("127.0.0.1");
@@ -130,6 +140,28 @@ class HazelcastRecordSourceTest {
         hazelcast.setReliable(true);
         hazelcast.setReliableFrom(from);
         return connector;
+    }
+
+    /**
+     * The same connector with the {@link Trades} factory named, the way an application names
+     * its bean, and reading typed values in {@code mode}.
+     */
+    private ConnectorProperties typed(
+            ConnectorProperties connector, HazelcastSourceProperties.TypedValues mode) {
+        HazelcastSourceProperties hazelcast = connector.getSource().getHazelcast();
+        hazelcast.setSerializationFactories(Map.of(Trades.FACTORY_ID, "tradeFactory"));
+        hazelcast.setTypedValues(mode);
+        return connector;
+    }
+
+    /** The source a {@link #typed} connector gets: the named factory supplied, as the factory bean would. */
+    private static HazelcastRecordSource typedSource(ConnectorProperties connector) {
+        return new HazelcastRecordSource(connector, Map.of(Trades.FACTORY_ID, new Trades.Factory()));
+    }
+
+    /** The ringbuffer behind a reliable topic, where its sequences live. */
+    private Ringbuffer<Object> ringbufferOf(String topic) {
+        return member.getRingbuffer(RingbufferService.TOPIC_RB_PREFIX + topic);
     }
 
     private static void awaitRecords(List<InboundRecord> received, int count) {
@@ -171,6 +203,9 @@ class HazelcastRecordSourceTest {
             assertThat(record.acknowledger()).isSameAs(Acknowledger.NONE);
             assertThat(record.action()).isEqualTo(InboundRecord.Action.UPSERT);
             assertThat(record.attributes()).containsOnlyKeys("publishTime", "member");
+            // Text, and numbered by delivery: a plain topic has no sequence of its own.
+            assertThat(received).extracting(InboundRecord::type).containsOnly(PayloadType.UNSET);
+            assertThat(received).extracting(InboundRecord::seqno).containsExactly(1L, 2L);
             assertThat(Long.parseLong(record.attributes().get("publishTime")))
                     .isGreaterThanOrEqualTo(before);
             assertThat(record.attributes().get("member")).isEqualTo("127.0.0.1:" + port);
@@ -209,6 +244,7 @@ class HazelcastRecordSourceTest {
         List<InboundRecord> received = new CopyOnWriteArrayList<>();
         ITopic<String> topic = member.getReliableTopic("replay-oldest");
         topic.publish("early");
+        long earlyAt = ringbufferOf("replay-oldest").tailSequence();
 
         ConnectorProperties connector = reliable(
                 connector("replay-oldest-hazelcast", "replay-oldest"),
@@ -217,12 +253,19 @@ class HazelcastRecordSourceTest {
             source.start(received::add);
             awaitConnected(source, Duration.ofSeconds(10));
             topic.publish("late");
+            long lateAt = ringbufferOf("replay-oldest").tailSequence();
             awaitRecords(received, 2);
 
             // Initial sequence 0 is the head of the ringbuffer, so the backlog comes first
             // and in order -- this is the only way this transport survives a restart.
             assertThat(received).extracting(InboundRecord::data)
                     .containsExactly("early", "late");
+            // And each record's seqno IS its ringbuffer sequence: the position Hazelcast hands
+            // the listener just before the message, which is what reliable-from resumes by.
+            assertThat(received).extracting(InboundRecord::seqno)
+                    .containsExactly(earlyAt, lateAt);
+            assertThat(earlyAt).isEqualTo(0L);
+            assertThat(lateAt).isEqualTo(1L);
         }
     }
 
@@ -246,6 +289,83 @@ class HazelcastRecordSourceTest {
             Awaitility.await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(3))
                     .until(() -> received.size() == 1);
             assertThat(received).extracting(InboundRecord::data).containsExactly("late");
+            // Skipping the backlog does not renumber what follows: the seqno is still the
+            // ringbuffer's own sequence, not a count of what this listener saw.
+            assertThat(received.get(0).seqno())
+                    .isEqualTo(ringbufferOf("replay-newest").tailSequence())
+                    .isEqualTo(1L);
+        }
+    }
+
+    // ---- typed values ---------------------------------------------------------------------
+
+    @Test
+    @Order(5)
+    @DisplayName("typed-values: OBJECT hands an IdentifiedDataSerializable through as itself, under its ids")
+    void objectModeHandsTheValueThroughUnderItsType() {
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        ITopic<Object> topic = member.getReliableTopic("typed-object");
+        Trades.Trade trade = new Trades.Trade("AAPL", 10);
+
+        ConnectorProperties connector = typed(
+                reliable(connector("typed-object-hazelcast", "typed-object"),
+                        HazelcastSourceProperties.ReliableFrom.OLDEST),
+                HazelcastSourceProperties.TypedValues.OBJECT);
+        try (HazelcastRecordSource source = typedSource(connector)) {
+            source.start(received::add);
+            awaitConnected(source, Duration.ofSeconds(10));
+            topic.publish(trade);
+            topic.publish("{\"id\":1}");
+            awaitRecords(received, 2);
+
+            // The object itself -- deserialized by the factory the client was given, equal
+            // by value to what was published -- tagged with the pair the codec is registered
+            // under, so the pipeline never renders it. The ids also ride along as attributes.
+            InboundRecord typed = received.get(0);
+            assertThat(typed.data()).isInstanceOf(Trades.Trade.class).isEqualTo(trade);
+            assertThat(typed.type()).isEqualTo(PayloadType.of(Trades.FACTORY_ID, Trades.TRADE_CLASS_ID));
+            assertThat(typed.attributes())
+                    .containsEntry("factoryId", "1000")
+                    .containsEntry("classId", "7")
+                    .containsKeys("publishTime", "member");
+            assertThat(typed.seqno()).isEqualTo(0L);
+            assertThat(typed.key()).isNull();
+
+            // Text is still text: the mode only speaks to values that are objects.
+            InboundRecord text = received.get(1);
+            assertThat(text.data()).isEqualTo("{\"id\":1}");
+            assertThat(text.type()).isEqualTo(PayloadType.UNSET);
+            assertThat(text.attributes()).doesNotContainKeys("factoryId", "classId");
+            assertThat(text.seqno()).isEqualTo(1L);
+        }
+    }
+
+    @Test
+    @Order(6)
+    @DisplayName("typed-values: JSON, the default, renders the same value as JSON and keeps the ids as attributes")
+    void jsonModeRendersTheValue() {
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        ITopic<Object> topic = member.getTopic("typed-json");
+
+        ConnectorProperties connector = typed(
+                connector("typed-json-hazelcast", "typed-json"),
+                HazelcastSourceProperties.TypedValues.JSON);
+        try (HazelcastRecordSource source = typedSource(connector)) {
+            source.start(received::add);
+            awaitConnected(source, Duration.ofSeconds(10));
+            topic.publish(new Trades.Trade("MSFT", 25));
+            awaitRecords(received, 1);
+
+            // The fallback a source that cannot see the codec registry needs: JSON of the
+            // object is something format: JSON can always read, and the ids still say what
+            // it was.
+            InboundRecord rendered = received.get(0);
+            assertThat(rendered.data()).isEqualTo("{\"symbol\":\"MSFT\",\"quantity\":25}");
+            assertThat(rendered.type()).isEqualTo(PayloadType.UNSET);
+            assertThat(rendered.attributes())
+                    .containsEntry("factoryId", "1000")
+                    .containsEntry("classId", "7");
+            assertThat(rendered.seqno()).isEqualTo(1L);
         }
     }
 
@@ -260,7 +380,7 @@ class HazelcastRecordSourceTest {
      * under it.
      */
     @Test
-    @Order(5)
+    @Order(7)
     @DisplayName("close() waits for the message inside the handler instead of interrupting it")
     void closeLetsTheDeliveryInFlightFinish() throws Exception {
         CountDownLatch entered = new CountDownLatch(1);
@@ -316,7 +436,7 @@ class HazelcastRecordSourceTest {
     }
 
     @Test
-    @Order(6)
+    @Order(8)
     @DisplayName("close() removes the listener and shuts the client down")
     void closeShutsTheClientDown() {
         List<InboundRecord> received = new CopyOnWriteArrayList<>();
@@ -344,7 +464,7 @@ class HazelcastRecordSourceTest {
     }
 
     @Test
-    @Order(7)
+    @Order(9)
     @DisplayName("a cluster that is not up yet is waited for, not a failed start")
     void aMemberThatIsNotUpYetIsWaitedFor() {
         List<InboundRecord> received = new CopyOnWriteArrayList<>();

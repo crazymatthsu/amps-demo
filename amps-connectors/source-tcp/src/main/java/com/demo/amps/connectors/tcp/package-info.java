@@ -9,8 +9,10 @@
  * {@link com.demo.amps.connectors.config.TcpSourceProperties}.
  *
  * <p>A socket has no history and no keys, so this source replays nothing on connect and
- * attaches no {@link com.demo.amps.connectors.source.Acknowledgment}: there is no position to
- * commit and nothing to re-read. {@code LISTEN} accepts any number of clients and reads each
- * on its own thread; {@code CONNECT} redials with backoff.
+ * attaches {@link com.demo.amps.connectors.source.Acknowledger#NONE}: there is no position to
+ * commit and nothing to re-read. Each frame is numbered by a counter that runs for the life
+ * of the source, which is the one position a raw feed can be given. {@code LISTEN} accepts
+ * any number of clients and reads each on its own thread; {@code CONNECT} redials with
+ * backoff.
  */
 package com.demo.amps.connectors.tcp;

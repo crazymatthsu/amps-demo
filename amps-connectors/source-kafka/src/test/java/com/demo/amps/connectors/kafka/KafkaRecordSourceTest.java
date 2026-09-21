@@ -1,12 +1,15 @@
 package com.demo.amps.connectors.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.demo.amps.connectors.TestConnectors;
+import com.demo.amps.connectors.codec.PayloadType;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.KafkaSourceProperties;
 import com.demo.amps.connectors.source.Acknowledger;
 import com.demo.amps.connectors.source.InboundRecord;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
@@ -27,6 +30,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetCommitCallback;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.DisplayName;
@@ -37,10 +41,13 @@ import org.junit.jupiter.api.Test;
  *
  * <p>What is worth asserting here is everything the connector decides for itself: that it
  * joins a consumer group rather than owning its own position, that a tombstone becomes a
- * {@code DELETE}, and above all <em>when</em> an offset is committed. The last one is the
- * framework's at-least-once contract spelled in Kafka, so most of this file is about it: a
- * record that the pipeline never acknowledged must leave the group's offset where it was.
- * The consumer's own behaviour is Kafka's to test.
+ * {@code DELETE}, that a typed topic is read as bytes under its type, and above all
+ * <em>when</em> an offset is committed. The last one is the framework's at-least-once
+ * contract spelled in Kafka, so most of this file is about it: a record that the pipeline
+ * never acknowledged must leave the group's offset where it was, and the acknowledger every
+ * record carries is its partition's, called with an offset, so that acknowledging
+ * cumulatively -- one call for a run of records -- commits exactly what a per-record
+ * acknowledgment would. The consumer's own behaviour is Kafka's to test.
  */
 class KafkaRecordSourceTest {
 
@@ -48,6 +55,7 @@ class KafkaRecordSourceTest {
     private static final String TOPIC = "orders.events";
     private static final String GROUP = "amps-connectors-orders";
     private static final TopicPartition PARTITION = new TopicPartition(TOPIC, 0);
+    private static final TopicPartition OTHER_PARTITION = new TopicPartition(TOPIC, 1);
 
     /** Where the mock topic's retained log starts, so "offset + 1" is not "1". */
     private static final long BEGINNING = 12L;
@@ -78,14 +86,14 @@ class KafkaRecordSourceTest {
      * {@code close()} depends on. Sleeping OUTSIDE the monitor (before delegating) restores
      * the blocking poll the real consumer provides.
      */
-    private static class IdlingMockConsumer extends MockConsumer<String, String> {
+    private static class IdlingMockConsumer<V> extends MockConsumer<String, V> {
 
         IdlingMockConsumer() {
             super(OffsetResetStrategy.EARLIEST);
         }
 
         @Override
-        public ConsumerRecords<String, String> poll(Duration timeout) {
+        public ConsumerRecords<String, V> poll(Duration timeout) {
             try {
                 Thread.sleep(5);
             } catch (InterruptedException e) {
@@ -102,7 +110,7 @@ class KafkaRecordSourceTest {
      * {@code MockConsumer} refuses to answer anything once it has been closed; and the
      * rebalance listener is captured, because {@code MockConsumer.rebalance} never calls it.
      */
-    private static final class InFlightCommitMockConsumer extends IdlingMockConsumer {
+    private static final class InFlightCommitMockConsumer extends IdlingMockConsumer<String> {
 
         private final Map<TopicPartition, Long> syncCommits = new ConcurrentHashMap<>();
         private final AtomicInteger asyncCommits = new AtomicInteger();
@@ -130,7 +138,7 @@ class KafkaRecordSourceTest {
     }
 
     private static MockConsumer<String, String> mockConsumer() {
-        return prepared(new IdlingMockConsumer());
+        return prepared(new IdlingMockConsumer<>());
     }
 
     /**
@@ -138,14 +146,19 @@ class KafkaRecordSourceTest {
      * {@code MockConsumer} resolves a fresh partition's position inside {@code poll()} and
      * throws when it has none -- which the source would report as a broken consumer.
      */
-    private static <C extends MockConsumer<String, String>> C prepared(C consumer) {
-        consumer.updateBeginningOffsets(Map.of(PARTITION, BEGINNING));
-        consumer.updateEndOffsets(Map.of(PARTITION, BEGINNING));
+    private static <C extends MockConsumer<String, ?>> C prepared(C consumer) {
+        consumer.updateBeginningOffsets(Map.of(PARTITION, BEGINNING, OTHER_PARTITION, 0L));
+        consumer.updateEndOffsets(Map.of(PARTITION, BEGINNING, OTHER_PARTITION, 0L));
         return consumer;
     }
 
     private static ConsumerRecord<String, String> record(long offset, String key, String value) {
         return new ConsumerRecord<>(TOPIC, 0, offset, key, value);
+    }
+
+    private static ConsumerRecord<String, byte[]> bytes(long offset, String key, String value) {
+        return new ConsumerRecord<>(TOPIC, 0, offset, key,
+                value == null ? null : value.getBytes(StandardCharsets.UTF_8));
     }
 
     /**
@@ -156,13 +169,13 @@ class KafkaRecordSourceTest {
      * the records it carries belong in the same task.
      */
     @SafeVarargs
-    private static void deliver(
-            MockConsumer<String, String> consumer, ConsumerRecord<String, String>... records) {
+    private static <V> void deliver(
+            MockConsumer<String, V> consumer, ConsumerRecord<String, V>... records) {
         consumer.schedulePollTask(() -> {
             if (consumer.assignment().isEmpty()) {
                 consumer.rebalance(List.of(PARTITION));
             }
-            for (ConsumerRecord<String, String> record : records) {
+            for (ConsumerRecord<String, V> record : records) {
                 consumer.addRecord(record);
             }
         });
@@ -170,7 +183,7 @@ class KafkaRecordSourceTest {
 
     /** A source reading {@code consumer} instead of a broker, unstarted. */
     private static KafkaRecordSource source(
-            ConnectorProperties connector, MockConsumer<String, String> consumer) {
+            ConnectorProperties connector, MockConsumer<String, ?> consumer) {
         return new KafkaRecordSource(connector, () -> consumer);
     }
 
@@ -183,12 +196,16 @@ class KafkaRecordSourceTest {
     }
 
     /** The group's committed offset for the one partition, or {@code null} for none. */
-    private static Long committedOffset(MockConsumer<String, String> consumer) {
-        OffsetAndMetadata offset = consumer.committed(Set.of(PARTITION)).get(PARTITION);
+    private static Long committedOffset(MockConsumer<String, ?> consumer) {
+        return committedOffset(consumer, PARTITION);
+    }
+
+    private static Long committedOffset(MockConsumer<String, ?> consumer, TopicPartition partition) {
+        OffsetAndMetadata offset = consumer.committed(Set.of(partition)).get(partition);
         return offset == null ? null : offset.offset();
     }
 
-    private static void awaitCommit(MockConsumer<String, String> consumer, long offset) {
+    private static void awaitCommit(MockConsumer<String, ?> consumer, long offset) {
         Awaitility.await().atMost(Duration.ofSeconds(5))
                 .until(() -> Objects.equals(committedOffset(consumer), offset));
     }
@@ -275,10 +292,18 @@ class KafkaRecordSourceTest {
                     .containsExactly("{\"orderId\":\"ORD-1\"}", "{\"orderId\":\"ORD-2\"}");
             assertThat(received).extracting(InboundRecord::action)
                     .containsOnly(InboundRecord.Action.UPSERT);
+            // Text by the connector's format: nothing typed the topic.
+            assertThat(received).extracting(InboundRecord::type).containsOnly(PayloadType.UNSET);
+            // The offset IS the position: it is the seqno, and it is what the acknowledger
+            // is called with.
+            assertThat(received).extracting(InboundRecord::seqno)
+                    .containsExactly(BEGINNING, BEGINNING + 1);
             // Unlike TCP and Hazelcast, every record here can be acknowledged: an offset is
-            // exactly the position the framework's at-least-once contract needs.
+            // exactly the position the framework's at-least-once contract needs -- and the
+            // acknowledger is the partition's, shared by every record read from it.
             assertThat(received).extracting(InboundRecord::acknowledger)
                     .doesNotContain(Acknowledger.NONE);
+            assertThat(received.get(1).acknowledger()).isSameAs(received.get(0).acknowledger());
             assertThat(received.get(0).attributes())
                     .containsEntry("topic", TOPIC)
                     .containsEntry("partition", "0")
@@ -309,9 +334,68 @@ class KafkaRecordSourceTest {
             // Empty rather than null: the DELETE path still decodes the payload, and an
             // empty document is the quiet answer.
             assertThat(tombstone.text()).isEmpty();
+            assertThat(tombstone.seqno()).isEqualTo(BEGINNING + 1);
             assertThat(tombstone.acknowledger()).as("a removal is published too, so it is acked too")
                     .isNotSameAs(Acknowledger.NONE);
         }
+    }
+
+    // ---- a typed topic ----------------------------------------------------------------
+
+    @Test
+    @DisplayName("payload-type reads the values as bytes and tags every record with the type")
+    void aTypedTopicIsReadAsBytesUnderItsType() {
+        ConnectorProperties connector = connector(KafkaSourceProperties.From.EARLIEST);
+        connector.getSource().getKafka().getPayloadType().setFactoryId(100);
+        connector.getSource().getKafka().getPayloadType().setClassId(1);
+        PayloadType type = PayloadType.of(100, 1);
+
+        // The codec gets exactly the bytes the producer wrote, not a String decoded from them
+        // and re-encoded: a serialized protobuf is not text and must not be treated as it.
+        assertThat(new KafkaRecordSource(connector, null).consumerConfig())
+                .containsEntry(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
+                        ByteArrayDeserializer.class.getName())
+                .containsEntry(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
+                        StringDeserializer.class.getName());
+
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        MockConsumer<String, byte[]> consumer = prepared(new IdlingMockConsumer<>());
+        try (KafkaRecordSource source = source(connector, consumer)) {
+            source.start(received::add);
+            awaitConnected(source);
+            deliver(consumer,
+                    bytes(BEGINNING, "ORD-1", "{\"orderId\":\"ORD-1\"}"),
+                    bytes(BEGINNING + 1, "ORD-1", null));
+            awaitRecords(received, 2);
+
+            InboundRecord typed = received.get(0);
+            assertThat(typed.type()).isEqualTo(type);
+            assertThat(typed.data()).isInstanceOf(byte[].class);
+            assertThat((byte[]) typed.data())
+                    .containsExactly("{\"orderId\":\"ORD-1\"}".getBytes(StandardCharsets.UTF_8));
+            assertThat(typed.text()).isEqualTo("{\"orderId\":\"ORD-1\"}");
+            assertThat(typed.key()).isEqualTo("ORD-1");
+            assertThat(typed.seqno()).isEqualTo(BEGINNING);
+            assertThat(typed.acknowledger()).isNotSameAs(Acknowledger.NONE);
+
+            // A tombstone is still a DELETE with nothing to decode -- tagged with the topic's
+            // type like every other record of the stream.
+            InboundRecord tombstone = received.get(1);
+            assertThat(tombstone.action()).isEqualTo(InboundRecord.Action.DELETE);
+            assertThat(tombstone.type()).isEqualTo(type);
+            assertThat(tombstone.hasData()).isFalse();
+        }
+    }
+
+    @Test
+    @DisplayName("a half-set payload-type is refused when the source is built")
+    void aHalfSetPayloadTypeIsRefused() {
+        ConnectorProperties connector = connector(KafkaSourceProperties.From.EARLIEST);
+        connector.getSource().getKafka().getPayloadType().setClassId(1);
+
+        assertThatThrownBy(() -> new KafkaRecordSource(connector, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("0/1");
     }
 
     // ---- when an offset is committed --------------------------------------------------
@@ -379,6 +463,96 @@ class KafkaRecordSourceTest {
     }
 
     @Test
+    @DisplayName("ack(offset) through the partition's acknowledger commits offset + 1, whichever record carried it")
+    void ackByOffsetCommitsThePositionAfterIt() throws Exception {
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        MockConsumer<String, String> consumer = mockConsumer();
+
+        try (KafkaRecordSource source =
+                source(connector(KafkaSourceProperties.From.EARLIEST), consumer)) {
+            source.start(received::add);
+            awaitConnected(source);
+            deliver(consumer,
+                    record(BEGINNING, "ORD-1", "{\"orderId\":\"ORD-1\"}"),
+                    record(BEGINNING + 1, "ORD-2", "{\"orderId\":\"ORD-2\"}"),
+                    record(BEGINNING + 2, "ORD-3", "{\"orderId\":\"ORD-3\"}"));
+            awaitRecords(received, 3);
+
+            // The acknowledger is the stream's, not the record's: the first record's one,
+            // called with the second record's offset, commits past the second record.
+            received.get(0).ack(BEGINNING + 1);
+            awaitCommit(consumer, BEGINNING + 2);
+
+            // Cumulative: a lower position afterwards is already covered and moves nothing.
+            received.get(0).ack();
+            severalMorePolls();
+            assertThat(committedOffset(consumer)).isEqualTo(BEGINNING + 2);
+        }
+    }
+
+    @Test
+    @DisplayName("ackBatch(first, last) commits last + 1 -- a run is one commit, not one per record")
+    void ackBatchCommitsThePositionAfterTheRun() {
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        MockConsumer<String, String> consumer = mockConsumer();
+
+        try (KafkaRecordSource source =
+                source(connector(KafkaSourceProperties.From.EARLIEST), consumer)) {
+            source.start(received::add);
+            awaitConnected(source);
+            deliver(consumer,
+                    record(BEGINNING, "ORD-1", "{\"orderId\":\"ORD-1\"}"),
+                    record(BEGINNING + 1, "ORD-2", "{\"orderId\":\"ORD-2\"}"),
+                    record(BEGINNING + 2, "ORD-3", "{\"orderId\":\"ORD-3\"}"));
+            awaitRecords(received, 3);
+
+            received.get(2).ackBatch(BEGINNING, BEGINNING + 2);
+
+            awaitCommit(consumer, BEGINNING + 3);
+        }
+    }
+
+    @Test
+    @DisplayName("each partition has its own acknowledger, and an offset only ever moves its own")
+    void eachPartitionHasItsOwnAcknowledger() throws Exception {
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        MockConsumer<String, String> consumer = mockConsumer();
+
+        try (KafkaRecordSource source =
+                source(connector(KafkaSourceProperties.From.EARLIEST), consumer)) {
+            source.start(received::add);
+            awaitConnected(source);
+            consumer.schedulePollTask(() -> {
+                consumer.rebalance(List.of(PARTITION, OTHER_PARTITION));
+                consumer.addRecord(record(BEGINNING, "ORD-1", "{\"orderId\":\"ORD-1\"}"));
+                consumer.addRecord(new ConsumerRecord<>(TOPIC, 1, 0L, "ORD-2", "{\"orderId\":\"ORD-2\"}"));
+                consumer.addRecord(new ConsumerRecord<>(TOPIC, 1, 1L, "ORD-3", "{\"orderId\":\"ORD-3\"}"));
+            });
+            awaitRecords(received, 3);
+
+            InboundRecord onZero = received.stream()
+                    .filter(record -> record.attributes().get("partition").equals("0"))
+                    .findFirst().orElseThrow();
+            List<InboundRecord> onOne = received.stream()
+                    .filter(record -> record.attributes().get("partition").equals("1"))
+                    .toList();
+            assertThat(onOne).hasSize(2);
+            // An offset is a position within ONE partition, so the acknowledger is per
+            // partition: the two records of partition 1 share one, partition 0 has another.
+            assertThat(onOne.get(0).acknowledger()).isSameAs(onOne.get(1).acknowledger());
+            assertThat(onOne.get(0).acknowledger()).isNotSameAs(onZero.acknowledger());
+            assertThat(onOne).extracting(InboundRecord::seqno).containsExactly(0L, 1L);
+
+            onOne.get(1).ack();
+            Awaitility.await().atMost(Duration.ofSeconds(5))
+                    .until(() -> Objects.equals(committedOffset(consumer, OTHER_PARTITION), 2L));
+            severalMorePolls();
+            // Partition 0's record was never acknowledged, so partition 0 stays put.
+            assertThat(committedOffset(consumer, PARTITION)).isNull();
+        }
+    }
+
+    @Test
     @DisplayName("a handler that throws leaves its record's offset uncommitted")
     void aFailingHandlerLeavesTheRecordUncommitted() throws Exception {
         AtomicInteger seen = new AtomicInteger();
@@ -439,6 +613,19 @@ class KafkaRecordSourceTest {
             // And then forgotten: a partition somebody else owns is not this connector's to
             // keep committing.
             assertThat(consumer.asyncCommits.get()).isEqualTo(afterRevoke);
+
+            // The partition's acknowledger went with it. A batch flushed after the revoke
+            // still holds the old one, and its late acknowledgment must not re-enter an
+            // offset the next poll would commit over whatever the new owner has committed.
+            Acknowledger stale = received.get(0).acknowledger();
+            stale.ack(BEGINNING + 5);
+            severalMorePolls();
+            assertThat(consumer.asyncCommits.get()).isEqualTo(afterRevoke);
+
+            // Reassigned, the partition starts with a fresh acknowledger of its own.
+            deliver(consumer, record(BEGINNING + 1, "ORD-2", "{\"orderId\":\"ORD-2\"}"));
+            awaitRecords(received, 2);
+            assertThat(received.get(1).acknowledger()).isNotSameAs(stale);
         }
     }
 

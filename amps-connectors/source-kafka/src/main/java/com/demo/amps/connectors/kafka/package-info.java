@@ -10,7 +10,10 @@
  * consumer runs with {@code enable.auto.commit=false} and commits nothing until the batch
  * publisher says a record reached AMPS: offsets are committed from the poll thread, for
  * acknowledged records only, so a crash between a publish and its flush re-reads rather than
- * loses. A null-valued record is a tombstone and becomes a {@code DELETE}.
+ * loses. Every record's seqno is its offset and its acknowledger is its partition's, so the
+ * acknowledgment is cumulative per partition. A null-valued record is a tombstone and becomes
+ * a {@code DELETE}. A topic of serialized messages is read as bytes under the
+ * {@code payload-type} the connector names, for the application's codec to decode.
  *
  * <p>The rules it obeys live with the configuration it binds
  * ({@link com.demo.amps.connectors.config.KafkaSourceProperties}).
