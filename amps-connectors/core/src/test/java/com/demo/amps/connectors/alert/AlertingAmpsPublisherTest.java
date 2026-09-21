@@ -3,7 +3,9 @@ package com.demo.amps.connectors.alert;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.crankuptheamps.client.Message;
 import com.demo.amps.connectors.amps.AmpsPublisher;
+import com.demo.amps.connectors.amps.PublishListener;
 import com.demo.amps.connectors.amps.RecordingAmpsPublisher;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -89,5 +91,46 @@ class AlertingAmpsPublisherTest {
                 .containsEntry("topic", "sow/orders")
                 .containsEntry("error", "java.lang.IllegalStateException: publish to sow/orders failed");
         assertThat(raised.get(1).details()).containsEntry("operation", "sow_delete");
+    }
+
+    @Test
+    @DisplayName("a write the server refuses is an ERROR with its sequence and reason; a duplicate is not")
+    void aRejectedWriteIsAnErrorAndADuplicateIsNot() {
+        List<String> heard = new ArrayList<>();
+        publisher.setPublishListener(new PublishListener() {
+            @Override
+            public void persistedUpTo(long seqno) {
+                heard.add("persisted " + seqno);
+            }
+
+            @Override
+            public void failedWrite(long seqno, int reason) {
+                heard.add("failed " + seqno + " reason " + reason);
+            }
+        });
+        // The wrapper's listener sits on the publisher underneath, wrapping the test's.
+        assertThat(recording.listener()).isNotNull();
+
+        recording.persistUpTo(41);
+        recording.failWrite(42, Message.Reason.BadSowKey);
+        recording.failWrite(43, Message.Reason.Duplicate);
+
+        assertThat(heard).as("everything reaches the listener, in order")
+                .containsExactly("persisted 41", "failed 42 reason " + Message.Reason.BadSowKey,
+                        "failed 43 reason " + Message.Reason.Duplicate);
+        assertThat(raised).hasSize(1);
+        Alert alert = raised.get(0);
+        assertThat(alert.code()).isEqualTo(AlertingAmpsPublisher.PUBLISH_REJECTED);
+        assertThat(alert.severity()).isEqualTo(Alert.Severity.ERROR);
+        assertThat(alert.connector()).isEqualTo("orders");
+        assertThat(alert.details())
+                .containsEntry("seqno", 42L)
+                .containsEntry("reason", Message.Reason.BadSowKey)
+                .containsEntry("reasonText", "bad sow key");
+        assertThat(alert.message()).contains("42").contains("bad sow key").contains("not retried");
+
+        // Clearing the listener clears the one underneath too.
+        publisher.setPublishListener(null);
+        assertThat(recording.listener()).isNull();
     }
 }

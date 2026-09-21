@@ -1,17 +1,22 @@
 package com.demo.amps.connectors.amps;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.crankuptheamps.client.Message;
 import com.demo.amps.connectors.codec.PayloadType;
+import com.demo.amps.connectors.config.AmpsTargetProperties;
 import com.demo.amps.connectors.runtime.Command;
 import com.demo.amps.connectors.runtime.MessageContext;
 import com.demo.amps.connectors.runtime.OutboundRecord;
+import com.demo.amps.connectors.source.Acknowledger;
 import com.demo.amps.connectors.source.InboundRecord;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 class BatchPublisherTest {
@@ -27,6 +32,24 @@ class BatchPublisherTest {
     private static MessageContext publish(String data, InboundRecord record) {
         return MessageContext.of(record, OutboundRecord.publish(
                 "sow/orders", Command.PUBLISH, data, PayloadType.UNSET, "K-1"));
+    }
+
+    @Test
+    @DisplayName("the batch publisher registers its tracker as the publisher's listener, in both modes")
+    void registersTheTrackerAsTheListener() {
+        assertThat(publisher.listener()).isSameAs(batches.tracker());
+        assertThat(batches.ackMode()).isEqualTo(AmpsTargetProperties.AckMode.FLUSH);
+        assertThat(batches.pending()).isZero();
+
+        // A FLUSH-mode publisher still hears about a write the server refused: counted,
+        // and nothing else changes.
+        publisher.failWrite(99, Message.Reason.BadSowKey);
+        assertThat(batches.rejectedWrites()).isEqualTo(1);
+
+        assertThatThrownBy(() -> new BatchPublisher(publisher, "orders", Duration.ofSeconds(1),
+                AmpsTargetProperties.AckMode.PERSISTED, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max-pending");
     }
 
     @Test
@@ -204,5 +227,214 @@ class BatchPublisherTest {
                 new RecordingAmpsPublisher.Call("delta_publish", "t", "{\"a\":2}", "K-1"),
                 new RecordingAmpsPublisher.Call("publish", "t", bytes, null));
         assertThat(publisher.calls().get(2).data()).as("bytes go out as they are").isSameAs(bytes);
+    }
+
+    /**
+     * {@code ack-mode: PERSISTED}: the publisher's acks are under the test's control, so
+     * nothing is acknowledged until the test says the server persisted it.
+     */
+    @Nested
+    @DisplayName("in PERSISTED mode")
+    class Persisted {
+
+        private final RecordingAmpsPublisher publisher =
+                new RecordingAmpsPublisher().manualPersistedAcks(true);
+        private final BatchPublisher batches = new BatchPublisher(
+                publisher, "orders", Duration.ofSeconds(1),
+                AmpsTargetProperties.AckMode.PERSISTED, 4);
+
+        /** Records at consecutive positions on one stream that writes down every ack. */
+        private final List<String> acks = new ArrayList<>();
+        private final Acknowledger stream = new Acknowledger() {
+            @Override
+            public void ack(long seqno) {
+                acks.add("ack(" + seqno + ")");
+            }
+
+            @Override
+            public void ackBatch(long fromSeqno, long toSeqno) {
+                acks.add("batch(" + fromSeqno + ".." + toSeqno + ")");
+            }
+        };
+
+        private MessageContext record(long inSeqno) {
+            return publish("{\"n\":" + inSeqno + "}",
+                    InboundRecord.of("{}", "K-" + inSeqno).withSeqno(inSeqno).withAck(stream));
+        }
+
+        private List<MessageContext> records(long from, long to) {
+            List<MessageContext> batch = new ArrayList<>();
+            for (long i = from; i <= to; i++) {
+                batch.add(record(i));
+            }
+            return batch;
+        }
+
+        @Test
+        @DisplayName("a batch is issued without a flush, and nothing is acknowledged until the acks arrive")
+        void issuesWithoutFlushingAndWaitsForTheAcks() {
+            List<MessageContext> batch = records(1, 3);
+            batches.publish(batch);
+
+            assertThat(publisher.calls("publish")).hasSize(3);
+            assertThat(publisher.flushCount()).as("no flush per batch").isZero();
+            assertThat(batch).extracting(MessageContext::dataOutSeqno).containsExactly(1L, 2L, 3L);
+            assertThat(acks).isEmpty();
+            assertThat(batches.pending()).isEqualTo(3);
+            assertThat(batches.publishedBatches()).isEqualTo(1);
+            assertThat(batches.publishedMessages()).as("published = persisted").isZero();
+
+            // The server persisted the first two: acknowledged as one range, on this thread
+            // -- which stands in for the client's receive thread.
+            publisher.persistUpTo(2);
+            assertThat(acks).containsExactly("batch(1..2)");
+            assertThat(batches.pending()).isEqualTo(1);
+            assertThat(batches.publishedMessages()).isEqualTo(2);
+
+            publisher.persistUpTo(3);
+            assertThat(acks).containsExactly("batch(1..2)", "ack(3)");
+            assertThat(batches.pending()).isZero();
+            assertThat(batches.publishedMessages()).isEqualTo(3);
+            assertThat(publisher.flushCount()).isZero();
+        }
+
+        @Test
+        @DisplayName("more than max-pending records waiting forces one flush on the publishing thread")
+        void flushesWhenMoreThanMaxPendingAreWaiting() {
+            batches.publish(records(1, 4));
+            assertThat(publisher.flushCount()).as("4 pending is not over 4").isZero();
+            assertThat(batches.backpressureFlushes()).isZero();
+
+            // The fifth crosses the line. The recording publisher's flush persists nothing
+            // by itself here (manual acks), so the records stay pending, but the flush
+            // happened and was counted.
+            batches.publish(records(5, 5));
+            assertThat(publisher.flushCount()).isEqualTo(1);
+            assertThat(batches.backpressureFlushes()).isEqualTo(1);
+            assertThat(batches.flushTimeouts()).isZero();
+            assertThat(batches.pending()).isEqualTo(5);
+            assertThat(acks).isEmpty();
+
+            // A flush that times out is counted, and the records still stay pending.
+            publisher.failFlushes(1);
+            batches.publish(records(6, 6));
+            assertThat(publisher.flushCount()).isEqualTo(2);
+            assertThat(batches.flushTimeouts()).isEqualTo(1);
+            assertThat(batches.pending()).isEqualTo(6);
+            assertThat(batches.failedBatches()).as("not a failed batch: it was issued").isZero();
+
+            // The acks catch up; the next batch is under the line again and does not flush.
+            publisher.persistUpTo(6);
+            assertThat(acks).containsExactly("batch(1..6)");
+            assertThat(batches.pending()).isZero();
+            batches.publish(records(7, 8));
+            assertThat(publisher.flushCount()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("a flush that itself persists everything leaves nothing pending")
+        void aRealFlushDrainsThePending() {
+            publisher.manualPersistedAcks(false);
+            batches.publish(records(1, 5));
+            assertThat(publisher.flushCount()).isEqualTo(1);
+            assertThat(batches.pending()).isZero();
+            assertThat(acks).containsExactly("batch(1..5)");
+            assertThat(batches.publishedMessages()).isEqualTo(5);
+        }
+
+        @Test
+        @DisplayName("drain flushes once and reports what is still pending; nothing pending means no flush")
+        void drainFlushesOnceForWhatIsPending() {
+            batches.drain(Duration.ofSeconds(1));
+            assertThat(publisher.flushCount()).as("nothing pending, nothing to wait for").isZero();
+
+            batches.publish(records(1, 2));
+            batches.drain(Duration.ofSeconds(1));
+            assertThat(publisher.flushCount()).isEqualTo(1);
+            assertThat(batches.pending()).as("the acks did not come: they stay pending, and are logged")
+                    .isEqualTo(2);
+
+            publisher.manualPersistedAcks(false);
+            batches.drain(Duration.ofSeconds(1));
+            assertThat(publisher.flushCount()).isEqualTo(2);
+            assertThat(batches.pending()).isZero();
+            assertThat(acks).containsExactly("batch(1..2)");
+
+            // FLUSH mode has nothing to drain.
+            batches.drain(Duration.ofSeconds(1));
+            BatchPublisherTest.this.batches.drain(Duration.ofSeconds(1));
+            assertThat(publisher.flushCount()).isEqualTo(2);
+            assertThat(BatchPublisherTest.this.publisher.flushCount()).isZero();
+        }
+
+        @Test
+        @DisplayName("a write the server refuses is acknowledged, removed and counted; a duplicate is not a rejection")
+        void aFailedWriteAcknowledgesAndCounts() {
+            batches.publish(records(1, 3));
+
+            publisher.failWrite(2, Message.Reason.NotEntitled);
+            assertThat(acks).containsExactly("ack(2)");
+            assertThat(batches.pending()).isEqualTo(2);
+            assertThat(batches.rejectedWrites()).isEqualTo(1);
+            assertThat(batches.tracker().duplicates()).isZero();
+
+            publisher.failWrite(1, Message.Reason.Duplicate);
+            assertThat(acks).containsExactly("ack(2)", "ack(1)");
+            assertThat(batches.rejectedWrites()).isEqualTo(1);
+            assertThat(batches.tracker().duplicates()).isEqualTo(1);
+
+            publisher.persistUpTo(3);
+            assertThat(acks).containsExactly("ack(2)", "ack(1)", "ack(3)");
+            assertThat(batches.pending()).isZero();
+            assertThat(batches.publishedMessages()).as("only what was persisted").isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("a command that throws ends the batch: what was issued is parked, the rest is left to re-read")
+        void aThrowingCommandEndsTheBatch() {
+            RecordingAmpsPublisher flaky = new RecordingAmpsPublisher() {
+                private int calls;
+
+                @Override
+                public long publish(String topic, Object data, String sowKey) {
+                    if (++calls == 3) {
+                        throw new IllegalStateException("not connected");
+                    }
+                    return super.publish(topic, data, sowKey);
+                }
+            }.manualPersistedAcks(true);
+            BatchPublisher publisherOfFlaky = new BatchPublisher(flaky, "orders",
+                    Duration.ofSeconds(1), AmpsTargetProperties.AckMode.PERSISTED, 100);
+
+            publisherOfFlaky.publish(records(1, 5));
+
+            assertThat(flaky.calls("publish")).hasSize(2);
+            assertThat(publisherOfFlaky.failedBatches()).isEqualTo(1);
+            assertThat(publisherOfFlaky.publishedBatches()).isZero();
+            assertThat(publisherOfFlaky.pending()).isEqualTo(2);
+            flaky.persistUpTo(2);
+            assertThat(acks).containsExactly("batch(1..2)");
+            assertThat(publisherOfFlaky.publishedMessages()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("a publisher without a store answers 0, and the record is acknowledged on the publish alone")
+        void acknowledgesAnUnsequencedRecordAtOnce() {
+            RecordingAmpsPublisher storeless = new RecordingAmpsPublisher() {
+                @Override
+                public long publish(String topic, Object data, String sowKey) {
+                    super.publish(topic, data, sowKey);
+                    return 0;
+                }
+            }.manualPersistedAcks(true);
+            BatchPublisher publisherOfStoreless = new BatchPublisher(storeless, "orders",
+                    Duration.ofSeconds(1), AmpsTargetProperties.AckMode.PERSISTED, 100);
+
+            publisherOfStoreless.publish(records(1, 2));
+
+            assertThat(acks).containsExactly("ack(1)", "ack(2)");
+            assertThat(publisherOfStoreless.pending()).isZero();
+            assertThat(publisherOfStoreless.tracker().unsequenced()).isEqualTo(2);
+        }
     }
 }

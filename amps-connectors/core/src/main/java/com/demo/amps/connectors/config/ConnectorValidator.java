@@ -61,6 +61,7 @@ public final class ConnectorValidator {
         errors.addAll(validateResources(properties));
         errors.addAll(validateAlerts(properties));
         errors.addAll(validateControl(properties));
+        errors.addAll(validateAcknowledgment(properties));
         return errors;
     }
 
@@ -694,6 +695,43 @@ public final class ConnectorValidator {
             return List.of(id + where + " [" + text + "] does not parse as a template: "
                     + e.getMessage());
         }
+    }
+
+    /**
+     * The acknowledgment rules, which span the server block and each connector's target:
+     * {@code ack-mode: PERSISTED} is driven by the persisted acks the publish store sees, so
+     * with {@code publish-store: NONE} there is no store to see them through and nothing
+     * would ever be acknowledged -- a connector that publishes everything and commits nothing,
+     * re-reading its whole feed on every restart. And {@code max-pending} bounds that mode's
+     * back-pressure, so a bound of nothing is a bound that never lets a batch through.
+     *
+     * <p>Here rather than in {@link #validate(ConnectorProperties)} because the per-connector
+     * check cannot see the application's {@code amps:} block, and the store is configured
+     * once for all of them.
+     */
+    private static List<String> validateAcknowledgment(ConnectorsProperties properties) {
+        List<String> errors = new ArrayList<>();
+        AmpsServerProperties server = properties.getAmps();
+        for (ConnectorProperties connector : properties.getConnectors()) {
+            String id = "connector '" + connector.getName() + "': ";
+            AmpsTargetProperties target = connector.getAmps();
+            if (target.getAckMode() == null) {
+                errors.add(id + "amps.ack-mode must be one of FLUSH/PERSISTED");
+            } else if (target.getAckMode() == AmpsTargetProperties.AckMode.PERSISTED
+                    && server != null
+                    && server.getPublishStore() == AmpsServerProperties.PublishStore.NONE) {
+                errors.add(id + "amps.ack-mode: PERSISTED needs a publish store to observe the "
+                        + "persisted acks through, and amps-connectors.amps.publish-store is "
+                        + "NONE: nothing would ever be acknowledged to the source -- set the "
+                        + "store to MEMORY or FILE, or use amps.ack-mode: FLUSH");
+            }
+            if (target.getBatch().getMaxPending() < 1) {
+                errors.add(id + "amps.batch.max-pending must be at least 1: it is how many "
+                        + "records may wait for their persisted ack before the publishing "
+                        + "thread flushes, and a bound of none would flush after every batch");
+            }
+        }
+        return errors;
     }
 
     private static boolean isBlank(String value) {

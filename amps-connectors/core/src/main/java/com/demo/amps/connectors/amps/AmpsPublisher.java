@@ -30,6 +30,12 @@ import java.time.Duration;
  * the batch publisher turns into acknowledgments back to the sources, so a publisher that
  * returned {@code true} without waiting would silently convert at-least-once into
  * at-most-once.
+ *
+ * <p>{@link #setPublishListener(PublishListener)} is the other way to learn the same thing,
+ * without waiting: the persisted acks and the failed writes as the client receives them, by
+ * sequence. It is what {@code ack-mode: PERSISTED} runs on. A publisher with nothing to
+ * observe -- no store, or a test double that does not model acks -- may keep the default,
+ * which accepts the listener and never calls it.
  */
 public interface AmpsPublisher extends AutoCloseable {
 
@@ -39,6 +45,16 @@ public interface AmpsPublisher extends AutoCloseable {
      * @throws AMPSException if the connection or the logon failed; the connector retries
      */
     void connect() throws AMPSException;
+
+    /**
+     * Register who is told about persisted acks and failed writes. Before {@link #connect()}:
+     * the hooks are installed on the client as it is built, and a listener set later would
+     * miss them.
+     *
+     * @param listener the listener; the default keeps none, so nothing is ever reported
+     */
+    default void setPublishListener(PublishListener listener) {
+    }
 
     /** Whether the connection is currently up. Drives the status line. */
     boolean isConnected();

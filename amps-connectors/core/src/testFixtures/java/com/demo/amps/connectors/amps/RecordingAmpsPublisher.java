@@ -28,6 +28,14 @@ import java.util.concurrent.atomic.AtomicLong;
  * does: {@code publishFlush} waits for the server's persisted ack. A flush that returns
  * instantly hides every scheduling problem a slow one would expose, and the shared-scheduler
  * starvation in {@code ConnectorFlowTest} is exactly such a problem.
+ *
+ * <p>The persisted acks are modelled too, for {@code ack-mode: PERSISTED}. The
+ * {@link PublishListener} the batch publisher registers is kept, and by default a successful
+ * {@link #flush} tells it everything issued so far is persisted -- which is what a real flush
+ * means, and what keeps the FLUSH-mode tests true without their knowing. A test about the
+ * acks themselves switches to {@link #manualPersistedAcks(boolean) manual} and then says
+ * exactly what the server confirmed, with {@link #persistUpTo(long)}, or refused, with
+ * {@link #failWrite(long, int)}.
  */
 public class RecordingAmpsPublisher implements AmpsPublisher {
 
@@ -55,12 +63,24 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
     private final AtomicLong sequence = new AtomicLong();
 
     private volatile Duration flushDelay = Duration.ZERO;
+    private volatile PublishListener listener;
+    private volatile boolean manualPersistedAcks;
 
     private volatile boolean connected;
 
     @Override
     public void connect() {
         connected = true;
+    }
+
+    @Override
+    public void setPublishListener(PublishListener listener) {
+        this.listener = listener;
+    }
+
+    /** The listener the batch publisher registered, or {@code null}. */
+    public PublishListener listener() {
+        return listener;
     }
 
     @Override
@@ -111,7 +131,51 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
                 return false;
             }
         }
-        return flushFailures.getAndUpdate(remaining -> Math.max(0, remaining - 1)) == 0;
+        boolean flushed = flushFailures.getAndUpdate(remaining -> Math.max(0, remaining - 1)) == 0;
+        if (flushed && !manualPersistedAcks) {
+            // A real flush returns once the store is empty, i.e. once every sequence issued
+            // so far has been discarded -- and reported -- as persisted.
+            persistUpTo(sequence.get());
+        }
+        return flushed;
+    }
+
+    /**
+     * Whether a successful flush stops standing in for the server's persisted acks. On, the
+     * listener hears nothing until {@link #persistUpTo(long)} or {@link #failWrite(long, int)}
+     * says so; off (the default), every flush that returns {@code true} persists everything
+     * issued so far.
+     */
+    public RecordingAmpsPublisher manualPersistedAcks(boolean manual) {
+        this.manualPersistedAcks = manual;
+        return this;
+    }
+
+    /**
+     * The server's persisted ack: everything up to {@code sequence} is in the transaction log,
+     * as the client's store would report it through {@code discardUpTo}.
+     */
+    public RecordingAmpsPublisher persistUpTo(long sequence) {
+        PublishListener current = listener;
+        if (current != null) {
+            current.persistedUpTo(sequence);
+        }
+        return this;
+    }
+
+    /**
+     * The server refused, or already had, the command with this sequence, as the client's
+     * failed-write handler would report it.
+     *
+     * @param sequence the command's sequence
+     * @param reason one of the {@code Message.Reason} constants
+     */
+    public RecordingAmpsPublisher failWrite(long sequence, int reason) {
+        PublishListener current = listener;
+        if (current != null) {
+            current.failedWrite(sequence, reason);
+        }
+        return this;
     }
 
     @Override

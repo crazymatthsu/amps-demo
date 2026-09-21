@@ -14,6 +14,7 @@ import com.demo.amps.connectors.source.SourceResolver;
 import com.demo.amps.connectors.transform.TransformContext;
 import com.demo.amps.connectors.transform.TransformRegistry;
 import com.demo.amps.connectors.transform.rules.RuleSet;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -33,9 +34,10 @@ import org.springframework.integration.support.MessageBuilder;
  *
  * <p>The order of {@link #stop()} is the part worth reading: close the source first so nothing
  * new arrives, then force the aggregator's partial batch out (synchronously -- by the time
- * that returns it has been published and acknowledged), then remove the flow, then close the
- * client. Reversed, the last few records the source had already read would be dropped on the
- * floor at every shutdown.
+ * that returns it has been published and, in {@code ack-mode: FLUSH}, acknowledged), then
+ * drain what {@code ack-mode: PERSISTED} still has waiting for its acks, then remove the
+ * flow, then close the client. Reversed, the last few records the source had already read
+ * would be dropped on the floor at every shutdown.
  *
  * <p>What goes wrong is reported twice, on purpose: counted here, where the status line reads
  * it, and raised as an alert, where something other than a log reader can act on it. The AMPS
@@ -55,6 +57,7 @@ public final class Connector implements AutoCloseable {
     private final RecordPipeline pipeline;
     private final AmpsPublisher publisher;
     private final BatchPublisher batchPublisher;
+    private final Duration flushTimeout;
     private final SourceResolver sources;
     private final ConnectorFlowFactory flows;
     private final Alerts alerts;
@@ -96,8 +99,13 @@ public final class Connector implements AutoCloseable {
         // contract and stays ignorant of who is listening.
         this.publisher = new AlertingAmpsPublisher(
                 publishers.create(properties), properties.getName(), alerts);
-        this.batchPublisher =
-                new BatchPublisher(publisher, properties.getName(), server.getFlushTimeout());
+        // Before start(): the batch publisher registers its tracker as the publisher's
+        // listener, and the publisher installs its hooks as it connects.
+        this.flushTimeout = server.getFlushTimeout();
+        this.batchPublisher = new BatchPublisher(
+                publisher, properties.getName(), flushTimeout,
+                properties.getAmps().getAckMode(),
+                properties.getAmps().getBatch().getMaxPending());
         this.sources = sources;
         this.flows = flows;
     }
@@ -159,11 +167,12 @@ public final class Connector implements AutoCloseable {
         this.source = resolved;
         this.flow = registered;
         this.started = true;
-        log.info("[{}] started: {} {} -> {} {} (batch {} / {})",
+        log.info("[{}] started: {} {} -> {} {} (batch {} / {}, ack {})",
                 name(), properties.getFormat(), properties.getSource().describe(),
                 properties.getAmps().getMessageType(), properties.getAmps().getTopic(),
                 properties.getAmps().getBatch().getMaxMessages(),
-                properties.getAmps().getBatch().getFlushInterval());
+                properties.getAmps().getBatch().getFlushInterval(),
+                properties.getAmps().getAckMode());
     }
 
     /** Unsubscribe, publish whatever is buffered, unregister the flow and disconnect. */
@@ -191,6 +200,10 @@ public final class Connector implements AutoCloseable {
             } catch (RuntimeException e) {
                 log.warn("[{}] the final batch could not be published", name(), e);
             }
+            // PERSISTED mode acknowledges as the acks arrive, so the release above only
+            // issued the last batch: one flush, while the client is still connected, gives
+            // those acks a chance to land before it is closed.
+            batchPublisher.drain(flushTimeout);
             try {
                 flows.unregister(registered);
             } catch (RuntimeException e) {
@@ -217,13 +230,17 @@ public final class Connector implements AutoCloseable {
     }
 
     private String counters() {
+        // pending= and publish-rejected= are printed in both ack modes, so the line keeps
+        // one shape: pending is simply always 0 in FLUSH mode, and a write the server
+        // refused is counted in either.
         StringBuilder text = new StringBuilder(String.format(
                 "received=%d published=%d batches=%d failed=%d rejected=%d filtered=%d "
-                        + "dropped=%d ignored-deletes=%d",
+                        + "dropped=%d ignored-deletes=%d pending=%d publish-rejected=%d",
                 pipeline.received(), batchPublisher.publishedMessages(),
                 batchPublisher.publishedBatches(), batchPublisher.failedBatches(),
                 pipeline.rejected(), pipeline.filtered(), pipeline.dropped(),
-                pipeline.ignoredDeletes()));
+                pipeline.ignoredDeletes(), batchPublisher.pending(),
+                batchPublisher.rejectedWrites()));
         // One rules[...] per rules step: the per-rule hits are the only evidence that a
         // rule which never fires is a rule about something that never happens.
         for (RuleSet rules : pipeline.ruleSets()) {
@@ -249,9 +266,14 @@ public final class Connector implements AutoCloseable {
         return pipeline.received();
     }
 
-    /** Records published in batches AMPS acknowledged as persisted. */
+    /** Records AMPS acknowledged as persisted: by the batch, or one by one in PERSISTED mode. */
     public long published() {
         return batchPublisher.publishedMessages();
+    }
+
+    /** Records issued and still waiting for their persisted ack; {@code 0} in FLUSH mode. */
+    public long pending() {
+        return batchPublisher.pending();
     }
 
     /** Records that could not be decoded, keyed or encoded. */
