@@ -16,7 +16,7 @@ requirement falls on:
 
 | stays configuration (a directory under `config/`) | needs a module here |
 |---|---|
-| a new feed onto a new topic: `source:` + `amps:` | a decoder for a format nobody else speaks |
+| a new feed onto a new topic: `source:` + `amps:` | a decoder for a format nobody else speaks, or a `PayloadCodec` bean for a typed payload (Thrift, protobuf, a Hazelcast `IdentifiedDataSerializable`) named by its factory and class ids |
 | dropping, renaming, mapping codes, computing a field: `transforms:` (`keep`, `drop`, `rename`, `set`, `values`, `derive`) | a `RecordTransform` bean named by a `transforms: [ { bean: ... } ]` step — an enrichment that *looks a record up* somewhere |
 | conditional actions with counters and alerts: a `rules:` step (`when` → `set` / `bean` / `alert` / `drop`) | an `AppResource` bean for a client with no generic configuration (a KDB handle, a gRPC stub) |
 | a reference table from a database: `resources: [ { name, jdbc: { ... } } ]` | a `CommandHandler` bean for a command of the application's own |

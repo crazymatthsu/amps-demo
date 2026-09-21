@@ -170,7 +170,7 @@ line, and the resource beneath it:
 
 ```
 connector status:
-  orders-enriched          RUNNING   sow/connectors/orders        received=1200 published=1200 batches=240 failed=0 rejected=0 filtered=0 dropped=0 ignored-deletes=0 rules[limit-without-price=0,large-notional=0]
+  orders-enriched          RUNNING   sow/connectors/orders        received=1200 published=1200 batches=240 failed=0 rejected=0 filtered=0 dropped=0 ignored-deletes=0 pending=0 publish-rejected=0 rules[limit-without-price=0,large-notional=0]
 resource status:
   instruments AVAILABLE rows=5 loaded=2026-09-19T14:00:00Z reloads=0 failures=0
 ```
