@@ -1,5 +1,6 @@
 package com.demo.amps.connectors.config;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -22,6 +23,20 @@ import java.util.Map;
  * <p>A null-valued record is a tombstone and becomes a {@code DELETE}; the message key becomes
  * the record's key, and {@code topic}/{@code partition}/{@code offset} ride along as
  * attributes.
+ *
+ * <p>{@link #getPayloadType() payload-type} is what makes a topic of <em>serialized
+ * messages</em> readable. Left at {@code 0/0}, a value is text and the connector's
+ * {@code format} decodes it. Set, the value is read as bytes ({@code ByteArrayDeserializer}
+ * replaces {@code StringDeserializer}) and every record is tagged with the type, so the
+ * pipeline hands the bytes to the codec the application registered for that pair -- a
+ * protobuf or Thrift message reaches AMPS without ever being text in between.
+ *
+ * <pre>{@code
+ * kafka:
+ *   topic: orders.proto
+ *   group-id: amps-connectors-orders
+ *   payload-type: { factory-id: 200, class-id: 3 }   # a codec decodes the bytes
+ * }</pre>
  */
 public class KafkaSourceProperties {
 
@@ -63,6 +78,19 @@ public class KafkaSourceProperties {
     /** How long to wait before retrying after a failed or dropped connection. */
     @NotNull
     private Duration reconnectDelay = Duration.ofSeconds(5);
+
+    /**
+     * What the topic's values are, as the {@code PayloadType} a codec is registered under;
+     * {@code 0/0} means "text: the connector's {@code format} decodes it".
+     *
+     * <p>The same bean the target's {@code amps.payload-type} binds, because the pair means
+     * the same thing on both sides -- a source that reads {@code 200/3} and a target that
+     * writes {@code 200/3} name one codec -- and two spellings of one block would be a trap.
+     */
+    @Valid
+    @NotNull
+    private AmpsTargetProperties.PayloadTypeProperties payloadType =
+            new AmpsTargetProperties.PayloadTypeProperties();
 
     /**
      * Raw consumer properties, applied last and passed through untouched.
@@ -128,6 +156,16 @@ public class KafkaSourceProperties {
 
     public void setReconnectDelay(Duration reconnectDelay) {
         this.reconnectDelay = reconnectDelay;
+    }
+
+    public AmpsTargetProperties.PayloadTypeProperties getPayloadType() {
+        return payloadType;
+    }
+
+    public void setPayloadType(AmpsTargetProperties.PayloadTypeProperties payloadType) {
+        this.payloadType = payloadType == null
+                ? new AmpsTargetProperties.PayloadTypeProperties()
+                : payloadType;
     }
 
     public Map<String, String> getProperties() {

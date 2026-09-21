@@ -3,6 +3,7 @@ package com.demo.amps.connectors.tcp;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.demo.amps.connectors.TestConnectors;
+import com.demo.amps.connectors.codec.PayloadType;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.TcpSourceProperties;
 import com.demo.amps.connectors.source.Acknowledger;
@@ -174,6 +175,10 @@ class TcpRecordSourceTest {
                     .containsOnly(InboundRecord.Action.UPSERT);
             assertThat(received).extracting(r -> r.attributes().get("remote"))
                     .containsOnly("127.0.0.1:" + feed.port());
+            // Text under the connector's format, and numbered: the one position a raw feed
+            // can be given is a count of the frames this source handed over.
+            assertThat(received).extracting(InboundRecord::type).containsOnly(PayloadType.UNSET);
+            assertThat(received).extracting(InboundRecord::seqno).containsExactly(1L, 2L);
         }
     }
 
@@ -281,6 +286,8 @@ class TcpRecordSourceTest {
             // thing under test.
             Awaitility.await().atMost(Duration.ofSeconds(5))
                     .until(() -> feed.served.get() == 2);
+            // The counter is the source's, not the connection's: a redial does not restart it.
+            assertThat(received).extracting(InboundRecord::seqno).containsExactly(1L, 2L);
         }
     }
 
@@ -359,6 +366,10 @@ class TcpRecordSourceTest {
                         .containsExactlyInAnyOrder(
                                 "127.0.0.1:" + one.getLocalPort(),
                                 "127.0.0.1:" + two.getLocalPort());
+                // One counter across both clients: whichever frame was handed over first is
+                // 1, so the numbers still order the source's stream as a whole.
+                assertThat(received).extracting(InboundRecord::seqno)
+                        .containsExactlyInAnyOrder(1L, 2L);
             }
         }
         // A reader whose client hung up first leaves on its own, so this is "gone shortly

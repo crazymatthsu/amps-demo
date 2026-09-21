@@ -7,6 +7,8 @@ import static org.assertj.core.api.Assertions.tuple;
 
 import com.demo.amps.connectors.alert.Alert;
 import com.demo.amps.connectors.alert.Alerts;
+import com.demo.amps.connectors.codec.FieldView;
+import com.demo.amps.connectors.codec.PayloadType;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.JdbcResourceProperties;
 import com.demo.amps.connectors.config.ResourceProperties;
@@ -17,11 +19,14 @@ import com.demo.amps.connectors.transform.RecordTransform;
 import com.demo.amps.connectors.transform.TransformContext;
 import com.demo.amps.connectors.transform.TransformRegistry;
 import java.time.Duration;
+import java.util.AbstractMap;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -36,7 +41,9 @@ import org.junit.jupiter.api.Test;
  * <p>What is worth asserting is every decision the transform makes: what a hit writes and
  * in which order (the encoder writes the map in order, and every key has to be a tag), what
  * a miss does under each policy and what it says about itself, which records are none of
- * its business, and that none of it ever writes into the map it was given.
+ * its business, that none of it ever writes into the map it was given -- and that a typed
+ * record's {@link FieldView} comes out as a view over a copy of its object, not flattened
+ * into a plain map.
  */
 class InstrumentEnricherTest {
 
@@ -102,6 +109,66 @@ class InstrumentEnricherTest {
 
     private static InboundRecord upsert() {
         return InboundRecord.of("ignored by the transform");
+    }
+
+    /**
+     * The smallest {@link FieldView}: a map standing in for a generated message's builder,
+     * whose {@code copy()} copies the object and counts the copies. What a codec's decoder
+     * returns for a typed record, and what {@code Fields.copy} must copy through rather
+     * than flatten.
+     */
+    private static final class OrderView extends AbstractMap<String, Object> implements FieldView {
+
+        private static final PayloadType TYPE = PayloadType.of(100, 1);
+
+        private final Map<String, Object> target;
+        private final AtomicInteger copies;
+
+        OrderView(Map<String, Object> target, AtomicInteger copies) {
+            this.target = target;
+            this.copies = copies;
+        }
+
+        @Override
+        public PayloadType type() {
+            return TYPE;
+        }
+
+        @Override
+        public Object target() {
+            return target;
+        }
+
+        @Override
+        public FieldView copy() {
+            copies.incrementAndGet();
+            return new OrderView(new LinkedHashMap<>(target), copies);
+        }
+
+        @Override
+        public Object get(Object key) {
+            return target.get(key);
+        }
+
+        @Override
+        public boolean containsKey(Object key) {
+            return target.containsKey(key);
+        }
+
+        @Override
+        public Object put(String key, Object value) {
+            return target.put(key, value);
+        }
+
+        @Override
+        public Object remove(Object key) {
+            return target.remove(key);
+        }
+
+        @Override
+        public Set<Map.Entry<String, Object>> entrySet() {
+            return target.entrySet();
+        }
     }
 
     private List<Alert> alerts(String code) {
@@ -359,6 +426,36 @@ class InstrumentEnricherTest {
         assertThat(hit).doesNotContainKeys("48", "15", "22");
         assertThat(enricher.hits()).isEqualTo(1);
         assertThat(enricher.misses()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a typed record's FieldView is copied through its own copy(), never flattened into a plain map")
+    void aFieldViewStaysAView() {
+        InstrumentEnricher enricher = enricher(EnricherProperties.OnMiss.PASS);
+        AtomicInteger copies = new AtomicInteger();
+        Map<String, Object> object = order("ORD-1", "K-0");
+        OrderView view = new OrderView(object, copies);
+
+        Map<String, Object> enriched = enricher.apply(upsert(), view);
+
+        // A view over a COPY of the object: the enrichment landed on the copy, the record's
+        // own object is untouched, and nothing turned the view into a LinkedHashMap -- which
+        // is what lets the encoder build the wire form straight from the object afterwards.
+        assertThat(enriched).isInstanceOf(FieldView.class).isNotSameAs(view);
+        assertThat(((FieldView) enriched).type()).isEqualTo(view.type());
+        assertThat(((FieldView) enriched).target()).isNotSameAs(object);
+        assertThat(enriched).containsEntry("48", "B0YQ5W0").containsEntry("15", "GBP")
+                .containsEntry("22", "2");
+        assertThat(object).doesNotContainKeys("48", "15", "22");
+        assertThat(copies).hasValue(1);
+
+        // The same on every other path: a miss and a delete pass a view through as a view.
+        assertThat(enricher.apply(upsert(), new OrderView(order("ORD-2", "K-5"), copies)))
+                .isInstanceOf(FieldView.class);
+        assertThat(enricher.apply(InboundRecord.delete("", "ORD-1"),
+                new OrderView(order("ORD-1", "K-0"), copies)))
+                .isInstanceOf(FieldView.class);
+        assertThat(copies).hasValue(3);
     }
 
     @Test

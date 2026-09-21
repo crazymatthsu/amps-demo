@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 
 import com.demo.amps.connectors.TestConnectors;
+import com.demo.amps.connectors.codec.PayloadType;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.HazelcastSourceProperties;
 import com.demo.amps.connectors.source.Acknowledger;
@@ -101,6 +102,10 @@ class HazelcastMapRecordSourceTest {
         // like a race when it failed.
         config.setProperty("hazelcast.internal.map.expiration.task.period.seconds", "1");
         config.setProperty("hazelcast.internal.map.expiration.cleanup.percentage", "100");
+        // The member never deserializes a Trade itself, but a member that knows the factory
+        // cannot surprise a test that reads one back through it.
+        config.getSerializationConfig()
+                .addDataSerializableFactory(Trades.FACTORY_ID, new Trades.Factory());
 
         NetworkConfig network = config.getNetworkConfig();
         network.setPort(BASE_PORT).setPortAutoIncrement(true);
@@ -123,6 +128,23 @@ class HazelcastMapRecordSourceTest {
         // Production backs off for seconds; a test that waited them out would be a slow test.
         hazelcast.setReconnectDelay(Duration.ofMillis(500));
         return connector;
+    }
+
+    /**
+     * The same connector with the {@link Trades} factory named, the way an application names
+     * its bean, and reading typed values in {@code mode}.
+     */
+    private static ConnectorProperties typed(
+            ConnectorProperties connector, HazelcastSourceProperties.TypedValues mode) {
+        HazelcastSourceProperties hazelcast = connector.getSource().getHazelcast();
+        hazelcast.setSerializationFactories(Map.of(Trades.FACTORY_ID, "tradeFactory"));
+        hazelcast.setTypedValues(mode);
+        return connector;
+    }
+
+    /** The source a {@link #typed} connector gets: the named factory supplied, as the factory bean would. */
+    private static HazelcastRecordSource typedSource(ConnectorProperties connector) {
+        return new HazelcastRecordSource(connector, Map.of(Trades.FACTORY_ID, new Trades.Factory()));
     }
 
     private static void awaitRecords(List<InboundRecord> received, int count) {
@@ -191,11 +213,15 @@ class HazelcastMapRecordSourceTest {
             assertThat(record.data()).isEqualTo("{\"quantity\":500}");
             assertThat(record.action()).isEqualTo(InboundRecord.Action.UPSERT);
             // No ack: an entry event has no position the connector could ask Hazelcast for.
+            // Numbered all the same, by delivery, and text under the connector's format.
             assertThat(record.acknowledger()).isSameAs(Acknowledger.NONE);
+            assertThat(record.seqno()).isEqualTo(1L);
+            assertThat(record.type()).isEqualTo(PayloadType.UNSET);
             assertThat(record.attributes())
                     .containsEntry("map", "added")
                     .containsEntry("event", "ADDED")
-                    .containsEntry("member", "127.0.0.1:" + port);
+                    .containsEntry("member", "127.0.0.1:" + port)
+                    .doesNotContainKeys("factoryId", "classId");
         }
     }
 
@@ -247,6 +273,8 @@ class HazelcastMapRecordSourceTest {
             // delete and addresses the record by its key, which is all a removal can be sure of.
             assertThat(delete.text()).isEmpty();
             assertThat(delete.attributes()).containsEntry("event", "REMOVED");
+            // A removal takes a number like any other delivery.
+            assertThat(received).extracting(InboundRecord::seqno).containsExactly(1L, 2L);
         }
     }
 
@@ -332,6 +360,9 @@ class HazelcastMapRecordSourceTest {
             map.put("ACC-3", "{\"quantity\":3}");
             awaitRecords(received, 3);
             assertThat(received.get(2).attributes()).containsEntry("event", "ADDED");
+            // One counter over the snapshot's rows and the live events, in delivery order: a
+            // map has no sequence of its own, so the seqno is the source's.
+            assertThat(received).extracting(InboundRecord::seqno).containsExactly(1L, 2L, 3L);
         }
     }
 
@@ -427,6 +458,95 @@ class HazelcastMapRecordSourceTest {
                             tuple("map", "{\"account\":\"ACC-4\",\"quantity\":40}"),
                             tuple("pojo",
                                     "{\"account\":\"ACC-5\",\"symbol\":\"AAPL\",\"quantity\":50}"));
+        }
+    }
+
+    @Test
+    @DisplayName("typed-values: OBJECT hands an IdentifiedDataSerializable through, from the snapshot and the feed alike")
+    void objectModeHandsTheValueThroughUnderItsType() {
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        IMap<String, Object> map = member.getMap("typed-object");
+        Trades.Trade early = new Trades.Trade("AAPL", 10);
+        map.put("ACC-1", early);
+
+        ConnectorProperties connector = typed(
+                connector("typed-object-map-hazelcast", "typed-object"),
+                HazelcastSourceProperties.TypedValues.OBJECT);
+        try (HazelcastRecordSource source = typedSource(connector)) {
+            source.start(received::add);
+            awaitConnected(source);
+            awaitRecords(received, 1);
+            Trades.Trade late = new Trades.Trade("MSFT", 25);
+            map.put("ACC-2", late);
+            map.put("ACC-3", "{\"quantity\":3}");
+            map.remove("ACC-1");
+            awaitRecords(received, 4);
+
+            PayloadType type = PayloadType.of(Trades.FACTORY_ID, Trades.TRADE_CLASS_ID);
+            // The snapshot row and the entry event both carry the object itself -- equal by
+            // value to what was put, deserialized by the factory the client was given -- under
+            // the pair the codec is registered under, keyed by the entry key.
+            InboundRecord snapshot = received.get(0);
+            assertThat(snapshot.key()).isEqualTo("ACC-1");
+            assertThat(snapshot.data()).isInstanceOf(Trades.Trade.class).isEqualTo(early);
+            assertThat(snapshot.type()).isEqualTo(type);
+            assertThat(snapshot.attributes())
+                    .containsEntry("event", "SNAPSHOT")
+                    .containsEntry("factoryId", "1000")
+                    .containsEntry("classId", "7");
+
+            InboundRecord added = received.get(1);
+            assertThat(added.key()).isEqualTo("ACC-2");
+            assertThat(added.data()).isEqualTo(late);
+            assertThat(added.type()).isEqualTo(type);
+            assertThat(added.attributes())
+                    .containsEntry("event", "ADDED")
+                    .containsEntry("factoryId", "1000")
+                    .containsEntry("classId", "7");
+
+            // Text is still text, and a removal carries no value to describe.
+            InboundRecord text = received.get(2);
+            assertThat(text.data()).isEqualTo("{\"quantity\":3}");
+            assertThat(text.type()).isEqualTo(PayloadType.UNSET);
+            assertThat(text.attributes()).doesNotContainKeys("factoryId", "classId");
+            InboundRecord removed = received.get(3);
+            assertThat(removed.action()).isEqualTo(InboundRecord.Action.DELETE);
+            assertThat(removed.key()).isEqualTo("ACC-1");
+            assertThat(removed.attributes()).doesNotContainKeys("factoryId", "classId");
+
+            assertThat(received).extracting(InboundRecord::seqno).containsExactly(1L, 2L, 3L, 4L);
+        }
+    }
+
+    @Test
+    @DisplayName("typed-values: JSON, the default, renders the same value as JSON and keeps the ids as attributes")
+    void jsonModeRendersTheValue() {
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        IMap<String, Object> map = member.getMap("typed-json");
+        map.put("ACC-1", new Trades.Trade("AAPL", 10));
+
+        ConnectorProperties connector = typed(
+                connector("typed-json-map-hazelcast", "typed-json"),
+                HazelcastSourceProperties.TypedValues.JSON);
+        try (HazelcastRecordSource source = typedSource(connector)) {
+            source.start(received::add);
+            awaitConnected(source);
+            awaitRecords(received, 1);
+            map.put("ACC-2", new Trades.Trade("MSFT", 25));
+            awaitRecords(received, 2);
+
+            // The fallback a source that cannot see the codec registry needs: JSON of the
+            // object is something format: JSON can always read, and the ids still say what
+            // it was.
+            assertThat(received).extracting(InboundRecord::key, InboundRecord::data)
+                    .containsExactly(
+                            tuple("ACC-1", "{\"symbol\":\"AAPL\",\"quantity\":10}"),
+                            tuple("ACC-2", "{\"symbol\":\"MSFT\",\"quantity\":25}"));
+            assertThat(received).extracting(InboundRecord::type).containsOnly(PayloadType.UNSET);
+            assertThat(received).extracting(record -> record.attributes().get("factoryId"))
+                    .containsOnly("1000");
+            assertThat(received).extracting(record -> record.attributes().get("classId"))
+                    .containsOnly("7");
         }
     }
 

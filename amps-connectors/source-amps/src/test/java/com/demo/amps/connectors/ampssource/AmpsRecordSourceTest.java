@@ -10,6 +10,7 @@ import com.crankuptheamps.client.Client;
 import com.crankuptheamps.client.Command;
 import com.crankuptheamps.client.JSONMessage;
 import com.crankuptheamps.client.Message;
+import com.demo.amps.connectors.codec.PayloadType;
 import com.demo.amps.connectors.config.AmpsServerProperties;
 import com.demo.amps.connectors.config.AmpsSourceProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
@@ -197,12 +198,16 @@ class AmpsRecordSourceTest {
         @DisplayName("sow, publish and delta_publish are upserts keyed by the SowKey")
         void dataCommandsAreUpserts(int command) {
             InboundRecord record = AmpsRecordSource.toRecord(
-                    command, "{\"id\":\"ORD-1\"}", "12345", null, TOPIC);
+                    command, "{\"id\":\"ORD-1\"}", "12345", null, TOPIC, 7L);
 
             assertThat(record).isNotNull();
             assertThat(record.action()).isEqualTo(InboundRecord.Action.UPSERT);
             assertThat(record.data()).isEqualTo("{\"id\":\"ORD-1\"}");
             assertThat(record.key()).isEqualTo("12345");
+            // Text by the connector's format, numbered by the source, and nothing to
+            // acknowledge: the bookmark store is discarded on delivery.
+            assertThat(record.type()).isEqualTo(PayloadType.UNSET);
+            assertThat(record.seqno()).isEqualTo(7L);
             assertThat(record.acknowledger()).isSameAs(Acknowledger.NONE);
         }
 
@@ -211,10 +216,11 @@ class AmpsRecordSourceTest {
         @DisplayName("oof and sow_delete are deletes that keep the payload and the SowKey")
         void removalCommandsAreDeletes(int command) {
             InboundRecord record = AmpsRecordSource.toRecord(
-                    command, "{\"id\":\"ORD-1\"}", "12345", null, TOPIC);
+                    command, "{\"id\":\"ORD-1\"}", "12345", null, TOPIC, 8L);
 
             assertThat(record).isNotNull();
             assertThat(record.action()).isEqualTo(InboundRecord.Action.DELETE);
+            assertThat(record.seqno()).isEqualTo(8L);
             // A target that deletes by filter needs the key fields, and the last state of
             // the record is exactly what an out-of-focus message carries.
             assertThat(record.data()).isEqualTo("{\"id\":\"ORD-1\"}");
@@ -226,40 +232,41 @@ class AmpsRecordSourceTest {
             Message.Command.Ack, Message.Command.Heartbeat, Message.Command.Unknown})
         @DisplayName("group markers, acks and heartbeats carry no record")
         void controlCommandsAreNothing(int command) {
-            assertThat(AmpsRecordSource.toRecord(command, "", null, null, TOPIC)).isNull();
+            assertThat(AmpsRecordSource.toRecord(command, "", null, null, TOPIC, 1L)).isNull();
+            assertThat(AmpsRecordSource.actionOf(command)).isNull();
         }
 
         @Test
         @DisplayName("the topic and the command ride along as attributes; a bookmark only when there is one")
         void attributesNameTheTopicTheCommandAndTheBookmark() {
             InboundRecord live = AmpsRecordSource.toRecord(
-                    Message.Command.Publish, "{}", null, null, TOPIC);
+                    Message.Command.Publish, "{}", null, null, TOPIC, 1L);
             assertThat(live.attributes()).containsExactlyInAnyOrderEntriesOf(Map.of(
                     AmpsRecordSource.ATTRIBUTE_TOPIC, TOPIC,
                     AmpsRecordSource.ATTRIBUTE_COMMAND, "publish"));
 
             InboundRecord replayed = AmpsRecordSource.toRecord(
-                    Message.Command.SOWDelete, "{}", "k", "1|9|", TOPIC);
+                    Message.Command.SOWDelete, "{}", "k", "1|9|", TOPIC, 2L);
             assertThat(replayed.attributes())
                     .containsEntry(AmpsRecordSource.ATTRIBUTE_COMMAND, "sow_delete")
                     .containsEntry(AmpsRecordSource.ATTRIBUTE_BOOKMARK, "1|9|");
 
-            assertThat(AmpsRecordSource.toRecord(Message.Command.SOW, "{}", "k", "", TOPIC)
+            assertThat(AmpsRecordSource.toRecord(Message.Command.SOW, "{}", "k", "", TOPIC, 3L)
                     .attributes()).doesNotContainKey(AmpsRecordSource.ATTRIBUTE_BOOKMARK);
-            assertThat(AmpsRecordSource.toRecord(Message.Command.OOF, "{}", "k", null, TOPIC)
+            assertThat(AmpsRecordSource.toRecord(Message.Command.OOF, "{}", "k", null, TOPIC, 4L)
                     .attributes()).containsEntry(AmpsRecordSource.ATTRIBUTE_COMMAND, "oof");
-            assertThat(AmpsRecordSource.toRecord(Message.Command.DeltaPublish, "{}", "k", null, TOPIC)
+            assertThat(AmpsRecordSource.toRecord(Message.Command.DeltaPublish, "{}", "k", null, TOPIC, 5L)
                     .attributes()).containsEntry(AmpsRecordSource.ATTRIBUTE_COMMAND, "delta_publish");
         }
 
         @Test
         @DisplayName("a topic without a SowKey yields an unkeyed record, and a null payload an empty one")
         void journalTopicsHaveNoKey() {
-            InboundRecord blank = AmpsRecordSource.toRecord(Message.Command.Publish, null, "  ", null, TOPIC);
+            InboundRecord blank = AmpsRecordSource.toRecord(Message.Command.Publish, null, "  ", null, TOPIC, 1L);
             assertThat(blank.key()).isNull();
             assertThat(blank.text()).isEmpty();
 
-            InboundRecord absent = AmpsRecordSource.toRecord(Message.Command.Publish, "{}", null, null, null);
+            InboundRecord absent = AmpsRecordSource.toRecord(Message.Command.Publish, "{}", null, null, null, 2L);
             assertThat(absent.key()).isNull();
             assertThat(absent.attributes()).doesNotContainKey(AmpsRecordSource.ATTRIBUTE_TOPIC);
         }
@@ -316,6 +323,31 @@ class AmpsRecordSourceTest {
                     .satisfies(record -> assertThat(record.attributes())
                             .containsEntry(AmpsRecordSource.ATTRIBUTE_COMMAND, "sow"));
             assertThat(source.handlerFailures()).isZero();
+        }
+
+        @Test
+        @DisplayName("records are numbered as they are delivered; markers and failures take no number")
+        void recordsAreNumberedByDelivery() {
+            AmpsRecordSource source = source(connector(AmpsSourceProperties.Mode.SOW_AND_SUBSCRIBE));
+            List<InboundRecord> delivered = new CopyOnWriteArrayList<>();
+            AtomicInteger calls = new AtomicInteger();
+
+            source.dispatch(message(Message.Command.GroupBegin, ""), delivered::add);
+            source.dispatch(message(Message.Command.SOW, "{\"n\":1}"), delivered::add);
+            source.dispatch(message(Message.Command.GroupEnd, ""), delivered::add);
+            source.dispatch(message(Message.Command.Publish, "{\"n\":2}"), record -> {
+                calls.incrementAndGet();
+                throw new IllegalStateException("pipeline rejected it");
+            });
+            source.dispatch(message(Message.Command.OOF, "{\"n\":3}"), delivered::add);
+
+            // A marker carries no record and takes no number. A record the handler threw on
+            // was still delivered -- it was numbered 2 -- so the next one is 3: the seqno is a
+            // position in what the source handed over, not in what the pipeline kept.
+            assertThat(delivered).extracting(InboundRecord::seqno).containsExactly(1L, 3L);
+            assertThat(delivered).extracting(InboundRecord::type).containsOnly(PayloadType.UNSET);
+            assertThat(calls).hasValue(1);
+            assertThat(source.handlerFailures()).isEqualTo(1);
         }
 
         @Test

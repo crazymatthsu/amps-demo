@@ -28,7 +28,12 @@
  * guarantee that nothing written during the read is missed. A cleared or evicted map names no
  * keys, so it is counted and logged rather than turned into guessed deletes.
  *
- * <p>Neither structure has a position to rewind to, so records from either carry no
- * {@link com.demo.amps.connectors.source.Acknowledgment}.
+ * <p>Neither structure has a position to rewind to, so records from either carry
+ * {@link com.demo.amps.connectors.source.Acknowledger#NONE}. Each does carry a seqno: the
+ * ringbuffer sequence on a reliable topic, a delivery counter elsewhere. A value that is an
+ * object is rendered as JSON, or -- with {@code typed-values: OBJECT} and the application's
+ * {@code DataSerializableFactory} beans named under {@code serialization-factories} -- an
+ * {@code IdentifiedDataSerializable} is handed through as itself, under the payload type its
+ * ids spell, for the application's codec to decode ({@code HazelcastValues}).
  */
 package com.demo.amps.connectors.hazelcast;
