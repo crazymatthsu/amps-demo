@@ -34,6 +34,12 @@ import org.slf4j.LoggerFactory;
  * SOH does not survive a YAML file, an editor or a diff; for those formats the separator is
  * swapped for the connector's own {@code field-separator} on the way out. A JSON or TEXT
  * template is emitted verbatim, pipes and all.
+ *
+ * <p>Each record is text ({@code PayloadType.UNSET}, decoded by the connector's
+ * {@code format}) at the position the tick counter gives it -- the same number
+ * {@code &#123;&#123;seq&#125;&#125;} rendered -- so a demo profile shows a sequence number
+ * on every record the way a Kafka offset would. Nothing acknowledges it: a generator has no
+ * position to move.
  */
 public final class SimulatedSource implements RecordSource {
 
@@ -104,7 +110,7 @@ public final class SimulatedSource implements RecordSource {
         if (connector.getFormat().delimited()) {
             payload = payload.replace('|', connector.getFieldSeparator());
         }
-        return InboundRecord.of(payload, key);
+        return InboundRecord.of(payload, key).withSeqno(seq);
     }
 
     @Override

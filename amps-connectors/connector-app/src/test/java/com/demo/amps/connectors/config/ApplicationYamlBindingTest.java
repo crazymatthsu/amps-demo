@@ -6,6 +6,7 @@ import com.demo.amps.connectors.ampssource.AmpsSourceFactory;
 import com.demo.amps.connectors.hazelcast.HazelcastSourceFactory;
 import com.demo.amps.connectors.jdbc.JdbcSourceFactory;
 import com.demo.amps.connectors.kafka.KafkaSourceFactory;
+import com.demo.amps.connectors.runtime.MessageContext;
 import com.demo.amps.connectors.runtime.OutboundRecord;
 import com.demo.amps.connectors.runtime.RecordPipeline;
 import com.demo.amps.connectors.source.RecordSource;
@@ -280,11 +281,13 @@ class ApplicationYamlBindingTest {
                 InboundRecord record = generated.poll(5, TimeUnit.SECONDS);
                 assertThat(record).as("%s generated a record", connector.getName()).isNotNull();
 
-                OutboundRecord request = pipeline.apply(record);
-                assertThat(request).as("%s: the pipeline kept its own record", connector.getName())
+                MessageContext context = pipeline.apply(record);
+                assertThat(context).as("%s: the pipeline kept its own record", connector.getName())
                         .isNotNull();
+                OutboundRecord request = context.out();
                 assertThat(request.topic()).isEqualTo(connector.getAmps().getTopic());
-                assertThat(request.data()).isNotBlank();
+                assertThat(request.text()).isNotBlank();
+                assertThat(context.in()).isSameAs(record);
                 // SERVER mode sends no SowKey and PUBLISHER mode must send one: between them
                 // that is the whole of what the key block promises.
                 KeyProperties key = connector.getAmps().getKey();
@@ -300,10 +303,10 @@ class ApplicationYamlBindingTest {
         // ...and the two that do more than pass bytes through actually did it: the FIX
         // template's pipes became SOH on the way out of the simulator, and the derive
         // produced a field the feed never carried.
-        assertThat(publishedBy("orders-kafka").data())
+        assertThat(publishedBy("orders-kafka").text())
                 .contains(String.valueOf(ConnectorProperties.SOH)).doesNotContain("|");
-        assertThat(publishedBy("positions-jdbc").data()).contains("\"notional\"");
-        assertThat(publishedBy("events-hazelcast").data())
+        assertThat(publishedBy("positions-jdbc").text()).contains("\"notional\"");
+        assertThat(publishedBy("events-hazelcast").text())
                 .contains("\"id\"").doesNotContain("\"detail\"");
     }
 
@@ -315,10 +318,10 @@ class ApplicationYamlBindingTest {
             source.start(generated::add);
             InboundRecord record = generated.poll(5, TimeUnit.SECONDS);
             assertThat(record).as("%s generated a record", name).isNotNull();
-            OutboundRecord request =
+            MessageContext context =
                     new RecordPipeline(connector, new TransformRegistry(Map.of())).apply(record);
-            assertThat(request).as("%s published something", name).isNotNull();
-            return request;
+            assertThat(context).as("%s published something", name).isNotNull();
+            return context.out();
         }
     }
 

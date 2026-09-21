@@ -225,7 +225,7 @@ public final class CommandDispatcher implements SmartLifecycle {
             }
             ControlCommand command;
             try {
-                command = ControlCommand.parse(record.data());
+                command = ControlCommand.parse(record.text());
             } catch (IllegalArgumentException e) {
                 failed.incrementAndGet();
                 // The outcome lines are INFO throughout: the alert the manager logs beside
@@ -233,7 +233,7 @@ public final class CommandDispatcher implements SmartLifecycle {
                 log.info("[control] a payload is not a command: {}", e.getMessage());
                 Map<String, Object> details = new LinkedHashMap<>();
                 details.put("error", e.getMessage());
-                details.put("payload", excerpt(record.data()));
+                details.put("payload", excerpt(record.text()));
                 alerts.raise(Alert.of(Alert.Severity.WARN, COMMAND_INVALID,
                                 "a payload on the control channel is not a command: "
                                         + e.getMessage())
@@ -250,7 +250,7 @@ public final class CommandDispatcher implements SmartLifecycle {
         } finally {
             // Whatever happened, the source's position moves past this record: reading a
             // bad command a second time would fail the same way.
-            record.acknowledge();
+            record.ack();
         }
     }
 

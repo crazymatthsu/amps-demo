@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.KafkaSourceProperties;
+import com.demo.amps.connectors.source.Acknowledger;
 import com.demo.amps.connectors.source.InboundRecord;
 import java.time.Duration;
 import java.util.Collection;
@@ -276,7 +277,8 @@ class KafkaRecordSourceTest {
                     .containsOnly(InboundRecord.Action.UPSERT);
             // Unlike TCP and Hazelcast, every record here can be acknowledged: an offset is
             // exactly the position the framework's at-least-once contract needs.
-            assertThat(received).extracting(InboundRecord::ack).doesNotContainNull();
+            assertThat(received).extracting(InboundRecord::acknowledger)
+                    .doesNotContain(Acknowledger.NONE);
             assertThat(received.get(0).attributes())
                     .containsEntry("topic", TOPIC)
                     .containsEntry("partition", "0")
@@ -306,9 +308,9 @@ class KafkaRecordSourceTest {
             assertThat(tombstone.key()).isEqualTo("ORD-1");
             // Empty rather than null: the DELETE path still decodes the payload, and an
             // empty document is the quiet answer.
-            assertThat(tombstone.data()).isEmpty();
-            assertThat(tombstone.ack()).as("a removal is published too, so it is acked too")
-                    .isNotNull();
+            assertThat(tombstone.text()).isEmpty();
+            assertThat(tombstone.acknowledger()).as("a removal is published too, so it is acked too")
+                    .isNotSameAs(Acknowledger.NONE);
         }
     }
 
@@ -335,7 +337,7 @@ class KafkaRecordSourceTest {
                     .as("read, handed to the pipeline, not flushed to AMPS yet")
                     .isNull();
 
-            received.get(0).acknowledge();
+            received.get(0).ack();
 
             // offset + 1: a committed offset is where to resume, not where we were.
             awaitCommit(consumer, BEGINNING + 1);
@@ -364,10 +366,10 @@ class KafkaRecordSourceTest {
 
             // A batch can span several polls and is acknowledged as a whole, so the order
             // acknowledgments arrive in is not the order the records were read in.
-            received.get(2).acknowledge();
+            received.get(2).ack();
             awaitCommit(consumer, BEGINNING + 3);
 
-            received.get(0).acknowledge();
+            received.get(0).ack();
             severalMorePolls();
 
             // A committed offset must never walk backwards: doing so would re-publish
@@ -413,7 +415,7 @@ class KafkaRecordSourceTest {
             awaitConnected(source);
             deliver(consumer, record(BEGINNING, "ORD-1", "{\"orderId\":\"ORD-1\"}"));
             awaitRecords(received, 1);
-            received.get(0).acknowledge();
+            received.get(0).ack();
             // The async commit was taken and never confirmed, so the offset is still owed
             // when the group takes the partition away.
             Awaitility.await().atMost(Duration.ofSeconds(5))
@@ -454,7 +456,7 @@ class KafkaRecordSourceTest {
 
         deliver(consumer, record(BEGINNING, "ORD-1", "{\"orderId\":\"ORD-1\"}"));
         awaitRecords(received, 1);
-        received.get(0).acknowledge();
+        received.get(0).ack();
         Awaitility.await().atMost(Duration.ofSeconds(5))
                 .until(() -> consumer.asyncCommits.get() > 0);
         assertThat(consumer.syncCommits).as("the steady-state commit is the async one").isEmpty();

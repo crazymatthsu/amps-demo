@@ -1,5 +1,6 @@
 package com.demo.amps.connectors.decode;
 
+import com.demo.amps.connectors.codec.Payloads;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -31,20 +32,21 @@ public final class DelimitedRecordDecoder implements RecordDecoder {
     }
 
     @Override
-    public Map<String, Object> decode(String payload) {
+    public Map<String, Object> decode(Object payload) {
         Map<String, Object> fields = new LinkedHashMap<>();
-        if (payload == null || payload.isEmpty()) {
+        String text = Payloads.text(payload);
+        if (text.isEmpty()) {
             return fields;
         }
         int start = 0;
-        int length = payload.length();
+        int length = text.length();
         while (start < length) {
-            int end = payload.indexOf(separator, start);
+            int end = text.indexOf(separator, start);
             if (end < 0) {
                 end = length;
             }
             if (end > start) {
-                addPair(fields, payload, start, end);
+                addPair(fields, text, start, end);
             }
             start = end + 1;
         }

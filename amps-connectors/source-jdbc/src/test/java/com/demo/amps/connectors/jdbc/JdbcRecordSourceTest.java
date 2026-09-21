@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.JdbcSourceProperties;
+import com.demo.amps.connectors.source.Acknowledger;
 import com.demo.amps.connectors.source.InboundRecord;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -110,7 +111,7 @@ class JdbcRecordSourceTest {
 
     private static JsonNode payload(InboundRecord record) {
         try {
-            return MAPPER.readTree(record.data());
+            return MAPPER.readTree(record.text());
         } catch (IOException e) {
             throw new AssertionError("the source emitted something that is not JSON", e);
         }
@@ -160,7 +161,7 @@ class JdbcRecordSourceTest {
             assertThat(record.key()).as("no key-columns configured").isNull();
             // A snapshot has no position to remember: the next poll re-reads the row whatever
             // AMPS said about this one, so there is nothing an acknowledgment could advance.
-            assertThat(record.ack()).isNull();
+            assertThat(record.acknowledger()).isSameAs(Acknowledger.NONE);
             // Which poll a row came from is the only transport metadata a query has.
             assertThat(Long.parseLong(record.attributes().get("poll"))).isGreaterThanOrEqualTo(1);
 
@@ -321,7 +322,8 @@ class JdbcRecordSourceTest {
             assertThat(received).extracting(InboundRecord::action)
                     .containsOnly(InboundRecord.Action.UPSERT);
             // Unlike a snapshot row, this one has a position worth remembering.
-            assertThat(received).extracting(InboundRecord::ack).doesNotContainNull();
+            assertThat(received).extracting(InboundRecord::acknowledger)
+                    .doesNotContain(Acknowledger.NONE);
         }
     }
 
@@ -352,9 +354,9 @@ class JdbcRecordSourceTest {
             // reached AMPS.
             assertThat(stateFile).doesNotExist();
 
-            received.get(0).acknowledge();
+            received.get(0).ack();
             awaitWatermark(stateFile, "1");
-            received.get(1).acknowledge();
+            received.get(1).ack();
             awaitWatermark(stateFile, "2");
         }
 

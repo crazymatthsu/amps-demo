@@ -1,19 +1,21 @@
 package com.demo.amps.connectors.decode;
 
+import com.demo.amps.connectors.codec.FieldView;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Reading and writing the decoded field map, including the two spellings that make it more
- * than a flat {@code Map}: dotted paths into nested objects, and {@code #n} suffixes for a
- * repeated field.
+ * Reading, writing and copying the decoded field map, including the two spellings that make
+ * it more than a flat {@code Map}: dotted paths into nested objects, and {@code #n} suffixes
+ * for a repeated field.
  *
- * <p>Every decoder produces a {@link LinkedHashMap} whose iteration order is wire order, and
- * everything downstream -- filters, key extraction, renames, encoders -- addresses it through
- * here rather than through {@code Map.get}, so all of them understand the same two
- * conventions:
+ * <p>Every text decoder produces a {@link LinkedHashMap} whose iteration order is wire order,
+ * and a typed codec a {@link FieldView} over its object; everything downstream -- filters, key
+ * extraction, renames, encoders -- addresses either through here rather than through
+ * {@code Map.get}, so all of them understand the same two conventions (a dotted path descends
+ * into whatever nested {@code Map} the value is, a nested view included):
  *
  * <ul>
  *   <li><strong>Dotted paths.</strong> {@code get(fields, "order.price")} walks nested maps,
@@ -34,6 +36,24 @@ public final class Fields {
     public static final char OCCURRENCE = '#';
 
     private Fields() {
+    }
+
+    /**
+     * A step's own copy of the fields -- the one copy the pipeline ever makes, and the only
+     * way it makes one.
+     *
+     * <p>Every built-in step and every {@code RecordTransform} that edits the fields edits a
+     * copy, so the step before it is still described by the map it returned. For a plain map
+     * that is a {@link LinkedHashMap} copy, in wire order. For a {@link FieldView} it is
+     * {@link FieldView#copy()}: a view over a cloned builder, so a typed payload is never
+     * flattened into a map just to be edited, and the object behind the record is never
+     * touched by anything downstream of the decoder.
+     *
+     * @param fields the fields as the previous step left them
+     * @return a copy the caller may write into
+     */
+    public static Map<String, Object> copy(Map<String, Object> fields) {
+        return fields instanceof FieldView view ? view.copy() : new LinkedHashMap<>(fields);
     }
 
     /**

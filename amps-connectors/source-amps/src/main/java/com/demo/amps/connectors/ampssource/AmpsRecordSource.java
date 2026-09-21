@@ -9,13 +9,15 @@ import com.crankuptheamps.client.DefaultServerChooser;
 import com.crankuptheamps.client.HAClient;
 import com.crankuptheamps.client.Message;
 import com.crankuptheamps.client.exception.AMPSException;
+import com.demo.amps.connectors.codec.PayloadType;
 import com.demo.amps.connectors.config.AmpsServerProperties;
 import com.demo.amps.connectors.config.AmpsSourceProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.SourceFormat;
+import com.demo.amps.connectors.source.Acknowledger;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.InboundRecord;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -429,8 +431,9 @@ public class AmpsRecordSource implements RecordSource {
         if (hasText(bookmark)) {
             attributes.put(ATTRIBUTE_BOOKMARK, bookmark);
         }
-        return new InboundRecord(data == null ? "" : data, hasText(sowKey) ? sowKey : null,
-                action, attributes, null);
+        return new InboundRecord(data == null ? "" : data, PayloadType.UNSET,
+                hasText(sowKey) ? sowKey : null, action, InboundRecord.NO_SEQNO, attributes,
+                Acknowledger.NONE);
     }
 
     /**

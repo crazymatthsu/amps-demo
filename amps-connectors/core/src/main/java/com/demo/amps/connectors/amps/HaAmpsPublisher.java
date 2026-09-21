@@ -6,8 +6,11 @@ import com.crankuptheamps.client.DefaultServerChooser;
 import com.crankuptheamps.client.FixedDelayStrategy;
 import com.crankuptheamps.client.HAClient;
 import com.crankuptheamps.client.MemoryPublishStore;
+import com.crankuptheamps.client.Message;
+import com.crankuptheamps.client.MessageStream;
 import com.crankuptheamps.client.PublishStore;
 import com.crankuptheamps.client.exception.AMPSException;
+import com.demo.amps.connectors.codec.Payloads;
 import com.demo.amps.connectors.config.AmpsServerProperties;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -36,6 +39,12 @@ import org.slf4j.LoggerFactory;
  * <p>The message type belongs to the URI, not to the publish call, which is why this takes one:
  * a client logged on via {@code /amps/fix} publishes FIX-typed topics, and a JSON connector in
  * the same application needs its own connection.
+ *
+ * <p>Every command answers with the client sequence number the publish store assigned it --
+ * what {@code Client.publish} itself returns, and what {@code Command.getClientSequenceNumber()}
+ * holds after {@code execute} for the commands built by hand -- so the batch publisher can key
+ * a record by the number the server's persisted acks will count up to. Bytes are sent as
+ * bytes, through the client's {@code byte[]} overloads, and anything else as text.
  *
  * <p>{@link #connect()} gives up after about {@code logon-timeout} against a server that is
  * not there, and throws; every reconnect after that first success is the HA client's own and
@@ -148,55 +157,76 @@ public final class HaAmpsPublisher implements AmpsPublisher {
     }
 
     @Override
-    public void publish(String topic, String data, String sowKey) {
-        if (sowKey == null) {
+    public long publish(String topic, Object data, String sowKey) {
+        if (sowKey == null && !(data instanceof byte[])) {
             try {
-                required().publish(topic, data);
+                return required().publish(topic, Payloads.text(data));
             } catch (AMPSException e) {
                 throw new IllegalStateException("publish to " + topic + " failed", e);
             }
-            return;
         }
-        execute(new Command("publish").setTopic(topic).setSowKey(sowKey).setData(data),
+        return execute(withData(new Command("publish").setTopic(topic), data).setSowKey(sowKey),
                 "publish to " + topic);
     }
 
     @Override
-    public void deltaPublish(String topic, String data, String sowKey) {
-        if (sowKey == null) {
+    public long deltaPublish(String topic, Object data, String sowKey) {
+        if (sowKey == null && !(data instanceof byte[])) {
             try {
-                required().deltaPublish(topic, data);
+                return required().deltaPublish(topic, Payloads.text(data));
             } catch (AMPSException e) {
                 throw new IllegalStateException("delta publish to " + topic + " failed", e);
             }
-            return;
         }
-        execute(new Command("delta_publish").setTopic(topic).setSowKey(sowKey).setData(data),
+        return execute(
+                withData(new Command("delta_publish").setTopic(topic), data).setSowKey(sowKey),
                 "delta publish to " + topic);
     }
 
     @Override
-    public void sowDeleteByKey(String topic, String sowKey) {
+    public long sowDeleteByKey(String topic, String sowKey) {
         // There is no synchronous sowDeleteByKeys in the Java client -- the only overload takes
         // a MessageHandler -- so the command is built by hand. It goes through the publish
         // store like a publish does (AMPS gives sow_delete a client sequence number too), so
         // the batch's single flush covers it and order with the publishes around it is kept.
-        execute(new Command("sow_delete").setTopic(topic).setSowKeys(sowKey)
+        return execute(new Command("sow_delete").setTopic(topic).setSowKeys(sowKey)
                         .setTimeout(server.getFlushTimeout().toMillis()),
                 "sow delete of " + sowKey + " on " + topic);
     }
 
     @Override
-    public void sowDeleteByFilter(String topic, String filter) {
+    public long sowDeleteByFilter(String topic, String filter) {
+        // Built by hand for the same reason as the delete by key -- the sequence number lives
+        // on the Command -- but synchronous, exactly as the client's own
+        // sowDelete(topic, filter, timeout) is: a stats ack is requested and waited for,
+        // which is the only way to find out that a filter matched nothing. Deletes on a
+        // server-keyed topic are rare enough that the round trip is worth the certainty.
+        long timeout = Math.max(1L, server.getFlushTimeout().toMillis());
+        Command command = new Command("sow_delete").setTopic(topic).setFilter(filter)
+                .addAckType(Message.AckType.Stats).setTimeout(timeout);
+        MessageStream acks;
         try {
-            // This overload is synchronous: it waits for the ack, which is the only way to
-            // find out that a filter matched nothing. Deletes on a server-keyed topic are
-            // rare enough that the round trip is worth the certainty.
-            required().sowDelete(topic, filter, server.getFlushTimeout().toMillis());
+            acks = required().execute(command);
         } catch (AMPSException e) {
             throw new IllegalStateException(
                     "sow delete on " + topic + " with filter [" + filter + "] failed", e);
         }
+        if (acks != null) {
+            try {
+                acks.timeout((int) Math.min(Integer.MAX_VALUE, timeout)).next();
+            } finally {
+                acks.close();
+            }
+        }
+        return command.getClientSequenceNumber();
+    }
+
+    /** Bytes go as bytes, so a codec's binary wire form is not re-encoded on the way out. */
+    private static Command withData(Command command, Object data) {
+        if (data instanceof byte[] bytes) {
+            return command.setData(bytes, 0, bytes.length);
+        }
+        return command.setData(Payloads.text(data));
     }
 
     @Override
@@ -233,12 +263,17 @@ public final class HaAmpsPublisher implements AmpsPublisher {
         }
     }
 
-    /** A command with no ack type requested: sent asynchronously, like {@code publish} is. */
-    private void execute(Command command, String what) {
+    /**
+     * A command with no ack type requested: sent asynchronously, like {@code publish} is.
+     *
+     * @return the client sequence number the publish store assigned, {@code 0} without one
+     */
+    private long execute(Command command, String what) {
         try {
             // The returned stream is the client's shared empty one -- a command with no ack
             // type never produces messages -- so there is nothing to drain or close.
             required().execute(command);
+            return command.getClientSequenceNumber();
         } catch (AMPSException e) {
             throw new IllegalStateException(what + " failed", e);
         }

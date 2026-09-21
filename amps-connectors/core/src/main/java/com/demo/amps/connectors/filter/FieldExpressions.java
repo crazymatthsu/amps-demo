@@ -21,10 +21,14 @@ import org.springframework.expression.spel.support.StandardEvaluationContext;
  *   <li>{@code #f} -- the decoded field map, so {@code #f['35']} is a FIX tag and
  *       {@code #f['order']['price']} a nested JSON member</li>
  *   <li>{@code #r} -- the {@link InboundRecord} the fields came from, so {@code #r.key} is the
- *       source's own key, {@code #r.action} is {@code UPSERT} or {@code DELETE}, and
- *       {@code #r.attributes['topic']} is whatever the transport said about the message.
- *       Bound where a record is at hand (transforms and rules); a filter runs before a
- *       delete's key is known to matter and sees {@code #f} only</li>
+ *       source's own key, {@code #r.action} is {@code UPSERT} or {@code DELETE},
+ *       {@code #r.attributes['topic']} is whatever the transport said about the message,
+ *       {@code #r.seqno} is its position in the source's stream, {@code #r.type.factoryId} and
+ *       {@code #r.type.classId} say what the payload is ({@code 0} and {@code 0} for text),
+ *       and {@code #r.text} is the payload as text. Every record accessor is an expression
+ *       for free, because the record is bound as itself. Bound where a record is at hand
+ *       (transforms and rules); a filter runs before a delete's key is known to matter and
+ *       sees {@code #f} only</li>
  *   <li>{@code #num(x)} -- the value as a double, or {@code NaN}</li>
  *   <li>{@code #str(x)} -- the value as text, or {@code ""}</li>
  * </ul>

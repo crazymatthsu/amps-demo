@@ -2,7 +2,7 @@ package com.demo.amps.connectors.jdbc;
 
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.JdbcSourceProperties;
-import com.demo.amps.connectors.source.Acknowledgment;
+import com.demo.amps.connectors.source.Acknowledger;
 import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.RecordSource;
 import com.demo.amps.connectors.source.InboundRecord;
@@ -306,7 +306,7 @@ public class JdbcRecordSource implements RecordSource {
                     // Only an incremental row can be acknowledged: a snapshot has no position
                     // to remember -- the next poll re-reads it whatever AMPS said.
                     Object rowWatermark = rowMark;
-                    Acknowledgment ack = snapshot() ? null : () -> acknowledge(rowWatermark);
+                    Acknowledger ack = snapshot() ? null : seqno -> acknowledge(rowWatermark);
                     emit(json(rows, meta), key, InboundRecord.Action.UPSERT, attributes, ack,
                             handler);
                 }
@@ -358,7 +358,7 @@ public class JdbcRecordSource implements RecordSource {
     }
 
     private void emit(String data, String key, InboundRecord.Action action,
-            Map<String, String> attributes, Acknowledgment ack, RecordHandler handler) {
+            Map<String, String> attributes, Acknowledger ack, RecordHandler handler) {
         try {
             InboundRecord record = action == InboundRecord.Action.DELETE
                     ? InboundRecord.delete(data, key)

@@ -6,6 +6,8 @@ import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.alert.Alert;
 import com.demo.amps.connectors.alert.AlertingAmpsPublisher;
 import com.demo.amps.connectors.amps.RecordingAmpsPublisher;
+import com.demo.amps.connectors.codec.PayloadCodecRegistry;
+import com.demo.amps.connectors.codec.PayloadType;
 import com.demo.amps.connectors.config.AmpsServerProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.RuleAlert;
@@ -62,6 +64,7 @@ class ConnectorTest {
                 properties,
                 new AmpsServerProperties(),
                 new TransformRegistry(Map.of()),
+                PayloadCodecRegistry.empty(),
                 connector -> recording,
                 new SourceResolver(List.of(new FakeSourceFactory(source))),
                 flowsOver(channel),
@@ -170,8 +173,9 @@ class ConnectorTest {
         recording.failFlushes(1);
 
         InboundRecord record = InboundRecord.of("{\"id\":\"1\"}");
-        connector.batchPublisher().publish(List.of(
-                OutboundRecord.publish("test/orders", Command.PUBLISH, record.data(), null, record)));
+        connector.batchPublisher().publish(List.of(MessageContext.of(record,
+                OutboundRecord.publish(
+                        "test/orders", Command.PUBLISH, record.data(), PayloadType.UNSET, null))));
 
         assertThat(recording.calls()).hasSize(1);
         assertThat(connector.batchPublisher().failedBatches()).isEqualTo(1);

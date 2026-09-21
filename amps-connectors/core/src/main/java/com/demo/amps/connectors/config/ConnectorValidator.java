@@ -32,7 +32,11 @@ import org.springframework.expression.spel.standard.SpelExpressionParser;
 public final class ConnectorValidator {
 
     /** The message types AMPS knows here; the same word goes into the client URI. */
-    private static final Set<String> MESSAGE_TYPES = Set.of("json", "fix", "nvfix");
+    private static final Set<String> MESSAGE_TYPES =
+            Set.of("json", "fix", "nvfix", "protobuf", "binary");
+
+    /** The message types with a text encoder of their own; the others need a codec. */
+    private static final Set<String> TEXT_MESSAGE_TYPES = Set.of("json", "fix", "nvfix");
 
     private ConnectorValidator() {
     }
@@ -400,7 +404,16 @@ public final class ConnectorValidator {
         return errors;
     }
 
-    /** The {@code amps:} block: the topic, the message type and the batching. */
+    /**
+     * The {@code amps:} block: the topic, the message type, the payload type and the batching.
+     *
+     * <p>The payload type is judged on shape alone -- both ids or neither, nothing negative --
+     * because whether a codec is actually registered for it is a question about the
+     * application's beans, which this static check cannot see; the pipeline asks the registry
+     * as it is built, and fails the connector's start with the same readable message. What
+     * <em>can</em> be said here is that {@code protobuf} and {@code binary} have no text
+     * encoder, so a target naming one of them without a codec has no way to write anything.
+     */
     private static List<String> validateTarget(String id, ConnectorProperties connector) {
         List<String> errors = new ArrayList<>();
         AmpsTargetProperties target = connector.getAmps();
@@ -412,8 +425,25 @@ public final class ConnectorValidator {
                 : target.getMessageType().toLowerCase(Locale.ROOT);
         if (!MESSAGE_TYPES.contains(type)) {
             errors.add(id + "amps.message-type '" + target.getMessageType()
-                    + "' is not one of json/fix/nvfix -- it names the client URI (/amps/<type>) "
-                    + "as well as the encoder, so it has to be spelled the way AMPS does");
+                    + "' is not one of json/fix/nvfix/protobuf/binary -- it names the client "
+                    + "URI (/amps/<type>) as well as the encoder, so it has to be spelled the "
+                    + "way AMPS does");
+        }
+        AmpsTargetProperties.PayloadTypeProperties payloadType = target.getPayloadType();
+        boolean typed = false;
+        if (payloadType.getFactoryId() < 0 || payloadType.getClassId() < 0) {
+            errors.add(id + "amps.payload-type " + payloadType + ": factory-id and class-id "
+                    + "are non-negative");
+        } else if ((payloadType.getFactoryId() == 0) != (payloadType.getClassId() == 0)) {
+            errors.add(id + "amps.payload-type " + payloadType + " names nothing: set both "
+                    + "factory-id and class-id to name a codec, or neither for text by "
+                    + "amps.message-type");
+        } else {
+            typed = payloadType.getFactoryId() != 0;
+        }
+        if (!typed && MESSAGE_TYPES.contains(type) && !TEXT_MESSAGE_TYPES.contains(type)) {
+            errors.add(id + "amps.message-type '" + target.getMessageType() + "' has no text "
+                    + "encoder, so it needs amps.payload-type to name the codec that writes it");
         }
         BatchProperties batch = target.getBatch();
         if (batch.getMaxMessages() < 1) {

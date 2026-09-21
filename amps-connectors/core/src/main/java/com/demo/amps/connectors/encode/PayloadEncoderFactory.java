@@ -9,9 +9,11 @@ import java.util.Locale;
  * <p>The message type is written the way AMPS spells it, because the same string goes into the
  * client URI ({@code /amps/fix}): one word, one encoder, and no chance of a connector whose
  * connection speaks a different type from its payloads. Anything outside {@code json},
- * {@code fix} and {@code nvfix} is refused here as well as by the validator -- the validator
- * to stop the application with a readable list, this to stop a hand-built pipeline in a test
- * from quietly producing nothing.
+ * {@code fix} and {@code nvfix} is refused here: those three are the text encoders, and a
+ * message type a codec writes ({@code protobuf}, {@code binary}) reaches AMPS through a set
+ * {@code amps.payload-type} and the {@code PayloadCodecRegistry}, never through here. The
+ * validator refuses the same combinations with a readable list; this stops a hand-built
+ * pipeline in a test from quietly producing nothing.
  */
 public final class PayloadEncoderFactory {
 
@@ -25,7 +27,9 @@ public final class PayloadEncoderFactory {
      * @param messageType {@code json}, {@code fix} or {@code nvfix}
      * @param separator the field separator for the delimited types, normally SOH
      * @return the encoder for that message type
-     * @throws IllegalArgumentException if the message type is not one AMPS knows here
+     * @throws IllegalArgumentException if the message type is not one of the three text
+     *     types -- a {@code protobuf} or {@code binary} topic needs a codec, not an encoder
+     *     built here
      */
     public static PayloadEncoder create(String messageType, char separator) {
         String type = messageType == null ? "" : messageType.toLowerCase(Locale.ROOT).trim();
@@ -34,7 +38,8 @@ public final class PayloadEncoderFactory {
             case "fix" -> new FixEncoder(separator);
             case "nvfix" -> new NvfixEncoder(separator);
             default -> throw new IllegalArgumentException("message-type '" + messageType
-                    + "' is not one of json/fix/nvfix");
+                    + "' has no text encoder (json/fix/nvfix); a codec-written type needs "
+                    + "amps.payload-type to name the codec");
         };
     }
 }

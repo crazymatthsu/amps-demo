@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.TcpSourceProperties;
+import com.demo.amps.connectors.source.Acknowledger;
 import com.demo.amps.connectors.source.InboundRecord;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -168,7 +169,7 @@ class TcpRecordSourceTest {
             // No key, no ack and never a DELETE: the three things this transport cannot
             // express, because a socket has neither a key space nor a position to rewind to.
             assertThat(received).extracting(InboundRecord::key).containsOnlyNulls();
-            assertThat(received).extracting(InboundRecord::ack).containsOnlyNulls();
+            assertThat(received).extracting(InboundRecord::acknowledger).containsOnly(Acknowledger.NONE);
             assertThat(received).extracting(InboundRecord::action)
                     .containsOnly(InboundRecord.Action.UPSERT);
             assertThat(received).extracting(r -> r.attributes().get("remote"))

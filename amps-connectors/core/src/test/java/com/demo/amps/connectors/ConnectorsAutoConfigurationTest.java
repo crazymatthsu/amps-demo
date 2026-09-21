@@ -6,6 +6,9 @@ import com.demo.amps.connectors.alert.Alert;
 import com.demo.amps.connectors.alert.AlertManager;
 import com.demo.amps.connectors.alert.AmpsAlertSink;
 import com.demo.amps.connectors.alert.RecordingAlertSink;
+import com.demo.amps.connectors.codec.PayloadCodec;
+import com.demo.amps.connectors.codec.PayloadCodecRegistry;
+import com.demo.amps.connectors.codec.TestPojoCodec;
 import com.demo.amps.connectors.config.AlertProperties;
 import com.demo.amps.connectors.config.ResourceProperties;
 import com.demo.amps.connectors.control.CommandContext;
@@ -54,6 +57,15 @@ class ConnectorsAutoConfigurationTest {
         @Bean
         RecordingAlertSink recordingAlertSink() {
             return new RecordingAlertSink();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class AppCodecs {
+
+        @Bean
+        PayloadCodec testPojoCodec() {
+            return new TestPojoCodec();
         }
     }
 
@@ -131,9 +143,24 @@ class ConnectorsAutoConfigurationTest {
             ResourceRegistry resources = context.getBean(ResourceRegistry.class);
             assertThat(resources.names()).isEmpty();
             assertThat(resources.isRunning()).isTrue();
+            // ...and no codecs: every feed is text until an application says otherwise.
+            assertThat(context).hasSingleBean(PayloadCodecRegistry.class);
+            assertThat(context.getBean(PayloadCodecRegistry.class).types()).isEmpty();
             ConnectorManager manager = context.getBean(ConnectorManager.class);
             assertThat(manager.isRunning()).isTrue();
             assertThat(manager.resources()).isSameAs(resources);
+        });
+    }
+
+    @Test
+    @DisplayName("a PayloadCodec bean lands in the registry every connector's pipeline is built with")
+    void collectsTheApplicationsCodecs() {
+        runner.withUserConfiguration(AppCodecs.class).run(context -> {
+            PayloadCodecRegistry codecs = context.getBean(PayloadCodecRegistry.class);
+            assertThat(codecs.types()).containsExactly(TestPojoCodec.TYPE);
+            assertThat(codecs.canDecode(TestPojoCodec.TYPE)).isTrue();
+            assertThat(codecs.canEncode(TestPojoCodec.TYPE)).isTrue();
+            assertThat(context.getBean(ConnectorManager.class).isRunning()).isTrue();
         });
     }
 

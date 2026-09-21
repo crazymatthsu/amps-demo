@@ -1,5 +1,6 @@
 package com.demo.amps.connectors.decode;
 
+import com.demo.amps.connectors.codec.Payloads;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -46,15 +47,16 @@ public final class JsonRecordDecoder implements RecordDecoder {
     }
 
     @Override
-    public Map<String, Object> decode(String payload) {
-        if (payload == null || payload.isBlank()) {
+    public Map<String, Object> decode(Object payload) {
+        String text = Payloads.text(payload);
+        if (text.isBlank()) {
             // A record with no body: legitimate for a delete, and there is nothing malformed
             // about it. The pipeline decides whether an empty map is usable.
             return new LinkedHashMap<>();
         }
         JsonNode root;
         try {
-            root = reader.readTree(payload);
+            root = reader.readTree(text);
         } catch (JsonProcessingException e) {
             throw new IllegalArgumentException(
                     "payload is not valid JSON: " + e.getOriginalMessage(), e);

@@ -1,5 +1,6 @@
 package com.demo.amps.connectors.amps;
 
+import com.demo.amps.connectors.runtime.MessageContext;
 import com.demo.amps.connectors.runtime.OutboundRecord;
 import java.time.Duration;
 import java.util.List;
@@ -22,6 +23,11 @@ import org.slf4j.LoggerFactory;
  * client's publish store still replays what AMPS never acknowledged, and the sources re-read
  * from their last committed position, so the failure mode is duplicates rather than gaps.
  * That is the at-least-once contract, and this method is where it is kept.
+ *
+ * <p>Each command's AMPS client sequence -- the number the publish store keys its replay by
+ * -- is written onto its {@link MessageContext} the moment the client answers with it, so a
+ * context that has been through here knows both its in-side position and its out-side one.
+ * A publisher without a store answers {@code 0}, and nothing is written.
  *
  * <p>Nothing escapes: this runs on the connector's deadline thread as often as on the
  * source's, and an exception out of a timer-triggered release would reach that scheduler's
@@ -53,15 +59,18 @@ public final class BatchPublisher {
     /**
      * Issue a batch and, if it lands, acknowledge it.
      *
-     * @param batch the outbound records, in the order they were produced
+     * @param batch the contexts, in the order the pipeline produced them
      */
-    public void publish(List<OutboundRecord> batch) {
+    public void publish(List<MessageContext> batch) {
         if (batch == null || batch.isEmpty()) {
             return;
         }
         try {
-            for (OutboundRecord request : batch) {
-                issue(request);
+            for (MessageContext context : batch) {
+                long sequence = issue(context.out());
+                if (sequence > 0) {
+                    context.assignOutSeqno(sequence);
+                }
             }
             if (!publisher.flush(flushTimeout)) {
                 failed(batch, "flush did not complete within " + flushTimeout);
@@ -71,34 +80,31 @@ public final class BatchPublisher {
             failed(batch, e.toString());
             return;
         }
-        for (OutboundRecord request : batch) {
-            request.record().acknowledge();
+        for (MessageContext context : batch) {
+            context.ack();
         }
         publishedMessages.addAndGet(batch.size());
         publishedBatches.incrementAndGet();
         log.debug("[{}] published a batch of {}", connectorName, batch.size());
     }
 
-    private void issue(OutboundRecord request) {
-        switch (request.command()) {
+    /** One command, as its out-half spells it; answers the AMPS client sequence, or 0. */
+    private long issue(OutboundRecord request) {
+        return switch (request.command()) {
             case PUBLISH -> publisher.publish(request.topic(), request.data(), request.sowKey());
             case DELTA_PUBLISH ->
                     publisher.deltaPublish(request.topic(), request.data(), request.sowKey());
-            case SOW_DELETE -> {
-                if (request.deleteFilter() != null) {
-                    publisher.sowDeleteByFilter(request.topic(), request.deleteFilter());
-                } else {
-                    publisher.sowDeleteByKey(request.topic(), request.sowKey());
-                }
-            }
-        }
+            case SOW_DELETE -> request.deleteFilter() != null
+                    ? publisher.sowDeleteByFilter(request.topic(), request.deleteFilter())
+                    : publisher.sowDeleteByKey(request.topic(), request.sowKey());
+        };
     }
 
     /**
      * A batch that did not land. Nothing is acknowledged, so the sources re-read it; the
      * publish store replays whatever AMPS never confirmed.
      */
-    private void failed(List<OutboundRecord> batch, String reason) {
+    private void failed(List<MessageContext> batch, String reason) {
         long count = failedBatches.incrementAndGet();
         log.warn("[{}] batch of {} not acknowledged ({} failed batch(es) so far): {}",
                 connectorName, batch.size(), count, reason);

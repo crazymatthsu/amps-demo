@@ -14,6 +14,7 @@ import com.demo.amps.connectors.config.AmpsServerProperties;
 import com.demo.amps.connectors.config.AmpsSourceProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.SourceFormat;
+import com.demo.amps.connectors.source.Acknowledger;
 import com.demo.amps.connectors.source.InboundRecord;
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -202,7 +203,7 @@ class AmpsRecordSourceTest {
             assertThat(record.action()).isEqualTo(InboundRecord.Action.UPSERT);
             assertThat(record.data()).isEqualTo("{\"id\":\"ORD-1\"}");
             assertThat(record.key()).isEqualTo("12345");
-            assertThat(record.ack()).isNull();
+            assertThat(record.acknowledger()).isSameAs(Acknowledger.NONE);
         }
 
         @ParameterizedTest(name = "command {0}")
@@ -256,7 +257,7 @@ class AmpsRecordSourceTest {
         void journalTopicsHaveNoKey() {
             InboundRecord blank = AmpsRecordSource.toRecord(Message.Command.Publish, null, "  ", null, TOPIC);
             assertThat(blank.key()).isNull();
-            assertThat(blank.data()).isEmpty();
+            assertThat(blank.text()).isEmpty();
 
             InboundRecord absent = AmpsRecordSource.toRecord(Message.Command.Publish, "{}", null, null, null);
             assertThat(absent.key()).isNull();

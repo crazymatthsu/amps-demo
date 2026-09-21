@@ -22,10 +22,11 @@ class AlertingAmpsPublisherTest {
     @DisplayName("a flush that completes raises nothing and delegates everything")
     void delegatesQuietly() throws Exception {
         publisher.connect();
-        publisher.publish("t", "{}", "k");
-        publisher.deltaPublish("t", "{}", "k");
-        publisher.sowDeleteByKey("t", "k");
-        publisher.sowDeleteByFilter("t", "/id = 'k'");
+        // The sequence the publisher underneath answers with comes back through the wrapper.
+        assertThat(publisher.publish("t", "{}", "k")).isEqualTo(1);
+        assertThat(publisher.deltaPublish("t", "{}", "k")).isEqualTo(2);
+        assertThat(publisher.sowDeleteByKey("t", "k")).isEqualTo(3);
+        assertThat(publisher.sowDeleteByFilter("t", "/id = 'k'")).isEqualTo(4);
 
         assertThat(publisher.flush(Duration.ofSeconds(1))).isTrue();
         assertThat(publisher.isConnected()).isTrue();
@@ -61,12 +62,12 @@ class AlertingAmpsPublisherTest {
     void aThrowingPublishIsAnErrorAndRethrown() {
         AmpsPublisher throwing = new RecordingAmpsPublisher() {
             @Override
-            public void publish(String topic, String data, String sowKey) {
+            public long publish(String topic, Object data, String sowKey) {
                 throw new IllegalStateException("publish to " + topic + " failed");
             }
 
             @Override
-            public void sowDeleteByFilter(String topic, String filter) {
+            public long sowDeleteByFilter(String topic, String filter) {
                 throw new IllegalStateException("sow delete on " + topic + " failed");
             }
         };

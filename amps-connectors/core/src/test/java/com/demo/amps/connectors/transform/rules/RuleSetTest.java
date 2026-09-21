@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.demo.amps.connectors.alert.Alert;
+import com.demo.amps.connectors.codec.FieldView;
+import com.demo.amps.connectors.codec.TestPojoCodec;
 import com.demo.amps.connectors.config.RuleAlert;
 import com.demo.amps.connectors.config.RuleProperties;
 import com.demo.amps.connectors.config.RuleThen;
@@ -236,6 +238,31 @@ class RuleSetTest {
         // No hit: the record is returned as it came, untouched.
         assertThat(compile(setting("miss", "false", "x", "y")).apply(RECORD, order))
                 .isEqualTo(limitOrder());
+    }
+
+    @Test
+    @DisplayName("a set on a typed record's view lands in a clone of the builder, and reads only what the when named")
+    void aViewIsCopiedNotMutated() {
+        TestPojoCodec codec = new TestPojoCodec();
+        TestPojoCodec.Order order = new TestPojoCodec.Order("O-1", 2000, "600");
+        Map<String, Object> view = codec.decoder().decode(order);
+
+        Map<String, Object> result = compile(
+                setting("large", "#num(#f['qty']) * #num(#f['price']) > 1000000", "status", "LARGE"))
+                .apply(RECORD, view);
+
+        // Snapshot the counters before the assertions below read through the view themselves.
+        Map<String, Integer> reads = codec.readsByField();
+        assertThat(reads).containsOnlyKeys("qty", "price");
+        assertThat(codec.copies()).isEqualTo(1);
+        assertThat(result).isInstanceOf(FieldView.class).isNotSameAs(view)
+                .containsEntry("status", "LARGE");
+        assertThat(order.status()).as("the record's object is untouched").isNull();
+
+        // No hit: the view itself comes back, uncopied.
+        assertThat(compile(setting("miss", "false", "status", "X")).apply(RECORD, view))
+                .isSameAs(view);
+        assertThat(codec.copies()).isEqualTo(1);
     }
 
     @Test

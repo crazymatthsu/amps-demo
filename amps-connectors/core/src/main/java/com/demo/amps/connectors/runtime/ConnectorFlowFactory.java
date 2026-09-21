@@ -19,7 +19,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  * <p>The flow is three steps and deliberately no more:
  *
  * <pre>{@code
- * DirectChannel --> pipeline.apply(record) --> aggregate(size | idle time) --> batchPublisher
+ * DirectChannel[InboundRecord] --> pipeline.apply(record): MessageContext | null
+ *     --> aggregate(size | idle time): List<MessageContext> --> batchPublisher
  * }</pre>
  *
  * <p>Spring Integration earns its place here for exactly one thing: the aggregator. "Release a
@@ -147,7 +148,7 @@ public class ConnectorFlowFactory {
                             return batch;
                         }))
                 .handle(List.class, (batch, headers) -> {
-                    batchPublisher.publish(records(batch));
+                    batchPublisher.publish(contexts(batch));
                     return null;
                 })
                 .get();
@@ -204,7 +205,7 @@ public class ConnectorFlowFactory {
 
     /** The aggregated payloads; only this flow writes into the group, so the cast is safe. */
     @SuppressWarnings("unchecked")
-    private static List<OutboundRecord> records(List<?> batch) {
-        return (List<OutboundRecord>) batch;
+    private static List<MessageContext> contexts(List<?> batch) {
+        return (List<MessageContext>) batch;
     }
 }

@@ -24,9 +24,20 @@ import java.util.Map;
  *   <li>Transforms also see {@link InboundRecord.Action#DELETE} records, because a delete's key
  *       is extracted from its fields the same way an upsert's is. A transform that derives a
  *       key field has to derive it for deletes too, or the removal cannot be addressed.</li>
- *   <li>The map passed in must not be mutated; return a new one. The chain hands each step its
- *       own copy, and a transform that writes into the map it was given would be editing the
- *       evidence the next step is reading.</li>
+ *   <li>The map passed in must not be mutated; return a new one, and take it through
+ *       {@link com.demo.amps.connectors.decode.Fields#copy(Map)} rather than
+ *       {@code new LinkedHashMap<>(fields)}. The chain hands each step its own copy, and a
+ *       transform that writes into the map it was given would be editing the evidence the
+ *       next step is reading. {@code Fields.copy} is also what keeps a typed record typed: for
+ *       a {@link com.demo.amps.connectors.codec.FieldView} it clones the builder behind the
+ *       view instead of flattening it, so the edit costs one clone and the encoder never
+ *       rebuilds the object from a map.</li>
+ *   <li>The record's payload is an {@code Object}: {@link InboundRecord#text()} is the text of
+ *       a String or a {@code byte[]} payload, and {@link InboundRecord#data()} the typed object
+ *       itself where a codec decoded it -- the escape hatch for a transform that would
+ *       rather use generated accessors ({@code FieldView.target()} is the builder the map
+ *       writes to). A transform that keeps neither past {@code apply} is a transform that
+ *       cannot be surprised by the next step's copy.</li>
  * </ul>
  *
  * <p>A bean that wants to know <em>which</em> connector it is serving -- to name it in an
@@ -41,8 +52,10 @@ import java.util.Map;
 public interface RecordTransform {
 
     /**
-     * @param record the record the fields were decoded from, for its action, key and attributes
-     * @param fields the fields so far, in wire order
+     * @param record the record the fields were decoded from, for its action, key, position,
+     *     type and attributes
+     * @param fields the fields so far, in wire order: a plain map for a text record, a
+     *     {@link com.demo.amps.connectors.codec.FieldView} for a typed one
      * @return the fields to carry on with, or {@code null} to drop the record
      */
     Map<String, Object> apply(InboundRecord record, Map<String, Object> fields);

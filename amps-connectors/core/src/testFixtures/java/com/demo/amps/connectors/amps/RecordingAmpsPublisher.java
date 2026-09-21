@@ -1,9 +1,11 @@
 package com.demo.amps.connectors.amps;
 
+import com.demo.amps.connectors.codec.Payloads;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * An {@link AmpsPublisher} that records instead of connecting.
@@ -12,6 +14,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * aggregator, the timers, the acknowledgments -- and then assert on exactly the things that
  * matter and are hard to see against a real server: that the commands came out in the order
  * the records arrived, and that a batch of a hundred publishes made <em>one</em> flush.
+ *
+ * <p>Every command answers with a sequence number the way a client with a publish store does
+ * -- {@code 1, 2, 3…} in the order the commands were issued -- so a test can see the out-side
+ * sequence the batch publisher writes onto each {@code MessageContext}.
  *
  * <p>{@link #failFlushes(int)} is the other half. A failed flush is the interesting path of
  * the at-least-once contract: nothing is acknowledged, the sources re-read, and the connector
@@ -31,15 +37,22 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
      * @param kind {@code publish}, {@code delta_publish}, {@code sow_delete_by_key} or
      *     {@code sow_delete_by_filter}
      * @param topic the topic it named
-     * @param data the payload, or {@code null} for a delete
+     * @param data the payload as the batch handed it over -- a {@code String}, a
+     *     {@code byte[]} or a passed-through object -- or {@code null} for a delete
      * @param sowKeyOrFilter the SowKey or the delete filter, whichever the call carried
      */
-    public record Call(String kind, String topic, String data, String sowKeyOrFilter) {
+    public record Call(String kind, String topic, Object data, String sowKeyOrFilter) {
+
+        /** The payload as text: bytes decoded as UTF-8, {@code ""} for a delete. */
+        public String text() {
+            return Payloads.text(data);
+        }
     }
 
     private final List<Call> calls = java.util.Collections.synchronizedList(new ArrayList<>());
     private final AtomicInteger flushes = new AtomicInteger();
     private final AtomicInteger flushFailures = new AtomicInteger();
+    private final AtomicLong sequence = new AtomicLong();
 
     private volatile Duration flushDelay = Duration.ZERO;
 
@@ -61,23 +74,29 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
     }
 
     @Override
-    public void publish(String topic, String data, String sowKey) {
-        calls.add(new Call("publish", topic, data, sowKey));
+    public long publish(String topic, Object data, String sowKey) {
+        return record(new Call("publish", topic, data, sowKey));
     }
 
     @Override
-    public void deltaPublish(String topic, String data, String sowKey) {
-        calls.add(new Call("delta_publish", topic, data, sowKey));
+    public long deltaPublish(String topic, Object data, String sowKey) {
+        return record(new Call("delta_publish", topic, data, sowKey));
     }
 
     @Override
-    public void sowDeleteByKey(String topic, String sowKey) {
-        calls.add(new Call("sow_delete_by_key", topic, null, sowKey));
+    public long sowDeleteByKey(String topic, String sowKey) {
+        return record(new Call("sow_delete_by_key", topic, null, sowKey));
     }
 
     @Override
-    public void sowDeleteByFilter(String topic, String filter) {
-        calls.add(new Call("sow_delete_by_filter", topic, null, filter));
+    public long sowDeleteByFilter(String topic, String filter) {
+        return record(new Call("sow_delete_by_filter", topic, null, filter));
+    }
+
+    /** Record the call and answer the next sequence number, as a publish store would. */
+    private long record(Call call) {
+        calls.add(call);
+        return sequence.incrementAndGet();
     }
 
     @Override
@@ -129,7 +148,12 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
         return flushes.get();
     }
 
-    /** Forget everything recorded, keeping the connection state. */
+    /** The last sequence number handed out; the number of commands issued since construction. */
+    public long lastSequence() {
+        return sequence.get();
+    }
+
+    /** Forget everything recorded, keeping the connection state and the sequence. */
     public void clear() {
         calls.clear();
         flushes.set(0);

@@ -64,36 +64,36 @@ public final class AlertingAmpsPublisher implements AmpsPublisher {
     }
 
     @Override
-    public void publish(String topic, String data, String sowKey) {
+    public long publish(String topic, Object data, String sowKey) {
         try {
-            delegate.publish(topic, data, sowKey);
+            return delegate.publish(topic, data, sowKey);
         } catch (RuntimeException e) {
             throw failed("publish", topic, e);
         }
     }
 
     @Override
-    public void deltaPublish(String topic, String data, String sowKey) {
+    public long deltaPublish(String topic, Object data, String sowKey) {
         try {
-            delegate.deltaPublish(topic, data, sowKey);
+            return delegate.deltaPublish(topic, data, sowKey);
         } catch (RuntimeException e) {
             throw failed("delta_publish", topic, e);
         }
     }
 
     @Override
-    public void sowDeleteByKey(String topic, String sowKey) {
+    public long sowDeleteByKey(String topic, String sowKey) {
         try {
-            delegate.sowDeleteByKey(topic, sowKey);
+            return delegate.sowDeleteByKey(topic, sowKey);
         } catch (RuntimeException e) {
             throw failed("sow_delete", topic, e);
         }
     }
 
     @Override
-    public void sowDeleteByFilter(String topic, String filter) {
+    public long sowDeleteByFilter(String topic, String filter) {
         try {
-            delegate.sowDeleteByFilter(topic, filter);
+            return delegate.sowDeleteByFilter(topic, filter);
         } catch (RuntimeException e) {
             throw failed("sow_delete", topic, e);
         }

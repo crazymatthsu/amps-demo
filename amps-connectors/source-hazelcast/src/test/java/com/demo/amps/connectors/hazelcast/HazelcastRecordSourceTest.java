@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.HazelcastSourceProperties;
+import com.demo.amps.connectors.source.Acknowledger;
 import com.demo.amps.connectors.source.InboundRecord;
 import com.hazelcast.client.HazelcastClient;
 import com.hazelcast.cluster.Address;
@@ -167,7 +168,7 @@ class HazelcastRecordSourceTest {
             // No key, no ack and never a DELETE: a topic message is a payload and nothing
             // more, and there is no position the connector could ask Hazelcast to go back to.
             assertThat(record.key()).isNull();
-            assertThat(record.ack()).isNull();
+            assertThat(record.acknowledger()).isSameAs(Acknowledger.NONE);
             assertThat(record.action()).isEqualTo(InboundRecord.Action.UPSERT);
             assertThat(record.attributes()).containsOnlyKeys("publishTime", "member");
             assertThat(Long.parseLong(record.attributes().get("publishTime")))

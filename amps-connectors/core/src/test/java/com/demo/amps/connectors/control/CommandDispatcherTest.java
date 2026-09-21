@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.demo.amps.connectors.alert.Alert;
+import com.demo.amps.connectors.codec.PayloadCodecRegistry;
 import com.demo.amps.connectors.config.AmpsSourceProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.ConnectorsProperties;
@@ -42,8 +43,8 @@ class CommandDispatcherTest {
     private final ResourceRegistry registry =
             new ResourceRegistry(List.of(instruments, rics), alerts::add);
     private final ConnectorManager connectors = new ConnectorManager(
-            new ConnectorsProperties(), new TransformRegistry(Map.of()), null, null, null,
-            registry, alerts::add);
+            new ConnectorsProperties(), new TransformRegistry(Map.of()),
+            PayloadCodecRegistry.empty(), null, null, null, registry, alerts::add);
     private final ControlProperties control = new ControlProperties();
 
     @BeforeEach
@@ -76,7 +77,7 @@ class CommandDispatcherTest {
     }
 
     private static InboundRecord command(String json, AtomicInteger acks) {
-        return InboundRecord.of(json).withAck(acks::incrementAndGet);
+        return InboundRecord.of(json).withAck(seqno -> acks.incrementAndGet());
     }
 
     private List<Alert> alerts(String code) {
@@ -295,7 +296,7 @@ class CommandDispatcherTest {
     void ignoresDeleteRecords() {
         CommandDispatcher dispatcher = started();
         AtomicInteger acks = new AtomicInteger();
-        source.emit(InboundRecord.delete("", "k").withAck(acks::incrementAndGet));
+        source.emit(InboundRecord.delete("", "k").withAck(seqno -> acks.incrementAndGet()));
         assertThat(dispatcher.ignored()).isEqualTo(1);
         assertThat(acks.get()).isEqualTo(1);
         assertThat(alerts).isEmpty();

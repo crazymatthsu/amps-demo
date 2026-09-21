@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.tuple;
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.HazelcastSourceProperties;
+import com.demo.amps.connectors.source.Acknowledger;
 import com.demo.amps.connectors.source.InboundRecord;
 import com.hazelcast.client.HazelcastClient;
 import com.hazelcast.cluster.Address;
@@ -190,7 +191,7 @@ class HazelcastMapRecordSourceTest {
             assertThat(record.data()).isEqualTo("{\"quantity\":500}");
             assertThat(record.action()).isEqualTo(InboundRecord.Action.UPSERT);
             // No ack: an entry event has no position the connector could ask Hazelcast for.
-            assertThat(record.ack()).isNull();
+            assertThat(record.acknowledger()).isSameAs(Acknowledger.NONE);
             assertThat(record.attributes())
                     .containsEntry("map", "added")
                     .containsEntry("event", "ADDED")
@@ -244,7 +245,7 @@ class HazelcastMapRecordSourceTest {
             assertThat(delete.key()).isEqualTo("ACC-1");
             // Empty rather than the old value: the pipeline skips the filter for an empty
             // delete and addresses the record by its key, which is all a removal can be sure of.
-            assertThat(delete.data()).isEmpty();
+            assertThat(delete.text()).isEmpty();
             assertThat(delete.attributes()).containsEntry("event", "REMOVED");
         }
     }
@@ -268,7 +269,7 @@ class HazelcastMapRecordSourceTest {
             InboundRecord expired = received.get(1);
             assertThat(expired.action()).isEqualTo(InboundRecord.Action.DELETE);
             assertThat(expired.key()).isEqualTo("ACC-1");
-            assertThat(expired.data()).isEmpty();
+            assertThat(expired.text()).isEmpty();
             assertThat(expired.attributes()).containsEntry("event", "EXPIRED");
         }
     }

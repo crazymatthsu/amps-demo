@@ -56,7 +56,7 @@ import org.slf4j.LoggerFactory;
  * <h2>Acknowledgments drive the commits</h2>
  *
  * <p>{@code enable.auto.commit} is off and nothing is committed on a timer. Every record
- * carries an {@link com.demo.amps.connectors.source.Acknowledgment} that records
+ * carries an {@link com.demo.amps.connectors.source.Acknowledger} that records
  * {@code offset + 1} for its partition, and the framework calls it only after the batch that
  * contains the record has been published <em>and flushed</em> to AMPS. The poll thread then
  * commits what has been acknowledged. So a crash between a publish and its flush re-reads
@@ -300,7 +300,7 @@ public class KafkaRecordSource implements RecordSource {
                     : InboundRecord.of(record.value(), record.key());
             handler.onRecord(delivered
                     .withAttributes(attributesOf(record))
-                    .withAck(() -> acknowledge(partition, record.offset())));
+                    .withAck(seqno -> acknowledge(partition, record.offset())));
         } catch (RuntimeException e) {
             // One bad record is not a reason to drop the subscription -- and because it was
             // never acknowledged, its offset is not committed either.

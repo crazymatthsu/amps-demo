@@ -52,23 +52,23 @@ class AmpsAlertSinkTest {
         }
 
         @Override
-        public void publish(String topic, String data, String sowKey) {
-            recording.publish(topic, data, sowKey);
+        public long publish(String topic, Object data, String sowKey) {
+            return recording.publish(topic, data, sowKey);
         }
 
         @Override
-        public void deltaPublish(String topic, String data, String sowKey) {
-            recording.deltaPublish(topic, data, sowKey);
+        public long deltaPublish(String topic, Object data, String sowKey) {
+            return recording.deltaPublish(topic, data, sowKey);
         }
 
         @Override
-        public void sowDeleteByKey(String topic, String sowKey) {
-            recording.sowDeleteByKey(topic, sowKey);
+        public long sowDeleteByKey(String topic, String sowKey) {
+            return recording.sowDeleteByKey(topic, sowKey);
         }
 
         @Override
-        public void sowDeleteByFilter(String topic, String filter) {
-            recording.sowDeleteByFilter(topic, filter);
+        public long sowDeleteByFilter(String topic, String filter) {
+            return recording.sowDeleteByFilter(topic, filter);
         }
 
         @Override

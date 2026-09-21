@@ -17,17 +17,22 @@ import org.springframework.expression.Expression;
  *
  * <p>Steps run in the order they were written and each one gets its own copy of the field map,
  * so a step never edits what the step before it is still described by, and a
- * {@link RecordTransform} bean cannot corrupt the chain by mutating its argument. The fold
- * stops at the first step that returns {@code null}, which is the spelling for "drop this
- * record" -- the connector counts that apart from a rejection, because it is a decision rather
- * than a failure.
+ * {@link RecordTransform} bean cannot corrupt the chain by mutating its argument. The copy is
+ * always {@link Fields#copy}, which for a typed record's
+ * {@link com.demo.amps.connectors.codec.FieldView} clones the builder behind it rather than
+ * flattening it: the built-in steps therefore edit a protobuf message the way they edit a
+ * JSON map, and the object the source delivered is never touched. The fold stops at the
+ * first step that returns {@code null}, which is the spelling for "drop this record" -- the
+ * connector counts that apart from a rejection, because it is a decision rather than a
+ * failure.
  *
  * <p>The built-in kinds, all compiled by {@link #compile}:
  *
  * <ul>
  *   <li>{@code keep} -- projection, in the order listed. Naming a repeated field keeps every
  *       occurrence of it ({@code 55}, {@code 55#2}…), because they are one field repeated
- *       rather than several fields</li>
+ *       rather than several fields. The one step that builds a genuinely new map: after it a
+ *       typed record is a plain map, which the codec's encoder rebuilds from</li>
  *   <li>{@code drop} -- the complement, with the same occurrence rule</li>
  *   <li>{@code rename} -- in place, so the field keeps its position in wire order, and an
  *       occurrence suffix survives the rename ({@code 55#2} becomes {@code symbol#2})</li>
@@ -172,7 +177,7 @@ public final class TransformChain {
         if (step.getSet() != null) {
             Map<String, String> set = new LinkedHashMap<>(step.getSet());
             return (record, fields) -> {
-                Map<String, Object> result = new LinkedHashMap<>(fields);
+                Map<String, Object> result = Fields.copy(fields);
                 set.forEach((field, value) -> Fields.put(result, field, value));
                 return result;
             };
@@ -186,7 +191,7 @@ public final class TransformChain {
         Map<String, String> text = new LinkedHashMap<>(step.getDerive());
         text.forEach((field, expression) -> derive.put(field, FieldExpressions.parse(expression)));
         return (record, fields) -> {
-            Map<String, Object> result = new LinkedHashMap<>(fields);
+            Map<String, Object> result = Fields.copy(fields);
             derive.forEach((field, expression) ->
                     Fields.put(result, field, FieldExpressions.evaluate(
                             expression, text.get(field), record, result)));
@@ -207,7 +212,7 @@ public final class TransformChain {
 
     /** The complement of {@link #keep}: everything except the named fields. */
     private static Map<String, Object> drop(Map<String, Object> fields, List<String> names) {
-        Map<String, Object> result = new LinkedHashMap<>(fields);
+        Map<String, Object> result = Fields.copy(fields);
         for (String name : names) {
             for (String key : Fields.occurrenceKeys(fields, name)) {
                 Fields.remove(result, key);
@@ -223,7 +228,9 @@ public final class TransformChain {
      * an occurrence suffix rides along: renaming {@code 55} to {@code symbol} also turns
      * {@code 55#2} into {@code symbol#2}, so a repeating group is still a group afterwards. A
      * dotted source path cannot be handled that way -- it lives inside a nested object -- so it
-     * is moved in a second pass and lands at the end of its destination.
+     * is moved in a second pass and lands at the end of its destination. Like {@code keep},
+     * this builds a new map rather than copying: a typed record is a plain map afterwards,
+     * because a builder has no way to call a field by another name.
      */
     private static Map<String, Object> rename(
             Map<String, Object> fields, Map<String, String> rename) {
@@ -252,7 +259,7 @@ public final class TransformChain {
     /** Code tables: rewrite a listed code, pass an unlisted one through unchanged. */
     private static Map<String, Object> values(
             Map<String, Object> fields, Map<String, Map<String, String>> tables) {
-        Map<String, Object> result = new LinkedHashMap<>(fields);
+        Map<String, Object> result = Fields.copy(fields);
         for (Map.Entry<String, Map<String, String>> table : tables.entrySet()) {
             String field = table.getKey();
             for (String key : Fields.occurrenceKeys(result, field)) {

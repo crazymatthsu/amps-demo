@@ -6,6 +6,7 @@ import com.demo.amps.connectors.alert.Alerts;
 import com.demo.amps.connectors.amps.AmpsPublisher;
 import com.demo.amps.connectors.amps.AmpsPublisherFactory;
 import com.demo.amps.connectors.amps.BatchPublisher;
+import com.demo.amps.connectors.codec.PayloadCodecRegistry;
 import com.demo.amps.connectors.config.AmpsServerProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.source.RecordSource;
@@ -68,6 +69,7 @@ public final class Connector implements AutoCloseable {
      * @param properties the connector configuration
      * @param server the application's AMPS server block
      * @param transforms the application's transform beans, for {@code bean:} steps
+     * @param codecs the application's payload codecs, for typed records and a typed target
      * @param publishers builds this connector's AMPS client
      * @param sources resolves this connector's source from the modules on the classpath
      * @param flows registers this connector's Spring Integration flow
@@ -77,6 +79,7 @@ public final class Connector implements AutoCloseable {
             ConnectorProperties properties,
             AmpsServerProperties server,
             TransformRegistry transforms,
+            PayloadCodecRegistry codecs,
             AmpsPublisherFactory publishers,
             SourceResolver sources,
             ConnectorFlowFactory flows,
@@ -87,7 +90,8 @@ public final class Connector implements AutoCloseable {
         // context is built here and not by the pipeline: the pipeline is a function and does
         // not know whose it is.
         this.pipeline = new RecordPipeline(
-                properties, new TransformContext(properties.getName(), transforms, alerts));
+                properties, new TransformContext(properties.getName(), transforms, alerts),
+                codecs);
         // Wrapped here, not in BatchPublisher: that class is about the acknowledgment
         // contract and stays ignorant of who is listening.
         this.publisher = new AlertingAmpsPublisher(

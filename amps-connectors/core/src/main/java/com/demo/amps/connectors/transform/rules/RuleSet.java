@@ -43,8 +43,9 @@ import org.springframework.expression.Expression;
  * {@link IllegalArgumentException} the pipeline counts as <em>rejected</em>, like a
  * {@code derive} that fails; a rule that drops is counted as <em>dropped</em>, like any
  * transform returning {@code null}. The input map is never written to: every {@code set}
- * lands in a copy, so the chain's "each step gets its own map" contract holds inside the
- * step as well as between steps.
+ * lands in a copy -- {@link Fields#copy}, so a typed record's view is cloned rather than
+ * flattened -- and the chain's "each step gets its own map" contract holds inside the step
+ * as well as between steps.
  */
 public final class RuleSet implements RecordTransform {
 
@@ -154,7 +155,7 @@ public final class RuleSet implements RecordTransform {
             }
             rule.hits.incrementAndGet();
             if (rule.set != null) {
-                Map<String, Object> written = new LinkedHashMap<>(current);
+                Map<String, Object> written = Fields.copy(current);
                 rule.set.forEach((field, value) -> Fields.put(written, field, value));
                 current = written;
             }

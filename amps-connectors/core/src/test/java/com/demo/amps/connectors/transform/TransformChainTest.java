@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.demo.amps.connectors.alert.Alert;
+import com.demo.amps.connectors.codec.FieldView;
+import com.demo.amps.connectors.codec.TestPojoCodec;
 import com.demo.amps.connectors.config.RuleAlert;
 import com.demo.amps.connectors.config.RuleProperties;
 import com.demo.amps.connectors.config.TransformStep;
@@ -137,6 +139,54 @@ class TransformChainTest {
         step.setDrop(List.of("55"));
         apply(step, fields);
         assertThat(fields).containsKey("55");
+    }
+
+    @Test
+    @DisplayName("a typed record's view is copied, never mutated: the step edits a clone of the builder")
+    void aViewIsCopiedRatherThanMutated() {
+        TestPojoCodec codec = new TestPojoCodec();
+        TestPojoCodec.Order order = new TestPojoCodec.Order("O-1", 100, "185.50")
+                .party(new TestPojoCodec.Party("ACME", "buyer"));
+        Map<String, Object> view = codec.decoder().decode(order);
+
+        TransformStep set = new TransformStep();
+        set.setSet(Map.of("status", "LARGE", "party.role", "seller"));
+        Map<String, Object> result = apply(set, view);
+
+        assertThat(codec.copies()).as("Fields.copy cloned the builder once").isEqualTo(1);
+        assertThat(result).isInstanceOf(FieldView.class).isNotSameAs(view);
+        assertThat(result.get("status")).isEqualTo("LARGE");
+        assertThat(((FieldView) result).target()).isInstanceOf(TestPojoCodec.Order.class)
+                .isNotSameAs(order);
+        assertThat(((TestPojoCodec.Order) ((FieldView) result).target()).party().role())
+                .isEqualTo("seller");
+        assertThat(order.status()).as("the record's object is untouched").isNull();
+        assertThat(order.party().role()).isEqualTo("buyer");
+        assertThat(view.get("status")).isNull();
+
+        TransformStep drop = new TransformStep();
+        drop.setDrop(List.of("price"));
+        Map<String, Object> dropped = apply(drop, view);
+        assertThat(dropped).isInstanceOf(FieldView.class).doesNotContainKey("price");
+        assertThat(order.price()).isNotNull();
+
+        TransformStep values = new TransformStep();
+        values.setValues(Map.of("id", Map.of("O-1", "ORDER-ONE")));
+        assertThat(apply(values, view)).isInstanceOf(FieldView.class)
+                .containsEntry("id", "ORDER-ONE");
+        assertThat(order.id()).isEqualTo("O-1");
+
+        TransformStep derive = new TransformStep();
+        derive.setDerive(Map.of("status", "#f['qty'] > 50 ? 'BIG' : 'SMALL'"));
+        assertThat(apply(derive, view)).isInstanceOf(FieldView.class)
+                .containsEntry("status", "BIG");
+        assertThat(codec.copies()).isEqualTo(4);
+
+        // keep builds a new map, so a typed record is a plain map afterwards.
+        TransformStep keep = new TransformStep();
+        keep.setKeep(List.of("id"));
+        Map<String, Object> kept = apply(keep, view);
+        assertThat(kept).isNotInstanceOf(FieldView.class).containsExactly(Map.entry("id", "O-1"));
     }
 
     @Test

@@ -6,6 +6,8 @@ import com.demo.amps.connectors.alert.Alerts;
 import com.demo.amps.connectors.alert.AmpsAlertSink;
 import com.demo.amps.connectors.amps.AmpsPublisherFactory;
 import com.demo.amps.connectors.amps.HaAmpsPublisher;
+import com.demo.amps.connectors.codec.PayloadCodec;
+import com.demo.amps.connectors.codec.PayloadCodecRegistry;
 import com.demo.amps.connectors.config.AlertProperties;
 import com.demo.amps.connectors.config.ConnectorValidator;
 import com.demo.amps.connectors.config.ConnectorsProperties;
@@ -49,11 +51,12 @@ import org.springframework.integration.dsl.context.IntegrationFlowContext;
  *
  * <p>The extension points are collected rather than enumerated -- every
  * {@link SourceFactory} and {@link ResourceFactory} on the classpath (each module
- * auto-configures its own), every {@link RecordTransform}, {@link AppResource},
- * {@link AlertSink} and {@link CommandHandler} bean the application declares. All of them
- * are legitimately empty: an application with no source module can still run simulated
- * connectors, transforms are the exception rather than the rule, alerts with no sink are
- * alerts in the log, and the built-in commands need no handler bean at all.
+ * auto-configures its own), every {@link RecordTransform}, {@link PayloadCodec},
+ * {@link AppResource}, {@link AlertSink} and {@link CommandHandler} bean the application
+ * declares. All of them are legitimately empty: an application with no source module can
+ * still run simulated connectors, transforms and codecs are the exception rather than the
+ * rule, alerts with no sink are alerts in the log, and the built-in commands need no handler
+ * bean at all.
  *
  * <p>Every bean is {@code @ConditionalOnMissingBean}, which is how a test replaces the AMPS
  * client with a recording one and drives the whole flow -- channels, aggregator, timers,
@@ -108,6 +111,23 @@ public class ConnectorsAutoConfiguration {
     @ConditionalOnMissingBean
     public TransformRegistry transformRegistry(ApplicationContext context) {
         return new TransformRegistry(context.getBeansOfType(RecordTransform.class));
+    }
+
+    /**
+     * The codecs a typed record, or a typed target, can name, by payload type.
+     *
+     * <p>Empty in the usual case -- every feed is text -- and only ever consulted for a set
+     * {@code PayloadType}; the text formats never go through it.
+     *
+     * @param codecs every codec bean the application declares
+     * @return the registry
+     * @throws IllegalArgumentException if two codecs claim one type, or one claims the text
+     *     default
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public PayloadCodecRegistry payloadCodecRegistry(ObjectProvider<PayloadCodec> codecs) {
+        return new PayloadCodecRegistry(codecs.orderedStream().toList());
     }
 
     /**
@@ -218,6 +238,7 @@ public class ConnectorsAutoConfiguration {
      *
      * @param properties the bound configuration
      * @param transforms the application's transform beans
+     * @param codecs the application's payload codecs
      * @param publishers builds each connector's AMPS client
      * @param sources resolves each connector's source
      * @param flows registers each connector's flow
@@ -230,13 +251,14 @@ public class ConnectorsAutoConfiguration {
     public ConnectorManager connectorManager(
             ConnectorsProperties properties,
             TransformRegistry transforms,
+            PayloadCodecRegistry codecs,
             AmpsPublisherFactory publishers,
             SourceResolver sources,
             ConnectorFlowFactory flows,
             ResourceRegistry resources,
             AlertManager alerts) {
         return new ConnectorManager(
-                properties, transforms, publishers, sources, flows, resources, alerts);
+                properties, transforms, codecs, publishers, sources, flows, resources, alerts);
     }
 
     /**
