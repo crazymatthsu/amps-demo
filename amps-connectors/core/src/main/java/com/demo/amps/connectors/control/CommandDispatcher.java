@@ -6,7 +6,7 @@ import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.ControlProperties;
 import com.demo.amps.connectors.config.SourceFormat;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.source.SourceResolver;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -215,17 +215,17 @@ public final class CommandDispatcher implements SmartLifecycle {
     }
 
     /** One record from the control source: parse, address, dispatch, log, acknowledge. */
-    void onRecord(SourceRecord record) {
+    void onRecord(InboundRecord record) {
         received.incrementAndGet();
         try {
-            if (record.action() == SourceRecord.Action.DELETE) {
+            if (record.action() == InboundRecord.Action.DELETE) {
                 ignored.incrementAndGet();
                 log.debug("[control] ignored a removal: it carries no command");
                 return;
             }
             ControlCommand command;
             try {
-                command = ControlCommand.parse(record.data());
+                command = ControlCommand.parse(record.text());
             } catch (IllegalArgumentException e) {
                 failed.incrementAndGet();
                 // The outcome lines are INFO throughout: the alert the manager logs beside
@@ -233,7 +233,7 @@ public final class CommandDispatcher implements SmartLifecycle {
                 log.info("[control] a payload is not a command: {}", e.getMessage());
                 Map<String, Object> details = new LinkedHashMap<>();
                 details.put("error", e.getMessage());
-                details.put("payload", excerpt(record.data()));
+                details.put("payload", excerpt(record.text()));
                 alerts.raise(Alert.of(Alert.Severity.WARN, COMMAND_INVALID,
                                 "a payload on the control channel is not a command: "
                                         + e.getMessage())
@@ -250,7 +250,7 @@ public final class CommandDispatcher implements SmartLifecycle {
         } finally {
             // Whatever happened, the source's position moves past this record: reading a
             // bad command a second time would fail the same way.
-            record.acknowledge();
+            record.ack();
         }
     }
 

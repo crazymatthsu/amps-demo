@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.demo.amps.connectors.alert.Alert;
+import com.demo.amps.connectors.codec.PayloadCodecRegistry;
 import com.demo.amps.connectors.config.AmpsSourceProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.ConnectorsProperties;
@@ -14,7 +15,7 @@ import com.demo.amps.connectors.resource.ResourceRegistry;
 import com.demo.amps.connectors.runtime.ConnectorManager;
 import com.demo.amps.connectors.source.FakeRecordSource;
 import com.demo.amps.connectors.source.FakeSourceFactory;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.source.SourceResolver;
 import com.demo.amps.connectors.transform.TransformRegistry;
 import java.util.ArrayList;
@@ -42,8 +43,8 @@ class CommandDispatcherTest {
     private final ResourceRegistry registry =
             new ResourceRegistry(List.of(instruments, rics), alerts::add);
     private final ConnectorManager connectors = new ConnectorManager(
-            new ConnectorsProperties(), new TransformRegistry(Map.of()), null, null, null,
-            registry, alerts::add);
+            new ConnectorsProperties(), new TransformRegistry(Map.of()),
+            PayloadCodecRegistry.empty(), null, null, null, registry, alerts::add);
     private final ControlProperties control = new ControlProperties();
 
     @BeforeEach
@@ -75,8 +76,8 @@ class CommandDispatcherTest {
         return dispatcher;
     }
 
-    private static SourceRecord command(String json, AtomicInteger acks) {
-        return SourceRecord.of(json).withAck(acks::incrementAndGet);
+    private static InboundRecord command(String json, AtomicInteger acks) {
+        return InboundRecord.of(json).withAck(seqno -> acks.incrementAndGet());
     }
 
     private List<Alert> alerts(String code) {
@@ -155,9 +156,9 @@ class CommandDispatcherTest {
     @DisplayName("reload with target all, or none, reloads every reloadable resource")
     void reloadsEverythingForAllOrNoTarget() {
         CommandDispatcher dispatcher = started();
-        source.emit(SourceRecord.of("{\"command\":\"reload\",\"target\":\"all\"}"));
-        source.emit(SourceRecord.of("{\"command\":\"reload\"}"));
-        source.emit(SourceRecord.of("{\"command\":\"reload\",\"target\":\" \"}"));
+        source.emit(InboundRecord.of("{\"command\":\"reload\",\"target\":\"all\"}"));
+        source.emit(InboundRecord.of("{\"command\":\"reload\"}"));
+        source.emit(InboundRecord.of("{\"command\":\"reload\",\"target\":\" \"}"));
         assertThat(instruments.reloadCount()).isEqualTo(3);
         assertThat(rics.reloadCount()).isZero();
         assertThat(dispatcher.succeeded()).isEqualTo(3);
@@ -200,7 +201,7 @@ class CommandDispatcherTest {
     @DisplayName("status logs the connectors and the resources, and answers with a STATUS alert")
     void statusRaisesAnInfoAlert() {
         CommandDispatcher dispatcher = started();
-        source.emit(SourceRecord.of("{\"command\":\"status\",\"requestId\":\"r-9\"}"));
+        source.emit(InboundRecord.of("{\"command\":\"status\",\"requestId\":\"r-9\"}"));
 
         assertThat(dispatcher.succeeded()).isEqualTo(1);
         Alert status = alerts(StatusCommand.STATUS).get(0);
@@ -280,10 +281,10 @@ class CommandDispatcherTest {
         control.setAcceptTargets(List.of());
         CommandDispatcher dispatcher = started();
         assertThat(dispatcher.target()).isEqualTo("enricher-2");
-        source.emit(SourceRecord.of("{\"command\":\"reload\",\"target\":\"instruments\",\"to\":\"enricher-2\"}"));
-        source.emit(SourceRecord.of("{\"command\":\"reload\",\"target\":\"instruments\",\"to\":\"" + APPLICATION + "\"}"));
+        source.emit(InboundRecord.of("{\"command\":\"reload\",\"target\":\"instruments\",\"to\":\"enricher-2\"}"));
+        source.emit(InboundRecord.of("{\"command\":\"reload\",\"target\":\"instruments\",\"to\":\"" + APPLICATION + "\"}"));
         // With no accept-targets at all, `all` is still everyone.
-        source.emit(SourceRecord.of("{\"command\":\"reload\",\"target\":\"instruments\",\"to\":\"all\"}"));
+        source.emit(InboundRecord.of("{\"command\":\"reload\",\"target\":\"instruments\",\"to\":\"all\"}"));
         assertThat(instruments.reloadCount()).isEqualTo(2);
         assertThat(dispatcher.ignored()).isEqualTo(1);
         // The synthetic connector is still named after the application, not the target.
@@ -295,7 +296,7 @@ class CommandDispatcherTest {
     void ignoresDeleteRecords() {
         CommandDispatcher dispatcher = started();
         AtomicInteger acks = new AtomicInteger();
-        source.emit(SourceRecord.delete("", "k").withAck(acks::incrementAndGet));
+        source.emit(InboundRecord.delete("", "k").withAck(seqno -> acks.incrementAndGet()));
         assertThat(dispatcher.ignored()).isEqualTo(1);
         assertThat(acks.get()).isEqualTo(1);
         assertThat(alerts).isEmpty();
@@ -333,8 +334,8 @@ class CommandDispatcherTest {
         CommandDispatcher dispatcher = started(flush, reload);
         assertThat(dispatcher.commands()).containsExactlyInAnyOrder("reload", "status", "flush");
 
-        source.emit(SourceRecord.of("{\"command\":\"flush\",\"args\":{\"cache\":\"rics\"}}"));
-        source.emit(SourceRecord.of("{\"command\":\"reload\",\"target\":\"instruments\"}"));
+        source.emit(InboundRecord.of("{\"command\":\"flush\",\"args\":{\"cache\":\"rics\"}}"));
+        source.emit(InboundRecord.of("{\"command\":\"reload\",\"target\":\"instruments\"}"));
         assertThat(seen).extracting(ControlCommand::command).containsExactly("flush", "reload");
         assertThat(seen.get(0).args()).containsEntry("cache", "rics");
         // The built-in reload was replaced, so the registry was never asked.

@@ -1,7 +1,7 @@
 package com.demo.amps.connectors.runtime;
 
 /**
- * What the batch publisher does with one {@link PublishRequest}.
+ * What the batch publisher does with one {@link OutboundRecord}.
  *
  * <p>A superset of the connector's configured {@code amps.command}: a connector chooses
  * between {@link #PUBLISH} and {@link #DELTA_PUBLISH} for its upserts, and

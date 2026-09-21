@@ -1,5 +1,6 @@
 package com.demo.amps.connectors.decode;
 
+import com.demo.amps.connectors.codec.Payloads;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -20,9 +21,9 @@ public final class TextRecordDecoder implements RecordDecoder {
     public static final String FIELD = "text";
 
     @Override
-    public Map<String, Object> decode(String payload) {
+    public Map<String, Object> decode(Object payload) {
         Map<String, Object> fields = new LinkedHashMap<>();
-        fields.put(FIELD, payload == null ? "" : payload);
+        fields.put(FIELD, Payloads.text(payload));
         return fields;
     }
 }

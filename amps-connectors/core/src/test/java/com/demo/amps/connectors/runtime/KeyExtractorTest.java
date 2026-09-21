@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.demo.amps.connectors.config.KeyProperties;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,14 +31,14 @@ class KeyExtractorTest {
     @DisplayName("PUBLISHER joins the key fields with the separator")
     void publisherJoinsTheKeyFields() {
         assertThat(keys(KeyProperties.Mode.PUBLISHER, "11", "55")
-                .key(SourceRecord.of("x"), order()))
+                .key(InboundRecord.of("x"), order()))
                 .isEqualTo("ORD-1|AAPL");
     }
 
     @Test
     @DisplayName("PUBLISHER with no fields falls back to the source's own key")
     void publisherFallsBackToTheSourceKey() {
-        assertThat(keys(KeyProperties.Mode.PUBLISHER).key(SourceRecord.of("x", "K-7"), order()))
+        assertThat(keys(KeyProperties.Mode.PUBLISHER).key(InboundRecord.of("x", "K-7"), order()))
                 .isEqualTo("K-7");
     }
 
@@ -46,11 +46,11 @@ class KeyExtractorTest {
     @DisplayName("a record with no determinable key is refused, never published unkeyed")
     void publisherRefusesARecordWithNoKey() {
         assertThatThrownBy(() -> keys(KeyProperties.Mode.PUBLISHER)
-                .key(SourceRecord.of("x"), order()))
+                .key(InboundRecord.of("x"), order()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("no key");
         assertThatThrownBy(() -> keys(KeyProperties.Mode.PUBLISHER, "11", "99")
-                .key(SourceRecord.of("x"), order()))
+                .key(InboundRecord.of("x"), order()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("'99'");
     }
@@ -58,10 +58,10 @@ class KeyExtractorTest {
     @Test
     @DisplayName("SERVER sends no key: its job is to check the payload carries the fields")
     void serverChecksRatherThanBuilds() {
-        assertThat(keys(KeyProperties.Mode.SERVER, "11").key(SourceRecord.of("x"), order()))
+        assertThat(keys(KeyProperties.Mode.SERVER, "11").key(InboundRecord.of("x"), order()))
                 .isNull();
         assertThatThrownBy(() -> keys(KeyProperties.Mode.SERVER, "11", "99")
-                .key(SourceRecord.of("x"), order()))
+                .key(InboundRecord.of("x"), order()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("'99'")
                 .hasMessageContaining("<Key>");

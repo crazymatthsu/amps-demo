@@ -21,7 +21,7 @@ import java.util.List;
  *   <li>{@link Mode#PUBLISHER} -- the topic is declared <em>without</em> a {@code <Key>} and the
  *       connector sends the key as the SowKey header. {@code fields} joined by
  *       {@link #getSeparator()} is the key; leave it empty and the source's own key is used
- *       ({@code SourceRecord.key()}), which is what a Kafka message key or a JDBC key-column
+ *       ({@code InboundRecord.key()}), which is what a Kafka message key or a JDBC key-column
  *       set is for.</li>
  * </ul>
  *

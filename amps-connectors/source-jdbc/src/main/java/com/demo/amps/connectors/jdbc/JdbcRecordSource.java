@@ -2,10 +2,10 @@ package com.demo.amps.connectors.jdbc;
 
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.JdbcSourceProperties;
-import com.demo.amps.connectors.source.Acknowledgment;
+import com.demo.amps.connectors.source.Acknowledger;
 import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
@@ -30,6 +30,8 @@ import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentNavigableMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -111,6 +113,22 @@ import org.slf4j.LoggerFactory;
  * journal topic gets a duplicate. At-least-once, as everywhere else in this framework.
  * Without a {@code state-file} the mark is memory only, so a restart re-reads the whole query.
  *
+ * <h2>Sequence numbers count deliveries; the mark stays the position</h2>
+ *
+ * <p>A mark is a {@code BigDecimal}, an {@code Instant} or a string, and the framework
+ * acknowledges by {@code long}: cumulatively, per stream, with the record's own
+ * {@link InboundRecord#seqno() seqno}. So every record this source emits is numbered by a
+ * delivery counter that runs for the life of the source, and an {@code INCREMENTAL} row's
+ * mark is parked in an in-flight map under that number <em>before</em> the row is handed
+ * over. The source's one {@link Acknowledger} takes {@code ack(n)} to mean "every row up to
+ * {@code n} reached AMPS": it folds the marks parked at or below {@code n} into the
+ * acknowledged mark and forgets them, and the poll thread persists the result. The exact
+ * position therefore never leaves this class -- it is also the record's {@code watermark}
+ * attribute, for a rule that wants to log it -- while the number the framework sees is one
+ * it can compare and coalesce. The counter restarts with the process; the durable position is
+ * the state file, as before. A {@code SNAPSHOT} row is numbered too, but carries
+ * {@link Acknowledger#NONE}: there is no position to remember.
+ *
  * <p>{@link #start} returns as soon as the poll thread is running, rather than connecting on
  * the caller's thread. For a transport whose normal state includes "the database is not up
  * yet", a failed first connect is the same event as a dropped one and both belong in the same
@@ -122,6 +140,12 @@ public class JdbcRecordSource implements RecordSource {
 
     /** Attribute carrying the number of the poll a record came from, counting from one. */
     public static final String ATTRIBUTE_POLL = "poll";
+
+    /**
+     * Attribute carrying an {@code INCREMENTAL} row's own mark, in the form the state file
+     * would hold it. Absent on a {@code SNAPSHOT} row, which has no position.
+     */
+    public static final String ATTRIBUTE_WATERMARK = "watermark";
 
     /** How long {@link #close()} waits for the poll thread before giving up on it. */
     private static final long CLOSE_JOIN_MILLIS = 5_000;
@@ -138,6 +162,25 @@ public class JdbcRecordSource implements RecordSource {
 
     /** Numbers the polls for the {@code poll} attribute; read by the poll thread only. */
     private final AtomicLong polls = new AtomicLong();
+
+    /** Numbers every record emitted, for the life of the source: the record's seqno. */
+    private final AtomicLong delivered = new AtomicLong();
+
+    /**
+     * {@code INCREMENTAL}: the mark of every row handed over and not yet acknowledged, by the
+     * seqno it was handed over under. Written by the poll thread before the row is emitted,
+     * drained by whichever thread acknowledges -- and ordered, so "everything up to
+     * {@code n}" is one head map.
+     */
+    private final ConcurrentSkipListMap<Long, Object> inFlight = new ConcurrentSkipListMap<>();
+
+    /**
+     * The one acknowledger every {@code INCREMENTAL} record carries. One instance rather than
+     * one per record, because the framework coalesces a run of records that share an
+     * acknowledger into a single {@code ackBatch} -- and because the acknowledgment is
+     * cumulative, that is all it needs to be.
+     */
+    private final Acknowledger acknowledger = this::acknowledge;
 
     /**
      * Keys seen by the previous {@code SNAPSHOT} poll, mapped to the JSON object of their key
@@ -254,8 +297,8 @@ public class JdbcRecordSource implements RecordSource {
      * @throws SQLException when the query fails, which ends this connection's lifetime
      */
     private void poll(Connection open, RecordHandler handler) throws SQLException {
-        Map<String, String> attributes =
-                Map.of(ATTRIBUTE_POLL, Long.toString(polls.incrementAndGet()));
+        String poll = Long.toString(polls.incrementAndGet());
+        Map<String, String> attributes = Map.of(ATTRIBUTE_POLL, poll);
         boolean keyed = !source.getKeyColumns().isEmpty();
         boolean tracking = snapshot() && keyed;
         Map<String, String> keys = tracking ? new LinkedHashMap<>() : Map.of();
@@ -303,12 +346,21 @@ public class JdbcRecordSource implements RecordSource {
                     if (tracking && key != null) {
                         keys.put(key, keyFields.toString());
                     }
-                    // Only an incremental row can be acknowledged: a snapshot has no position
-                    // to remember -- the next poll re-reads it whatever AMPS said.
-                    Object rowWatermark = rowMark;
-                    Acknowledgment ack = snapshot() ? null : () -> acknowledge(rowWatermark);
-                    emit(json(rows, meta), key, SourceRecord.Action.UPSERT, attributes, ack,
-                            handler);
+                    long seqno = delivered.incrementAndGet();
+                    if (snapshot()) {
+                        // A snapshot has no position to remember -- the next poll re-reads
+                        // the row whatever AMPS said -- so there is nothing to acknowledge.
+                        emit(json(rows, meta), key, InboundRecord.Action.UPSERT, seqno,
+                                attributes, null, handler);
+                    } else {
+                        // Parked BEFORE the hand-over: the acknowledgment can arrive on
+                        // another thread before onRecord returns, and it has to find the mark.
+                        inFlight.put(seqno, rowMark);
+                        emit(json(rows, meta), key, InboundRecord.Action.UPSERT, seqno,
+                                Map.of(ATTRIBUTE_POLL, poll,
+                                        ATTRIBUTE_WATERMARK, String.valueOf(rowMark)),
+                                acknowledger, handler);
+                    }
                 }
             }
         }
@@ -319,8 +371,8 @@ public class JdbcRecordSource implements RecordSource {
                     // The JDBC spelling of an out-of-focus message. The payload is the key
                     // columns and nothing else, so a SERVER-keyed topic can still turn the
                     // removal into a filter.
-                    emit(gone.getValue(), gone.getKey(), SourceRecord.Action.DELETE, attributes,
-                            null, handler);
+                    emit(gone.getValue(), gone.getKey(), InboundRecord.Action.DELETE,
+                            delivered.incrementAndGet(), attributes, null, handler);
                 }
             }
             previousKeys = keys;
@@ -357,16 +409,16 @@ public class JdbcRecordSource implements RecordSource {
         return key.toString();
     }
 
-    private void emit(String data, String key, SourceRecord.Action action,
-            Map<String, String> attributes, Acknowledgment ack, RecordHandler handler) {
+    private void emit(String data, String key, InboundRecord.Action action, long seqno,
+            Map<String, String> attributes, Acknowledger ack, RecordHandler handler) {
         try {
-            SourceRecord record = action == SourceRecord.Action.DELETE
-                    ? SourceRecord.delete(data, key)
+            InboundRecord record = action == InboundRecord.Action.DELETE
+                    ? InboundRecord.delete(data, key)
                     // The key rides along on upserts too, the way a Kafka message key does,
                     // so a PUBLISHER-keyed connector has one on every record and not just on
                     // the ones that leave.
-                    : SourceRecord.of(data, key);
-            record = record.withAttributes(attributes);
+                    : InboundRecord.of(data, key);
+            record = record.withSeqno(seqno).withAttributes(attributes);
             handler.onRecord(ack == null ? record : record.withAck(ack));
         } catch (RuntimeException e) {
             // One bad row is not a reason to drop the feed: the pipeline counts it, we keep
@@ -422,16 +474,25 @@ public class JdbcRecordSource implements RecordSource {
     // ---- the watermark -------------------------------------------------------------------
 
     /**
-     * Record that one incremental row reached AMPS.
+     * Record that every incremental row up to a position reached AMPS.
      *
-     * <p>Called by the batch publisher, on whichever thread flushed. It moves a number and
-     * nothing else -- the poll thread is what turns it into a file.
+     * <p>Called by the batch publisher, on whichever thread flushed, with a record's own seqno
+     * -- and cumulatively: the rows handed over under a lower number are covered too, which
+     * is what lets a run of records be acknowledged with one call. Their marks are folded
+     * into the acknowledged mark with the same comparison the poll uses, so the mark only
+     * ever moves forwards, and then forgotten. It moves a value and nothing else -- the poll
+     * thread is what turns it into a file. Safe to call twice, or out of order: a head map
+     * already drained is empty, and a mark already folded folds to itself.
      *
-     * @param mark the normalised mark of the acknowledged row
+     * @param seqno the acknowledged record's own seqno
      */
-    private void acknowledge(Object mark) {
-        acknowledged.accumulateAndGet(mark,
-                (current, candidate) -> above(candidate, current) ? candidate : current);
+    private void acknowledge(long seqno) {
+        ConcurrentNavigableMap<Long, Object> reached = inFlight.headMap(seqno, true);
+        for (Object mark : reached.values()) {
+            acknowledged.accumulateAndGet(mark,
+                    (current, candidate) -> above(candidate, current) ? candidate : current);
+        }
+        reached.clear();
     }
 
     /**

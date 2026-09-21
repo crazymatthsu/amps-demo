@@ -6,8 +6,12 @@ import com.crankuptheamps.client.DefaultServerChooser;
 import com.crankuptheamps.client.FixedDelayStrategy;
 import com.crankuptheamps.client.HAClient;
 import com.crankuptheamps.client.MemoryPublishStore;
+import com.crankuptheamps.client.Message;
+import com.crankuptheamps.client.MessageStream;
 import com.crankuptheamps.client.PublishStore;
+import com.crankuptheamps.client.Store;
 import com.crankuptheamps.client.exception.AMPSException;
+import com.demo.amps.connectors.codec.Payloads;
 import com.demo.amps.connectors.config.AmpsServerProperties;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -37,6 +41,20 @@ import org.slf4j.LoggerFactory;
  * a client logged on via {@code /amps/fix} publishes FIX-typed topics, and a JSON connector in
  * the same application needs its own connection.
  *
+ * <p>Every command answers with the client sequence number the publish store assigned it --
+ * what {@code Client.publish} itself returns, and what {@code Command.getClientSequenceNumber()}
+ * holds after {@code execute} for the commands built by hand -- so the batch publisher can key
+ * a record by the number the server's persisted acks will count up to. Bytes are sent as
+ * bytes, through the client's {@code byte[]} overloads, and anything else as text.
+ *
+ * <p>A {@link PublishListener}, when one is set before {@link #connect()}, hears the other
+ * end of that: the publish store is wrapped in an {@link ObservingStore}, so every persisted
+ * ack the client hands to the store as {@code discardUpTo} reaches the listener, and the
+ * client's {@code FailedWriteHandler} is installed so a publish the server refuses -- or
+ * answers as a duplicate after a replay -- reaches it too. With {@code publish-store: NONE}
+ * there is no store to observe: the listener is kept, the failed-write handler is still
+ * installed, and {@code persistedUpTo} simply never fires.
+ *
  * <p>{@link #connect()} gives up after about {@code logon-timeout} against a server that is
  * not there, and throws; every reconnect after that first success is the HA client's own and
  * never gives up. The distinction matters because the two callers are different threads with
@@ -61,6 +79,7 @@ public final class HaAmpsPublisher implements AmpsPublisher {
     private final String uri;
 
     private volatile HAClient client;
+    private volatile PublishListener listener;
 
     /**
      * @param server the application's AMPS server block
@@ -76,6 +95,22 @@ public final class HaAmpsPublisher implements AmpsPublisher {
         this.uri = server.uri(messageType);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalStateException if already connected: the store is wrapped and the
+     *     failed-write handler installed as the client is built, so a listener set afterwards
+     *     would hear nothing, and silently hearing nothing is the one thing this must not do
+     */
+    @Override
+    public synchronized void setPublishListener(PublishListener listener) {
+        if (client != null) {
+            throw new IllegalStateException("[" + connectorName
+                    + "] the publish listener must be set before connect()");
+        }
+        this.listener = listener;
+    }
+
     @Override
     public synchronized void connect() throws AMPSException {
         if (client != null) {
@@ -85,6 +120,7 @@ public final class HaAmpsPublisher implements AmpsPublisher {
         int reconnectDelay = (int) server.getReconnectDelay().toMillis();
         try {
             attachPublishStore(connecting);
+            attachFailedWriteHandler(connecting);
             connecting.setServerChooser(new RememberingServerChooser().add(uri));
             // Bounded for the FIRST connect only. connectAndLogon() retries through the
             // server chooser until a strategy tells it to stop, and the plain fixed delay
@@ -121,7 +157,8 @@ public final class HaAmpsPublisher implements AmpsPublisher {
     /** MEMORY, FILE or NONE -- the difference between replaying a reconnect and not. */
     private void attachPublishStore(HAClient connecting) throws AMPSException {
         switch (server.getPublishStore()) {
-            case MEMORY -> connecting.setPublishStore(new MemoryPublishStore(MEMORY_STORE_BLOCKS));
+            case MEMORY -> connecting.setPublishStore(
+                    observed(new MemoryPublishStore(MEMORY_STORE_BLOCKS)));
             case FILE -> {
                 Path directory = Path.of(server.getPublishStoreDir());
                 try {
@@ -130,15 +167,44 @@ public final class HaAmpsPublisher implements AmpsPublisher {
                     throw new UncheckedIOException(
                             "cannot create publish store directory " + directory, e);
                 }
-                connecting.setPublishStore(
-                        new PublishStore(directory.resolve(clientName + ".publish").toString()));
+                connecting.setPublishStore(observed(
+                        new PublishStore(directory.resolve(clientName + ".publish").toString())));
             }
             case NONE -> {
                 // Fire and forget: nothing is replayed after a disconnect, so the connector
                 // degrades to at-most-once. Configured deliberately, for a feed that would
-                // rather lose a message than repeat one.
+                // rather lose a message than repeat one. Nothing to observe either: a
+                // listener set on this publisher never hears a persisted ack.
             }
         }
+    }
+
+    /** The store as configured, wrapped so a listener hears every {@code discardUpTo}. */
+    private Store observed(Store store) {
+        PublishListener observer = listener;
+        return observer == null ? store : new ObservingStore(store, observer, connectorName);
+    }
+
+    /**
+     * The client reports a refused or duplicate publish through this handler, on its receive
+     * thread, with the stored message -- whose sequence is the one the store assigned. The
+     * client absorbs an exception out of it, but silently; contained here, it is at least a
+     * log line.
+     */
+    private void attachFailedWriteHandler(HAClient connecting) {
+        PublishListener observer = listener;
+        if (observer == null) {
+            return;
+        }
+        connecting.setFailedWriteHandler((message, reason) -> {
+            long sequence = message.isSequenceNull() ? 0 : message.getSequence();
+            try {
+                observer.failedWrite(sequence, reason);
+            } catch (RuntimeException e) {
+                log.warn("[{}] publish listener threw on failed write {} (reason {})",
+                        connectorName, sequence, reason, e);
+            }
+        });
     }
 
     @Override
@@ -148,55 +214,76 @@ public final class HaAmpsPublisher implements AmpsPublisher {
     }
 
     @Override
-    public void publish(String topic, String data, String sowKey) {
-        if (sowKey == null) {
+    public long publish(String topic, Object data, String sowKey) {
+        if (sowKey == null && !(data instanceof byte[])) {
             try {
-                required().publish(topic, data);
+                return required().publish(topic, Payloads.text(data));
             } catch (AMPSException e) {
                 throw new IllegalStateException("publish to " + topic + " failed", e);
             }
-            return;
         }
-        execute(new Command("publish").setTopic(topic).setSowKey(sowKey).setData(data),
+        return execute(withData(new Command("publish").setTopic(topic), data).setSowKey(sowKey),
                 "publish to " + topic);
     }
 
     @Override
-    public void deltaPublish(String topic, String data, String sowKey) {
-        if (sowKey == null) {
+    public long deltaPublish(String topic, Object data, String sowKey) {
+        if (sowKey == null && !(data instanceof byte[])) {
             try {
-                required().deltaPublish(topic, data);
+                return required().deltaPublish(topic, Payloads.text(data));
             } catch (AMPSException e) {
                 throw new IllegalStateException("delta publish to " + topic + " failed", e);
             }
-            return;
         }
-        execute(new Command("delta_publish").setTopic(topic).setSowKey(sowKey).setData(data),
+        return execute(
+                withData(new Command("delta_publish").setTopic(topic), data).setSowKey(sowKey),
                 "delta publish to " + topic);
     }
 
     @Override
-    public void sowDeleteByKey(String topic, String sowKey) {
+    public long sowDeleteByKey(String topic, String sowKey) {
         // There is no synchronous sowDeleteByKeys in the Java client -- the only overload takes
         // a MessageHandler -- so the command is built by hand. It goes through the publish
         // store like a publish does (AMPS gives sow_delete a client sequence number too), so
         // the batch's single flush covers it and order with the publishes around it is kept.
-        execute(new Command("sow_delete").setTopic(topic).setSowKeys(sowKey)
+        return execute(new Command("sow_delete").setTopic(topic).setSowKeys(sowKey)
                         .setTimeout(server.getFlushTimeout().toMillis()),
                 "sow delete of " + sowKey + " on " + topic);
     }
 
     @Override
-    public void sowDeleteByFilter(String topic, String filter) {
+    public long sowDeleteByFilter(String topic, String filter) {
+        // Built by hand for the same reason as the delete by key -- the sequence number lives
+        // on the Command -- but synchronous, exactly as the client's own
+        // sowDelete(topic, filter, timeout) is: a stats ack is requested and waited for,
+        // which is the only way to find out that a filter matched nothing. Deletes on a
+        // server-keyed topic are rare enough that the round trip is worth the certainty.
+        long timeout = Math.max(1L, server.getFlushTimeout().toMillis());
+        Command command = new Command("sow_delete").setTopic(topic).setFilter(filter)
+                .addAckType(Message.AckType.Stats).setTimeout(timeout);
+        MessageStream acks;
         try {
-            // This overload is synchronous: it waits for the ack, which is the only way to
-            // find out that a filter matched nothing. Deletes on a server-keyed topic are
-            // rare enough that the round trip is worth the certainty.
-            required().sowDelete(topic, filter, server.getFlushTimeout().toMillis());
+            acks = required().execute(command);
         } catch (AMPSException e) {
             throw new IllegalStateException(
                     "sow delete on " + topic + " with filter [" + filter + "] failed", e);
         }
+        if (acks != null) {
+            try {
+                acks.timeout((int) Math.min(Integer.MAX_VALUE, timeout)).next();
+            } finally {
+                acks.close();
+            }
+        }
+        return command.getClientSequenceNumber();
+    }
+
+    /** Bytes go as bytes, so a codec's binary wire form is not re-encoded on the way out. */
+    private static Command withData(Command command, Object data) {
+        if (data instanceof byte[] bytes) {
+            return command.setData(bytes, 0, bytes.length);
+        }
+        return command.setData(Payloads.text(data));
     }
 
     @Override
@@ -233,12 +320,17 @@ public final class HaAmpsPublisher implements AmpsPublisher {
         }
     }
 
-    /** A command with no ack type requested: sent asynchronously, like {@code publish} is. */
-    private void execute(Command command, String what) {
+    /**
+     * A command with no ack type requested: sent asynchronously, like {@code publish} is.
+     *
+     * @return the client sequence number the publish store assigned, {@code 0} without one
+     */
+    private long execute(Command command, String what) {
         try {
             // The returned stream is the client's shared empty one -- a command with no ack
             // type never produces messages -- so there is nothing to drain or close.
             required().execute(command);
+            return command.getClientSequenceNumber();
         } catch (AMPSException e) {
             throw new IllegalStateException(what + " failed", e);
         }

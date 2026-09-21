@@ -2,7 +2,7 @@ package com.demo.amps.connectors.runtime;
 
 import com.demo.amps.connectors.config.KeyProperties;
 import com.demo.amps.connectors.decode.Fields;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.util.List;
 import java.util.Map;
 
@@ -56,14 +56,14 @@ public final class KeyExtractor {
      * The SowKey header to send with the record, checking on the way that the key can be
      * determined at all.
      *
-     * @param record the source record, for its own key
+     * @param record the inbound record, for its own key
      * @param fields the fields as the transforms left them
      * @return the key to send, or {@code null} in {@link KeyProperties.Mode#SERVER} -- where
      *     the return value is not the point, the check is
      * @throws IllegalArgumentException naming the field the record does not carry, or saying
      *     that the source supplied no key
      */
-    public String key(SourceRecord record, Map<String, Object> fields) {
+    public String key(InboundRecord record, Map<String, Object> fields) {
         List<String> names = properties.getFields();
         if (properties.getMode() == KeyProperties.Mode.SERVER) {
             for (String name : names) {

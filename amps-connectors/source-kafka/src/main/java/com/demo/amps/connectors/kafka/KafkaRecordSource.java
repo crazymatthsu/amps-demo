@@ -1,10 +1,12 @@
 package com.demo.amps.connectors.kafka;
 
+import com.demo.amps.connectors.codec.PayloadType;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.KafkaSourceProperties;
+import com.demo.amps.connectors.source.Acknowledger;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.SourceRecord;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -23,6 +25,7 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.WakeupException;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,11 +34,16 @@ import org.slf4j.LoggerFactory;
  * {@link RecordSource} backed by the Apache Kafka consumer.
  *
  * <p>Reads its cluster and topic settings from {@code source.kafka}; the wire format stays on
- * the connector, because it describes the payload rather than the transport. Values and keys
- * arrive as strings and go straight to the connector's decoder, exactly as an AMPS payload
- * does. A null value is a tombstone and becomes a {@code DELETE}; {@code topic},
- * {@code partition} and {@code offset} ride along as attributes, because once several
- * partitions are interleaved they are the only things that say where a record came from.
+ * the connector, because it describes the payload rather than the transport. Keys arrive as
+ * strings. Values arrive as strings too and go straight to the connector's decoder, exactly
+ * as an AMPS payload does -- unless {@code payload-type} is set, in which case they arrive
+ * as {@code byte[]} (the value deserializer becomes {@link ByteArrayDeserializer}) and every
+ * record is tagged with that {@link PayloadType}, so the pipeline hands the bytes to the
+ * codec the application registered for it rather than to a text decoder. A null value is a
+ * tombstone and becomes a {@code DELETE}; {@code topic}, {@code partition} and {@code offset}
+ * ride along as attributes, because once several partitions are interleaved they are the
+ * only things that say where a record came from, and the offset is also the record's
+ * {@link InboundRecord#seqno() seqno}.
  *
  * <h2>A consumer group, because AMPS is the state</h2>
  *
@@ -56,12 +64,15 @@ import org.slf4j.LoggerFactory;
  * <h2>Acknowledgments drive the commits</h2>
  *
  * <p>{@code enable.auto.commit} is off and nothing is committed on a timer. Every record
- * carries an {@link com.demo.amps.connectors.source.Acknowledgment} that records
- * {@code offset + 1} for its partition, and the framework calls it only after the batch that
- * contains the record has been published <em>and flushed</em> to AMPS. The poll thread then
- * commits what has been acknowledged. So a crash between a publish and its flush re-reads
- * those records rather than losing them -- at-least-once, the framework's contract, made of
- * Kafka's own parts:
+ * carries its partition's {@link Acknowledger} -- one per {@link TopicPartition}, because an
+ * offset only means something within its partition -- which records {@code offset + 1} for
+ * the partition when the framework calls it with the record's offset, and the framework calls
+ * it only after the batch that contains the record has been published <em>and flushed</em> to
+ * AMPS. Acknowledgment is cumulative, so a run of records on one partition can be answered
+ * with one {@code ackBatch(first, last)}, which is just {@code ack(last)}. The poll thread
+ * then commits what has been acknowledged. So a crash between a publish and its flush
+ * re-reads those records rather than losing them -- at-least-once, the framework's contract,
+ * made of Kafka's own parts:
  *
  * <table border="1">
  *   <caption>Who commits what, and from where</caption>
@@ -113,7 +124,10 @@ public class KafkaRecordSource implements RecordSource {
 
     private final ConnectorProperties connector;
     private final KafkaSourceProperties source;
-    private final Supplier<Consumer<String, String>> consumerFactory;
+    private final Supplier<Consumer<String, ?>> consumerFactory;
+
+    /** What the topic's values are: a codec's type, or {@link PayloadType#UNSET} for text. */
+    private final PayloadType payloadType;
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean connected = new AtomicBoolean(false);
@@ -141,7 +155,19 @@ public class KafkaRecordSource implements RecordSource {
      */
     private final ConcurrentHashMap<TopicPartition, Long> committed = new ConcurrentHashMap<>();
 
-    private volatile Consumer<String, String> consumer;
+    /**
+     * The one acknowledger each partition's records share, created when the partition's first
+     * record is dispatched and removed when the partition is revoked or lost.
+     *
+     * <p>One <em>instance</em> per partition is the point, not merely one behaviour: the
+     * publisher coalesces consecutive records that share an acknowledger into a single
+     * {@code ackBatch}, and a late acknowledgment from before a rebalance can be told apart
+     * from a current one by whether its acknowledger is still the registered one.
+     */
+    private final ConcurrentHashMap<TopicPartition, Acknowledger> acknowledgers =
+            new ConcurrentHashMap<>();
+
+    private volatile Consumer<String, ?> consumer;
     private volatile Thread thread;
 
     public KafkaRecordSource(ConnectorProperties connector) {
@@ -151,19 +177,23 @@ public class KafkaRecordSource implements RecordSource {
     /**
      * Package-private seam: hands the poll loop a consumer of the test's choosing (a
      * {@code MockConsumer}) instead of dialling a broker. Each call must return a <em>new</em>
-     * consumer -- the loop closes its consumer before it reconnects.
+     * consumer -- the loop closes its consumer before it reconnects. The value type is left
+     * open because it is the configuration's to decide: {@code String} for a text topic,
+     * {@code byte[]} for a typed one.
      *
      * @param connector the connector configuration
      * @param consumerFactory builds the consumer, or {@code null} for a real
      *     {@link KafkaConsumer} built from {@link #consumerConfig()}
+     * @throws IllegalArgumentException if {@code payload-type} is half set or negative
      */
     KafkaRecordSource(
-            ConnectorProperties connector, Supplier<Consumer<String, String>> consumerFactory) {
+            ConnectorProperties connector, Supplier<Consumer<String, ?>> consumerFactory) {
         this.connector = connector;
         this.source = connector.getSource().getKafka();
+        this.payloadType = source.getPayloadType().toPayloadType();
         this.consumerFactory = consumerFactory != null
                 ? consumerFactory
-                : () -> new KafkaConsumer<>(consumerConfig());
+                : () -> new KafkaConsumer<String, Object>(consumerConfig());
     }
 
     @Override
@@ -183,6 +213,8 @@ public class KafkaRecordSource implements RecordSource {
      * <p>Package-private because it is the honest place to assert what the connector sends to
      * the broker; the {@code properties} passthrough is applied <em>last</em>, so an operator
      * can override anything here -- including the deserializers -- without a code change.
+     * The value deserializer follows {@code payload-type}: bytes for a typed topic, so the
+     * codec sees exactly what was produced, text otherwise.
      *
      * @return the consumer properties, in the order they are applied
      */
@@ -204,8 +236,9 @@ public class KafkaRecordSource implements RecordSource {
                 Integer.toString(source.getMaxPollRecords()));
         config.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
                 StringDeserializer.class.getName());
-        config.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
-                StringDeserializer.class.getName());
+        config.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, payloadType.isSet()
+                ? ByteArrayDeserializer.class.getName()
+                : StringDeserializer.class.getName());
         // Names this connector in the broker's own logs and metrics, so a busy cluster can
         // be asked which connector is behind a lagging group.
         config.put(ConsumerConfig.CLIENT_ID_CONFIG, connector.getName());
@@ -219,7 +252,7 @@ public class KafkaRecordSource implements RecordSource {
      */
     private void run(RecordHandler handler) {
         while (!closed.get()) {
-            Consumer<String, String> client = null;
+            Consumer<String, ?> client = null;
             try {
                 client = consumerFactory.get();
                 this.consumer = client;
@@ -268,11 +301,11 @@ public class KafkaRecordSource implements RecordSource {
     }
 
     /** Poll, hand every record over, commit whatever the pipeline acknowledged meanwhile. */
-    private void consume(Consumer<String, String> client, RecordHandler handler) {
+    private void consume(Consumer<String, ?> client, RecordHandler handler) {
         Duration pollTimeout = source.getPollTimeout();
         while (!closed.get()) {
-            ConsumerRecords<String, String> records = client.poll(pollTimeout);
-            for (ConsumerRecord<String, String> record : records) {
+            ConsumerRecords<String, ?> records = client.poll(pollTimeout);
+            for (ConsumerRecord<String, ?> record : records) {
                 dispatch(record, handler);
             }
             // After the records, not before: a poll that returned nothing still has to commit,
@@ -282,25 +315,36 @@ public class KafkaRecordSource implements RecordSource {
     }
 
     /**
-     * Turn one Kafka record into a {@link SourceRecord} and hand it over.
+     * Turn one Kafka record into an {@link InboundRecord} and hand it over.
      *
      * <p>Runs on the poll thread and the pipeline runs inside
      * {@link RecordHandler#onRecord}, which is the back-pressure: a connector that cannot keep
      * up stops polling, and Kafka's own {@code max.poll.interval.ms} eventually rebalances its
      * partitions to an instance that can.
+     *
+     * <p>The record's seqno is its offset and its acknowledger is its partition's, which is
+     * what lets the framework acknowledge cumulatively: {@code ack(offset)} on either commits
+     * {@code offset + 1}. The type is the topic's -- a tombstone on a typed topic is tagged
+     * too, with nothing to decode, so that every record of one stream says the same thing
+     * about what it carries.
      */
-    private void dispatch(ConsumerRecord<String, String> record, RecordHandler handler) {
+    private void dispatch(ConsumerRecord<String, ?> record, RecordHandler handler) {
         TopicPartition partition = new TopicPartition(record.topic(), record.partition());
         try {
-            SourceRecord delivered = record.value() == null
+            Object value = record.value();
+            InboundRecord delivered = value == null
                     // A tombstone: key, no value. The empty payload keeps the DELETE path's
                     // decode quiet -- a removal is addressed by its key, and on a compacted
                     // topic the message key is the only thing that can carry it.
-                    ? SourceRecord.delete("", record.key())
-                    : SourceRecord.of(record.value(), record.key());
+                    ? InboundRecord.delete("", record.key())
+                    // A String from the text path, a byte[] from the typed one; the type
+                    // tells the pipeline which decoder wants it.
+                    : InboundRecord.of(value, record.key());
             handler.onRecord(delivered
+                    .withType(payloadType)
+                    .withSeqno(record.offset())
                     .withAttributes(attributesOf(record))
-                    .withAck(() -> acknowledge(partition, record.offset())));
+                    .withAck(acknowledgers.computeIfAbsent(partition, PartitionAcknowledger::new)));
         } catch (RuntimeException e) {
             // One bad record is not a reason to drop the subscription -- and because it was
             // never acknowledged, its offset is not committed either.
@@ -310,7 +354,7 @@ public class KafkaRecordSource implements RecordSource {
     }
 
     /** Where the record came from: the only thing an interleaved feed cannot reconstruct. */
-    private static Map<String, String> attributesOf(ConsumerRecord<String, String> record) {
+    private static Map<String, String> attributesOf(ConsumerRecord<String, ?> record) {
         Map<String, String> attributes = new LinkedHashMap<>(4);
         attributes.put(ATTRIBUTE_TOPIC, record.topic());
         attributes.put(ATTRIBUTE_PARTITION, Integer.toString(record.partition()));
@@ -321,18 +365,45 @@ public class KafkaRecordSource implements RecordSource {
     // ---- offsets ---------------------------------------------------------------------
 
     /**
-     * Record that one record reached AMPS.
+     * One partition's acknowledger: the stream the framework's cumulative acknowledgment is
+     * about, because an offset is a position within a partition and nothing else.
      *
      * <p>Called by the batch publisher, on whichever thread flushed -- never on the poll
      * thread, and never touching the consumer. All it does is move a number; the poll thread
-     * turns that number into a commit.
+     * turns that number into a commit. {@code ackBatch(from, to)} is the interface's default,
+     * {@code ack(to)}, which is exactly what a cumulative commit means.
      *
-     * @param partition the record's partition
-     * @param offset the record's own offset, stored as {@code offset + 1} because that is
-     *     what a committed offset means: where to resume
+     * <p>An acknowledger that is no longer its partition's registered one -- the partition
+     * was revoked or lost since the record was read -- moves nothing: the partition's offsets
+     * are another member's business now, and re-entering one here would have the next poll
+     * commit a stale position over whatever that member has committed since.
      */
-    private void acknowledge(TopicPartition partition, long offset) {
-        acknowledged.merge(partition, offset + 1, Math::max);
+    private final class PartitionAcknowledger implements Acknowledger {
+
+        private final TopicPartition partition;
+
+        private PartitionAcknowledger(TopicPartition partition) {
+            this.partition = partition;
+        }
+
+        /**
+         * @param seqno the acknowledged record's own offset, stored as {@code offset + 1}
+         *     because that is what a committed offset means: where to resume
+         */
+        @Override
+        public void ack(long seqno) {
+            if (acknowledgers.get(partition) != this) {
+                log.debug("[{}] ignoring an acknowledgment for {}@{}: the partition is no longer "
+                        + "this consumer's", connector.getName(), partition, seqno);
+                return;
+            }
+            acknowledged.merge(partition, seqno + 1, Math::max);
+        }
+
+        @Override
+        public String toString() {
+            return "PartitionAcknowledger[" + partition + "]";
+        }
     }
 
     /**
@@ -364,7 +435,7 @@ public class KafkaRecordSource implements RecordSource {
     }
 
     /** The steady-state commit: cheap, asynchronous, and retried by the next poll if it fails. */
-    private void commitAcknowledged(Consumer<String, String> client) {
+    private void commitAcknowledged(Consumer<String, ?> client) {
         Map<TopicPartition, OffsetAndMetadata> offsets = pendingOffsets(acknowledged.keySet());
         if (offsets.isEmpty()) {
             return;
@@ -386,7 +457,7 @@ public class KafkaRecordSource implements RecordSource {
      * The last commit of a consumer's life, synchronous because there is no next poll to
      * carry a retry: a clean stop should not re-publish its last batch on the next start.
      */
-    private void commitFinal(Consumer<String, String> client) {
+    private void commitFinal(Consumer<String, ?> client) {
         if (client == null) {
             return;
         }
@@ -421,9 +492,9 @@ public class KafkaRecordSource implements RecordSource {
      */
     private final class GroupListener implements ConsumerRebalanceListener {
 
-        private final Consumer<String, String> client;
+        private final Consumer<String, ?> client;
 
-        private GroupListener(Consumer<String, String> client) {
+        private GroupListener(Consumer<String, ?> client) {
             this.client = client;
         }
 
@@ -470,14 +541,17 @@ public class KafkaRecordSource implements RecordSource {
         }
 
         /**
-         * Forget both the pending offsets and the committed floor of partitions this consumer
-         * no longer owns: whatever happens to them next is another member's business, and a
-         * stale floor would suppress a legitimate commit if they ever came back.
+         * Forget the pending offsets, the committed floor and the acknowledger of partitions
+         * this consumer no longer owns: whatever happens to them next is another member's
+         * business, a stale floor would suppress a legitimate commit if they ever came back,
+         * and a stale acknowledger -- one a batch flushed after the revoke still holds --
+         * must not be able to re-enter an offset for a partition somebody else is reading.
          */
         private void forget(Collection<TopicPartition> partitions) {
             for (TopicPartition partition : partitions) {
                 acknowledged.remove(partition);
                 committed.remove(partition);
+                acknowledgers.remove(partition);
             }
         }
     }
@@ -493,7 +567,7 @@ public class KafkaRecordSource implements RecordSource {
     public void close() {
         closed.set(true);
         connected.set(false);
-        Consumer<String, String> client = this.consumer;
+        Consumer<String, ?> client = this.consumer;
         if (client != null) {
             try {
                 // The one consumer method that is safe to call from another thread -- which is
@@ -524,7 +598,7 @@ public class KafkaRecordSource implements RecordSource {
     }
 
     /** The consumer belongs to its poll thread, so only that thread ever closes it. */
-    private void closeQuietly(Consumer<String, String> client) {
+    private void closeQuietly(Consumer<String, ?> client) {
         if (client == null) {
             return;
         }

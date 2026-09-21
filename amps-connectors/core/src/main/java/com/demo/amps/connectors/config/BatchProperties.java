@@ -20,6 +20,13 @@ import java.time.Duration;
  *       deadline thread this long after its first record, so a quiet feed's last record does
  *       not sit unsent</li>
  * </ul>
+ *
+ * <p>{@link #getMaxPending()} is the third number, and only {@code ack-mode: PERSISTED}
+ * reads it. That mode does not wait per batch, so what bounds a source that outruns AMPS is
+ * this: once more than this many records have been issued and not yet acknowledged as
+ * persisted, the batch that crossed the line flushes on its own thread and waits, exactly as
+ * every batch does in {@code FLUSH} mode. Smaller means less in flight to re-read after a
+ * crash and more waiting; larger means the opposite. The default is twenty full batches.
  */
 public class BatchProperties {
 
@@ -30,6 +37,13 @@ public class BatchProperties {
     /** Maximum time a buffered record waits before its partial batch is published anyway. */
     @NotNull
     private Duration flushInterval = Duration.ofMillis(250);
+
+    /**
+     * {@code ack-mode: PERSISTED} only: how many records may be waiting for their persisted
+     * ack before the publishing thread flushes and waits for them.
+     */
+    @Min(1)
+    private int maxPending = 10_000;
 
     public int getMaxMessages() {
         return maxMessages;
@@ -45,5 +59,13 @@ public class BatchProperties {
 
     public void setFlushInterval(Duration flushInterval) {
         this.flushInterval = flushInterval;
+    }
+
+    public int getMaxPending() {
+        return maxPending;
+    }
+
+    public void setMaxPending(int maxPending) {
+        this.maxPending = maxPending;
     }
 }

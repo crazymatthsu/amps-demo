@@ -2,7 +2,7 @@ package com.demo.amps.connectors.runtime;
 
 import com.demo.amps.connectors.amps.BatchPublisher;
 import com.demo.amps.connectors.config.ConnectorProperties;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -19,7 +19,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  * <p>The flow is three steps and deliberately no more:
  *
  * <pre>{@code
- * DirectChannel --> pipeline.apply(record) --> aggregate(size | idle time) --> batchPublisher
+ * DirectChannel[InboundRecord] --> pipeline.apply(record): MessageContext | null
+ *     --> aggregate(size | idle time): List<MessageContext> --> batchPublisher
  * }</pre>
  *
  * <p>Spring Integration earns its place here for exactly one thing: the aggregator. "Release a
@@ -120,7 +121,7 @@ public class ConnectorFlowFactory {
         int maxMessages = connector.getAmps().getBatch().getMaxMessages();
 
         IntegrationFlow flow = IntegrationFlow.from(input)
-                .handle(SourceRecord.class, (record, headers) -> pipeline.apply(record))
+                .handle(InboundRecord.class, (record, headers) -> pipeline.apply(record))
                 .aggregate(aggregator -> aggregator
                         // This connector's thread, not the application's shared one: the
                         // deadline release publishes and waits for the ack, and another
@@ -147,7 +148,7 @@ public class ConnectorFlowFactory {
                             return batch;
                         }))
                 .handle(List.class, (batch, headers) -> {
-                    batchPublisher.publish(requests(batch));
+                    batchPublisher.publish(contexts(batch));
                     return null;
                 })
                 .get();
@@ -204,7 +205,7 @@ public class ConnectorFlowFactory {
 
     /** The aggregated payloads; only this flow writes into the group, so the cast is safe. */
     @SuppressWarnings("unchecked")
-    private static List<PublishRequest> requests(List<?> batch) {
-        return (List<PublishRequest>) batch;
+    private static List<MessageContext> contexts(List<?> batch) {
+        return (List<MessageContext>) batch;
     }
 }

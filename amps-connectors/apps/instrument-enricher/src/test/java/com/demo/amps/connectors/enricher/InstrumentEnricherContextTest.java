@@ -224,7 +224,7 @@ class InstrumentEnricherContextTest {
 
         assertThat(published.topic()).isEqualTo("sow/connectors/orders");
         assertThat(published.sowKeyOrFilter()).as("SERVER mode sends no SowKey").isNull();
-        assertThat(published.data())
+        assertThat(published.text())
                 .contains(SOH + "11=ORD-K-0" + SOH)
                 .contains(SOH + "55=K-0" + SOH)
                 .contains(SOH + "48=B0YQ5W0" + SOH)
@@ -241,7 +241,7 @@ class InstrumentEnricherContextTest {
     void everyKnownSymbolIsEnriched() {
         for (InstrumentsDatabase.Instrument instrument : InstrumentsDatabase.SEEDED) {
             RecordingAmpsPublisher.Call published = awaitPublished("ORD-" + instrument.symbol());
-            assertThat(published.data()).as(instrument.symbol())
+            assertThat(published.text()).as(instrument.symbol())
                     .contains(SOH + "48=" + instrument.sedol() + SOH)
                     .contains(SOH + "15=" + instrument.currency() + SOH);
         }
@@ -251,7 +251,7 @@ class InstrumentEnricherContextTest {
     @DisplayName("the symbol the table does not hold is published unenriched and raised as UNKNOWN_SYMBOL under the application's name")
     void unknownSymbolPassesThroughAndAlerts() {
         RecordingAmpsPublisher.Call published = awaitPublished("ORD-K-5");
-        assertThat(published.data())
+        assertThat(published.text())
                 .contains(SOH + "55=K-5" + SOH)
                 .doesNotContain(SOH + "48=")
                 .doesNotContain(SOH + "22=")
@@ -291,7 +291,7 @@ class InstrumentEnricherContextTest {
             return Optional.empty();
         }
         return publisher.calls("publish").stream()
-                .filter(call -> call.data() != null && call.data().contains(marker))
+                .filter(call -> call.data() != null && call.text().contains(marker))
                 .findFirst();
     }
 }

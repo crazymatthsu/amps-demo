@@ -10,7 +10,7 @@ plugins {
     `java-library`
 }
 
-description = "JDBC RecordSource for amps-connectors: a polled query -> SourceRecord"
+description = "JDBC RecordSource for amps-connectors: a polled query -> InboundRecord"
 
 dependencies {
     // Same Boot BOM as core, so a source module never writes a Spring version either.

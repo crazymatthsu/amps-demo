@@ -7,7 +7,7 @@ import com.demo.amps.connectors.config.RuleProperties;
 import com.demo.amps.connectors.config.RuleThen;
 import com.demo.amps.connectors.decode.Fields;
 import com.demo.amps.connectors.filter.FieldExpressions;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.transform.RecordTransform;
 import com.demo.amps.connectors.transform.TransformContext;
 import java.util.ArrayList;
@@ -43,8 +43,9 @@ import org.springframework.expression.Expression;
  * {@link IllegalArgumentException} the pipeline counts as <em>rejected</em>, like a
  * {@code derive} that fails; a rule that drops is counted as <em>dropped</em>, like any
  * transform returning {@code null}. The input map is never written to: every {@code set}
- * lands in a copy, so the chain's "each step gets its own map" contract holds inside the
- * step as well as between steps.
+ * lands in a copy -- {@link Fields#copy}, so a typed record's view is cloned rather than
+ * flattened -- and the chain's "each step gets its own map" contract holds inside the step
+ * as well as between steps.
  */
 public final class RuleSet implements RecordTransform {
 
@@ -146,7 +147,7 @@ public final class RuleSet implements RecordTransform {
     }
 
     @Override
-    public Map<String, Object> apply(SourceRecord record, Map<String, Object> fields) {
+    public Map<String, Object> apply(InboundRecord record, Map<String, Object> fields) {
         Map<String, Object> current = fields;
         for (CompiledRule rule : rules) {
             if (!FieldExpressions.test(rule.when, rule.whenText, record, current)) {
@@ -154,7 +155,7 @@ public final class RuleSet implements RecordTransform {
             }
             rule.hits.incrementAndGet();
             if (rule.set != null) {
-                Map<String, Object> written = new LinkedHashMap<>(current);
+                Map<String, Object> written = Fields.copy(current);
                 rule.set.forEach((field, value) -> Fields.put(written, field, value));
                 current = written;
             }
@@ -244,7 +245,7 @@ public final class RuleSet implements RecordTransform {
     private record AlertTemplate(
             Alert.Severity severity, String code, String text, Expression template) {
 
-        Alert render(SourceRecord record, Map<String, Object> fields) {
+        Alert render(InboundRecord record, Map<String, Object> fields) {
             return Alert.of(
                     severity, code, FieldExpressions.render(template, text, record, fields));
         }

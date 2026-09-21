@@ -3,7 +3,8 @@ package com.demo.amps.connectors.filter;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.codec.PayloadType;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -13,8 +14,10 @@ import org.springframework.expression.ParseException;
 
 class FieldExpressionsTest {
 
-    private static final SourceRecord RECORD = SourceRecord.delete("", "ORD-1")
-            .withAttributes(Map.of("topic", "orders", "partition", "3"));
+    private static final InboundRecord RECORD = InboundRecord.delete("", "ORD-1")
+            .withAttributes(Map.of("topic", "orders", "partition", "3"))
+            .withSeqno(42)
+            .withType(PayloadType.of(100, 1));
 
     private static Map<String, Object> order() {
         Map<String, Object> fields = new LinkedHashMap<>();
@@ -47,11 +50,27 @@ class FieldExpressionsTest {
     @DisplayName("#r is the record: its key, its action and its transport attributes")
     void bindsTheRecordAsItself() {
         assertThat(eval("#r.key")).isEqualTo("ORD-1");
-        assertThat(eval("#r.action")).isEqualTo(SourceRecord.Action.DELETE);
+        assertThat(eval("#r.action")).isEqualTo(InboundRecord.Action.DELETE);
         assertThat(eval("#r.attributes['topic']")).isEqualTo("orders");
         assertThat(eval("#r.attributes['missing']")).isNull();
         assertThat(test("#r.action.name() == 'DELETE'")).isTrue();
         assertThat(test("#r.key == #f['11']")).isTrue();
+    }
+
+    @Test
+    @DisplayName("#r's position, payload type and text are expressions for free")
+    void bindsTheRecordsPositionAndType() {
+        assertThat(eval("#r.seqno")).isEqualTo(42L);
+        assertThat(eval("#r.type.factoryId")).isEqualTo(100);
+        assertThat(eval("#r.type.classId")).isEqualTo(1);
+        assertThat(eval("#r.type.set")).isEqualTo(true);
+        assertThat(eval("#r.text")).isEqualTo("");
+        assertThat(test("#r.seqno > 40 && #r.type.classId == 1")).isTrue();
+        InboundRecord text = InboundRecord.of("11=ORD-1");
+        assertThat(FieldExpressions.evaluate(
+                FieldExpressions.parse("#r.text + '/' + #r.seqno + '/' + #r.type"),
+                "t", text, order()))
+                .isEqualTo("11=ORD-1/-1/0/0");
     }
 
     @Test

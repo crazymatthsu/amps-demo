@@ -9,7 +9,7 @@ plugins {
     `java-library`
 }
 
-description = "TCP RecordSource for amps-connectors: a framed socket stream -> SourceRecord"
+description = "TCP RecordSource for amps-connectors: a framed socket stream -> InboundRecord"
 
 dependencies {
     // Same Boot BOM as core, so a source module never writes a Spring version either.

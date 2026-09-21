@@ -1,6 +1,6 @@
 package com.demo.amps.connectors.filter;
 
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.lang.reflect.Method;
 import java.util.Map;
 import org.springframework.expression.EvaluationContext;
@@ -20,11 +20,15 @@ import org.springframework.expression.spel.support.StandardEvaluationContext;
  * <ul>
  *   <li>{@code #f} -- the decoded field map, so {@code #f['35']} is a FIX tag and
  *       {@code #f['order']['price']} a nested JSON member</li>
- *   <li>{@code #r} -- the {@link SourceRecord} the fields came from, so {@code #r.key} is the
- *       source's own key, {@code #r.action} is {@code UPSERT} or {@code DELETE}, and
- *       {@code #r.attributes['topic']} is whatever the transport said about the message.
- *       Bound where a record is at hand (transforms and rules); a filter runs before a
- *       delete's key is known to matter and sees {@code #f} only</li>
+ *   <li>{@code #r} -- the {@link InboundRecord} the fields came from, so {@code #r.key} is the
+ *       source's own key, {@code #r.action} is {@code UPSERT} or {@code DELETE},
+ *       {@code #r.attributes['topic']} is whatever the transport said about the message,
+ *       {@code #r.seqno} is its position in the source's stream, {@code #r.type.factoryId} and
+ *       {@code #r.type.classId} say what the payload is ({@code 0} and {@code 0} for text),
+ *       and {@code #r.text} is the payload as text. Every record accessor is an expression
+ *       for free, because the record is bound as itself. Bound where a record is at hand
+ *       (transforms and rules); a filter runs before a delete's key is known to matter and
+ *       sees {@code #f} only</li>
  *   <li>{@code #num(x)} -- the value as a double, or {@code NaN}</li>
  *   <li>{@code #str(x)} -- the value as text, or {@code ""}</li>
  * </ul>
@@ -94,14 +98,14 @@ public final class FieldExpressions {
      *
      * <p>The record is bound as itself: SpEL reads a record component through its accessor
      * ({@code #r.key} calls {@code key()}), so the expression language sees exactly the
-     * {@link SourceRecord} a code transform sees, and nothing has to be kept in step with it.
+     * {@link InboundRecord} a code transform sees, and nothing has to be kept in step with it.
      *
      * @param fields the decoded record, bound to {@code #f}
      * @param record the record the fields came from, bound to {@code #r}; {@code null} leaves
      *     {@code #r} unbound, which a filter -- evaluated on the fields alone -- is fine with
      * @return the context to evaluate in
      */
-    public static EvaluationContext context(Map<String, Object> fields, SourceRecord record) {
+    public static EvaluationContext context(Map<String, Object> fields, InboundRecord record) {
         StandardEvaluationContext context = new StandardEvaluationContext();
         context.setVariable("f", fields);
         if (record != null) {
@@ -138,7 +142,7 @@ public final class FieldExpressions {
      *     pipeline counts the record as rejected rather than filtered
      */
     public static Object evaluate(
-            Expression expression, String text, SourceRecord record, Map<String, Object> fields) {
+            Expression expression, String text, InboundRecord record, Map<String, Object> fields) {
         try {
             return expression.getValue(context(fields, record));
         } catch (RuntimeException e) {
@@ -171,7 +175,7 @@ public final class FieldExpressions {
      * @throws IllegalArgumentException if it failed or did not answer a boolean
      */
     public static boolean test(
-            Expression expression, String text, SourceRecord record, Map<String, Object> fields) {
+            Expression expression, String text, InboundRecord record, Map<String, Object> fields) {
         Object result = evaluate(expression, text, record, fields);
         if (result instanceof Boolean verdict) {
             return verdict;
@@ -193,7 +197,7 @@ public final class FieldExpressions {
      * @throws IllegalArgumentException if an embedded expression failed
      */
     public static String render(
-            Expression template, String text, SourceRecord record, Map<String, Object> fields) {
+            Expression template, String text, InboundRecord record, Map<String, Object> fields) {
         try {
             String rendered = template.getValue(context(fields, record), String.class);
             return rendered == null ? "" : rendered;

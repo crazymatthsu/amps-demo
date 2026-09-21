@@ -3,6 +3,7 @@ package com.demo.amps.connectors.runtime;
 import com.demo.amps.connectors.alert.Alert;
 import com.demo.amps.connectors.alert.Alerts;
 import com.demo.amps.connectors.amps.AmpsPublisherFactory;
+import com.demo.amps.connectors.codec.PayloadCodecRegistry;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.ConnectorValidator;
 import com.demo.amps.connectors.config.ConnectorsProperties;
@@ -57,6 +58,7 @@ public class ConnectorManager implements SmartLifecycle {
 
     private final ConnectorsProperties properties;
     private final TransformRegistry transforms;
+    private final PayloadCodecRegistry codecs;
     private final AmpsPublisherFactory publishers;
     private final SourceResolver sources;
     private final ConnectorFlowFactory flows;
@@ -70,6 +72,7 @@ public class ConnectorManager implements SmartLifecycle {
     /**
      * @param properties the bound {@code amps-connectors:} configuration
      * @param transforms the application's transform beans
+     * @param codecs the application's payload codecs
      * @param publishers builds each connector's AMPS client
      * @param sources resolves each connector's source
      * @param flows registers each connector's Spring Integration flow
@@ -80,6 +83,7 @@ public class ConnectorManager implements SmartLifecycle {
     public ConnectorManager(
             ConnectorsProperties properties,
             TransformRegistry transforms,
+            PayloadCodecRegistry codecs,
             AmpsPublisherFactory publishers,
             SourceResolver sources,
             ConnectorFlowFactory flows,
@@ -87,6 +91,7 @@ public class ConnectorManager implements SmartLifecycle {
             Alerts alerts) {
         this.properties = properties;
         this.transforms = transforms;
+        this.codecs = codecs;
         this.publishers = publishers;
         this.sources = sources;
         this.flows = flows;
@@ -130,8 +135,8 @@ public class ConnectorManager implements SmartLifecycle {
         validate();
         for (ConnectorProperties connector : properties.enabledConnectors()) {
             connectors.add(new Connector(
-                    connector, properties.getAmps(), transforms, publishers, sources, flows,
-                    alerts));
+                    connector, properties.getAmps(), transforms, codecs, publishers, sources,
+                    flows, alerts));
         }
         running = true;
         if (connectors.isEmpty()) {

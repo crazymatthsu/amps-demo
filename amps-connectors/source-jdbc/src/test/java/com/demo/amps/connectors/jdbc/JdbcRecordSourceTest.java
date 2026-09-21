@@ -1,11 +1,13 @@
 package com.demo.amps.connectors.jdbc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.JdbcSourceProperties;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.Acknowledger;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -21,6 +23,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.LongStream;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -32,8 +35,9 @@ import org.junit.jupiter.api.io.TempDir;
  * <p>What is worth asserting here is everything the source decides for itself: the JSON it
  * synthesises from a result set and the types it keeps, what a key that stopped appearing
  * turns into (and that the removal still carries the columns a SERVER-keyed topic needs to
- * build its filter), and where the incremental mark leaves off -- on disk, only once AMPS has
- * confirmed the row. The driver's own behaviour is H2's to test.
+ * build its filter), how the rows are numbered, and where the incremental mark leaves off --
+ * on disk, only once AMPS has confirmed the row, and moved by a cumulative acknowledgment
+ * that names a seqno rather than a mark. The driver's own behaviour is H2's to test.
  *
  * <p>Identifiers are quoted in the DDL because H2 folds unquoted ones to upper case: a
  * connector addresses columns by the label {@code ResultSetMetaData} reports, so the tests
@@ -97,26 +101,26 @@ class JdbcRecordSourceTest {
     }
 
     private static JdbcRecordSource started(
-            ConnectorProperties connector, List<SourceRecord> received) {
+            ConnectorProperties connector, List<InboundRecord> received) {
         JdbcRecordSource source = new JdbcRecordSource(connector);
         source.start(received::add);
         Awaitility.await().atMost(Duration.ofSeconds(5)).until(source::isConnected);
         return source;
     }
 
-    private static void awaitRecords(List<SourceRecord> received, int count) {
+    private static void awaitRecords(List<InboundRecord> received, int count) {
         Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> received.size() >= count);
     }
 
-    private static JsonNode payload(SourceRecord record) {
+    private static JsonNode payload(InboundRecord record) {
         try {
-            return MAPPER.readTree(record.data());
+            return MAPPER.readTree(record.text());
         } catch (IOException e) {
             throw new AssertionError("the source emitted something that is not JSON", e);
         }
     }
 
-    private static String text(SourceRecord record, String field) {
+    private static String text(InboundRecord record, String field) {
         return payload(record).get(field).asText();
     }
 
@@ -130,9 +134,9 @@ class JdbcRecordSourceTest {
                 .anyMatch(thread -> thread.getName().equals(NAME + "-jdbc") && thread.isAlive());
     }
 
-    private static List<SourceRecord> deletes(List<SourceRecord> received) {
+    private static List<InboundRecord> deletes(List<InboundRecord> received) {
         return received.stream()
-                .filter(record -> record.action() == SourceRecord.Action.DELETE)
+                .filter(record -> record.action() == InboundRecord.Action.DELETE)
                 .toList();
     }
 
@@ -149,18 +153,21 @@ class JdbcRecordSourceTest {
                 "INSERT INTO positions VALUES ('ACC-1', 250, 101.2500, TRUE, "
                         + "TIMESTAMP '2026-09-18 12:34:56', NULL)");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source =
                 new JdbcRecordSource(connector(url, "SELECT * FROM positions"))) {
             source.start(received::add);
             awaitRecords(received, 1);
 
-            SourceRecord record = received.get(0);
-            assertThat(record.action()).isEqualTo(SourceRecord.Action.UPSERT);
+            InboundRecord record = received.get(0);
+            assertThat(record.action()).isEqualTo(InboundRecord.Action.UPSERT);
             assertThat(record.key()).as("no key-columns configured").isNull();
             // A snapshot has no position to remember: the next poll re-reads the row whatever
             // AMPS said about this one, so there is nothing an acknowledgment could advance.
-            assertThat(record.ack()).isNull();
+            assertThat(record.acknowledger()).isSameAs(Acknowledger.NONE);
+            // Numbered all the same -- the first delivery is 1 -- but with no mark to carry.
+            assertThat(record.seqno()).isEqualTo(1L);
+            assertThat(record.attributes()).doesNotContainKey("watermark");
             // Which poll a row came from is the only transport metadata a query has.
             assertThat(Long.parseLong(record.attributes().get("poll"))).isGreaterThanOrEqualTo(1);
 
@@ -196,7 +203,7 @@ class JdbcRecordSourceTest {
                 connector(url, "SELECT * FROM positions ORDER BY \"symbol\""),
                 "account", "symbol");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             awaitRecords(received, 2);
@@ -205,11 +212,11 @@ class JdbcRecordSourceTest {
             // columns themselves and not a synthetic key column AMPS would have to store.
             // A copy, because the poll thread keeps appending to `received` and a subList
             // view of a live CopyOnWriteArrayList throws on the next append.
-            List<SourceRecord> firstPoll = List.copyOf(received).subList(0, 2);
-            assertThat(firstPoll).extracting(SourceRecord::key)
+            List<InboundRecord> firstPoll = List.copyOf(received).subList(0, 2);
+            assertThat(firstPoll).extracting(InboundRecord::key)
                     .containsExactly("ACC-1|AAPL", "ACC-1|MSFT");
-            assertThat(firstPoll).extracting(SourceRecord::action)
-                    .containsOnly(SourceRecord.Action.UPSERT);
+            assertThat(firstPoll).extracting(InboundRecord::action)
+                    .containsOnly(InboundRecord.Action.UPSERT);
             assertThat(payload(firstPoll.get(0)).has("account")).isTrue();
         }
     }
@@ -228,7 +235,7 @@ class JdbcRecordSourceTest {
                 connector(url, "SELECT * FROM positions ORDER BY \"account\""),
                 "account", "symbol");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             awaitRecords(received, 2);
@@ -238,6 +245,44 @@ class JdbcRecordSourceTest {
             assertThat(received.get(0).key()).isEqualTo("ACC-1|AAPL");
             assertThat(received.get(1).key()).isNull();
             assertThat(text(received.get(1), "account")).isEqualTo("ACC-2");
+        }
+    }
+
+    @Test
+    @DisplayName("every delivery is numbered, in order, across polls and across deletes")
+    void deliveriesAreNumberedAcrossPolls() throws Exception {
+        String url = database();
+        execute(url,
+                "CREATE TABLE positions (\"account\" VARCHAR(16), \"quantity\" INTEGER)",
+                "INSERT INTO positions VALUES ('ACC-1', 1)",
+                "INSERT INTO positions VALUES ('ACC-2', 2)");
+
+        ConnectorProperties connector = keyedOn(
+                connector(url, "SELECT * FROM positions ORDER BY \"account\""), "account");
+
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
+            source.start(received::add);
+            awaitRecords(received, 2);
+            execute(url, "DELETE FROM positions WHERE \"account\" = 'ACC-2'");
+            Awaitility.await().atMost(Duration.ofSeconds(5))
+                    .until(() -> !deletes(received).isEmpty());
+
+            // The counter runs for the life of the source, not per poll, and a vanish-delete
+            // takes a number like any other delivery: a seqno is a position in the source's
+            // stream, and the stream is everything it handed over -- so the n-th record is
+            // numbered n, however many polls it took to get there.
+            List<InboundRecord> delivered = List.copyOf(received);
+            assertThat(delivered).extracting(InboundRecord::seqno)
+                    .containsExactlyElementsOf(
+                            LongStream.rangeClosed(1, delivered.size()).boxed().toList());
+            assertThat(delivered.subList(0, 2)).extracting(InboundRecord::key, InboundRecord::action)
+                    .containsExactly(
+                            tuple("ACC-1", InboundRecord.Action.UPSERT),
+                            tuple("ACC-2", InboundRecord.Action.UPSERT));
+            InboundRecord delete = deletes(delivered).get(0);
+            assertThat(delete.key()).isEqualTo("ACC-2");
+            assertThat(delete.seqno()).isEqualTo(delivered.indexOf(delete) + 1L);
         }
     }
 
@@ -257,7 +302,7 @@ class JdbcRecordSourceTest {
                 connector(url, "SELECT * FROM positions ORDER BY \"symbol\""),
                 "account", "symbol");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             awaitRecords(received, 2);
@@ -266,7 +311,7 @@ class JdbcRecordSourceTest {
             Awaitility.await().atMost(Duration.ofSeconds(5))
                     .until(() -> !deletes(received).isEmpty());
 
-            SourceRecord delete = deletes(received).get(0);
+            InboundRecord delete = deletes(received).get(0);
             assertThat(delete.key()).isEqualTo("ACC-1|MSFT");
             // The key columns and nothing else: a PUBLISHER-keyed connector deletes by the
             // key above, but a SERVER-keyed one has to build "/account = 'ACC-1' AND
@@ -300,7 +345,7 @@ class JdbcRecordSourceTest {
         ConnectorProperties connector =
                 incremental(connector(url, "SELECT * FROM trades ORDER BY \"seq\""), "seq");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             // Poll 1: no mark yet, so everything the column can order.
@@ -318,10 +363,73 @@ class JdbcRecordSourceTest {
                     // Skipped, and skipped quietly after the first warning: emitting it would
                     // re-emit it on every poll for as long as it sits in the table.
                     .containsExactly("T-1", "T-2", "T-3");
-            assertThat(received).extracting(SourceRecord::action)
-                    .containsOnly(SourceRecord.Action.UPSERT);
-            // Unlike a snapshot row, this one has a position worth remembering.
-            assertThat(received).extracting(SourceRecord::ack).doesNotContainNull();
+            assertThat(received).extracting(InboundRecord::action)
+                    .containsOnly(InboundRecord.Action.UPSERT);
+            // Unlike a snapshot row, this one has a position worth remembering -- carried as
+            // the `watermark` attribute in the form the state file would hold it, and
+            // acknowledged through ONE acknowledger for the whole feed, because the
+            // acknowledgment is cumulative by seqno rather than per row.
+            assertThat(received).extracting(InboundRecord::acknowledger)
+                    .doesNotContain(Acknowledger.NONE);
+            assertThat(received.get(1).acknowledger()).isSameAs(received.get(0).acknowledger());
+            assertThat(received.get(2).acknowledger()).isSameAs(received.get(0).acknowledger());
+            assertThat(received).extracting(InboundRecord::seqno).containsExactly(1L, 2L, 3L);
+            assertThat(received).extracting(record -> record.attributes().get("watermark"))
+                    .containsExactly("1", "2", "3");
+        }
+    }
+
+    @Test
+    @DisplayName("acknowledging a seqno persists that row's mark and covers the rows before it")
+    void acknowledgingASeqnoMovesTheWatermarkCumulatively(@TempDir Path directory)
+            throws Exception {
+        String url = database();
+        execute(url,
+                "CREATE TABLE trades (\"trade_id\" VARCHAR(16), \"seq\" BIGINT)",
+                "INSERT INTO trades VALUES ('T-1', 10)",
+                "INSERT INTO trades VALUES ('T-2', 20)",
+                "INSERT INTO trades VALUES ('T-3', 30)",
+                "INSERT INTO trades VALUES ('T-4', 40)");
+
+        Path stateFile = directory.resolve("trades.watermark");
+        ConnectorProperties connector =
+                incremental(connector(url, "SELECT * FROM trades ORDER BY \"seq\""), "seq");
+        connector.getSource().getJdbc().setStateFile(stateFile.toString());
+
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
+        try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
+            source.start(received::add);
+            awaitRecords(received, 4);
+            assertThat(received).extracting(InboundRecord::seqno).containsExactly(1L, 2L, 3L, 4L);
+
+            // ack(3) says rows 1..3 reached AMPS: the mark lands on the THIRD row's position,
+            // not the first's, and the rows before it are covered without a call each.
+            received.get(2).ack();
+            awaitWatermark(stateFile, "30");
+
+            // A lower seqno afterwards is already covered: the mark never walks backwards.
+            received.get(0).ack();
+            severalMorePolls();
+            assertThat(Files.readString(stateFile, StandardCharsets.UTF_8).strip()).isEqualTo("30");
+
+            // A run is one call, and it is the last position that counts.
+            received.get(3).ackBatch(4L, 4L);
+            awaitWatermark(stateFile, "40");
+        }
+
+        // The persisted mark is what a restart resumes past.
+        execute(url, "INSERT INTO trades VALUES ('T-5', 50)");
+        List<InboundRecord> resumed = new CopyOnWriteArrayList<>();
+        try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
+            source.start(resumed::add);
+            awaitRecords(resumed, 1);
+            severalMorePolls();
+
+            assertThat(resumed).extracting(record -> text(record, "trade_id")).containsExactly("T-5");
+            // A new source, a new counter: the number is a delivery count, the mark is the
+            // position, and only the mark was ever on disk.
+            assertThat(resumed.get(0).seqno()).isEqualTo(1L);
+            assertThat(resumed.get(0).attributes()).containsEntry("watermark", "50");
         }
     }
 
@@ -342,7 +450,7 @@ class JdbcRecordSourceTest {
                 incremental(connector(url, "SELECT * FROM trades ORDER BY \"seq\""), "seq");
         connector.getSource().getJdbc().setStateFile(stateFile.toString());
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             awaitRecords(received, 2);
@@ -352,15 +460,15 @@ class JdbcRecordSourceTest {
             // reached AMPS.
             assertThat(stateFile).doesNotExist();
 
-            received.get(0).acknowledge();
+            received.get(0).ack();
             awaitWatermark(stateFile, "1");
-            received.get(1).acknowledge();
+            received.get(1).ack();
             awaitWatermark(stateFile, "2");
         }
 
         execute(url, "INSERT INTO trades VALUES ('T-3', 3)");
 
-        List<SourceRecord> resumed = new CopyOnWriteArrayList<>();
+        List<InboundRecord> resumed = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(resumed::add);
             awaitRecords(resumed, 1);
@@ -387,7 +495,7 @@ class JdbcRecordSourceTest {
         ConnectorProperties connector = keyedOn(
                 connector(url, "SELECT * FROM positions"), "account", "symbol");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             awaitRecords(received, 1);
@@ -421,7 +529,7 @@ class JdbcRecordSourceTest {
         // Long enough that a close waiting out the interval would be obvious.
         connector.getSource().getJdbc().setPollInterval(Duration.ofSeconds(30));
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         JdbcRecordSource source = started(connector, received);
         awaitRecords(received, 1);
 

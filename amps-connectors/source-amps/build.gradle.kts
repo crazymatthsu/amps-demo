@@ -12,7 +12,7 @@ plugins {
     `java-library`
 }
 
-description = "AMPS RecordSource for amps-connectors: a subscription -> SourceRecord"
+description = "AMPS RecordSource for amps-connectors: a subscription -> InboundRecord"
 
 dependencies {
     // Same Boot BOM as core, so a source module never writes a Spring version either.

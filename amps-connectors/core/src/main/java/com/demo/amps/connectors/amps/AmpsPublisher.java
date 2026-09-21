@@ -13,12 +13,29 @@ import java.time.Duration;
  * message type and one client, so "which URI, which publish store, how long a reconnect waits"
  * belongs to the implementation rather than to every caller.
  *
+ * <p>Every command returns the <em>client sequence number</em> the AMPS client assigned it --
+ * the number the publish store keys its replay by, and the one the server's persisted acks
+ * count up to. It is {@code 0} when there is no publish store ({@code publish-store: NONE})
+ * and nothing was assigned; otherwise it is what the batch publisher records on the
+ * {@code MessageContext} as its out-side sequence, so a later persisted ack can be matched
+ * back to the record it covers.
+ *
+ * <p>The payload is an {@code Object}: a {@code String} for a text topic or a {@code byte[]}
+ * from a codec that writes a binary one; an implementation sends bytes as bytes and anything
+ * else as text (see {@link com.demo.amps.connectors.codec.Payloads#text}).
+ *
  * <p>{@link #flush(Duration)} is the load-bearing method. Publishing is asynchronous -- the
  * calls below return as soon as the client has the message -- and it is the flush that says
  * everything issued so far has been acknowledged as persisted by AMPS. That boolean is what
  * the batch publisher turns into acknowledgments back to the sources, so a publisher that
  * returned {@code true} without waiting would silently convert at-least-once into
  * at-most-once.
+ *
+ * <p>{@link #setPublishListener(PublishListener)} is the other way to learn the same thing,
+ * without waiting: the persisted acks and the failed writes as the client receives them, by
+ * sequence. It is what {@code ack-mode: PERSISTED} runs on. A publisher with nothing to
+ * observe -- no store, or a test double that does not model acks -- may keep the default,
+ * which accepts the listener and never calls it.
  */
 public interface AmpsPublisher extends AutoCloseable {
 
@@ -29,32 +46,45 @@ public interface AmpsPublisher extends AutoCloseable {
      */
     void connect() throws AMPSException;
 
+    /**
+     * Register who is told about persisted acks and failed writes. Before {@link #connect()}:
+     * the hooks are installed on the client as it is built, and a listener set later would
+     * miss them.
+     *
+     * @param listener the listener; the default keeps none, so nothing is ever reported
+     */
+    default void setPublishListener(PublishListener listener) {
+    }
+
     /** Whether the connection is currently up. Drives the status line. */
     boolean isConnected();
 
     /**
      * @param topic the AMPS topic
-     * @param data the payload
+     * @param data the payload: text or bytes
      * @param sowKey the SowKey header, or {@code null} when the topic's {@code <Key>} derives it
+     * @return the client sequence number assigned to the command, or {@code 0} without a store
      */
-    void publish(String topic, String data, String sowKey);
+    long publish(String topic, Object data, String sowKey);
 
     /**
      * Publish only the fields present, for AMPS to merge over the stored record.
      *
      * @param topic the AMPS topic
-     * @param data the partial payload
+     * @param data the partial payload: text or bytes
      * @param sowKey the SowKey header, or {@code null} when the topic's {@code <Key>} derives it
+     * @return the client sequence number assigned to the command, or {@code 0} without a store
      */
-    void deltaPublish(String topic, String data, String sowKey);
+    long deltaPublish(String topic, Object data, String sowKey);
 
     /**
      * Remove a record by the key the publisher assigned it.
      *
      * @param topic the AMPS topic
      * @param sowKey the SowKey of the record to remove
+     * @return the client sequence number assigned to the command, or {@code 0} without a store
      */
-    void sowDeleteByKey(String topic, String sowKey);
+    long sowDeleteByKey(String topic, String sowKey);
 
     /**
      * Remove whatever a filter matches -- how a delete is expressed against a topic whose own
@@ -62,8 +92,9 @@ public interface AmpsPublisher extends AutoCloseable {
      *
      * @param topic the AMPS topic
      * @param filter an AMPS filter, e.g. {@code /11 = 'ORD-1'}
+     * @return the client sequence number assigned to the command, or {@code 0} without a store
      */
-    void sowDeleteByFilter(String topic, String filter);
+    long sowDeleteByFilter(String topic, String filter);
 
     /**
      * Wait for everything published so far to be acknowledged as persisted.

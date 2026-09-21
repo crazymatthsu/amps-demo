@@ -2,8 +2,8 @@ package com.demo.amps.connectors.hazelcast;
 
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.HazelcastSourceProperties;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.source.RecordHandler;
-import com.demo.amps.connectors.source.SourceRecord;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.topic.ITopic;
 import com.hazelcast.topic.Message;
@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,10 +43,18 @@ import org.slf4j.LoggerFactory;
  * <p>Either way there is <strong>nothing to acknowledge</strong>. A plain topic has no
  * position, and a reliable one is read through a listener whose sequence Hazelcast itself
  * advances as it delivers -- there is no point the connector could ask it to go back to once
- * AMPS has confirmed a batch. Records therefore carry no
- * {@link com.demo.amps.connectors.source.Acknowledgment}, and no key either: a topic message
- * is a payload and nothing more, so a keyed AMPS topic gets its key from the payload. A feed
- * whose records have identity belongs in a map ({@link MapSubscription}), not a topic.
+ * AMPS has confirmed a batch. Records therefore carry
+ * {@link com.demo.amps.connectors.source.Acknowledger#NONE}, and no key either: a topic
+ * message is a payload and nothing more, so a keyed AMPS topic gets its key from the payload.
+ * A feed whose records have identity belongs in a map ({@link MapSubscription}), not a topic.
+ *
+ * <p>What a record <em>does</em> carry is a position. On a reliable topic it is the
+ * ringbuffer sequence Hazelcast hands the listener just before each message -- the one
+ * number that says where in the topic a message sat, and what {@code reliable-from} resumes
+ * by -- and on a plain topic, which has no sequence at all, it is a delivery counter that
+ * runs for the life of the subscription. The payload follows {@link HazelcastValues}: text
+ * as it is, an object rendered as JSON, or -- under {@code typed-values: OBJECT} -- an
+ * {@code IdentifiedDataSerializable} handed through as itself under its ids.
  */
 final class TopicSubscription implements HazelcastSubscription {
 
@@ -53,9 +62,13 @@ final class TopicSubscription implements HazelcastSubscription {
 
     private final ConnectorProperties connector;
     private final HazelcastSourceProperties source;
+    private final HazelcastValues values;
 
-    /** One WARN per source for non-String payloads: the second one says nothing new. */
+    /** One WARN per source for rendered payloads: the second one says nothing new. */
     private final AtomicBoolean warnedAboutPayloadType = new AtomicBoolean(false);
+
+    /** Numbers a plain topic's messages, which have no sequence of their own. */
+    private final AtomicLong delivered = new AtomicLong();
 
     private volatile ITopic<Object> topic;
     private volatile UUID listener;
@@ -63,6 +76,7 @@ final class TopicSubscription implements HazelcastSubscription {
     TopicSubscription(ConnectorProperties connector) {
         this.connector = connector;
         this.source = connector.getSource().getHazelcast();
+        this.values = new HazelcastValues(connector);
     }
 
     @Override
@@ -73,7 +87,8 @@ final class TopicSubscription implements HazelcastSubscription {
         this.topic = subscribed;
         this.listener = source.isReliable()
                 ? subscribed.addMessageListener(new ReplayingListener(handler))
-                : subscribed.addMessageListener(message -> deliver(message, handler));
+                : subscribed.addMessageListener(
+                        message -> deliver(message, handler, delivered.incrementAndGet()));
     }
 
     @Override
@@ -100,13 +115,18 @@ final class TopicSubscription implements HazelcastSubscription {
 
     /**
      * A reliable-topic listener: same delivery, plus the ringbuffer position that makes
-     * {@code reliable-from} mean something.
+     * {@code reliable-from} mean something -- and that becomes each record's seqno.
      */
     private final class ReplayingListener implements ReliableMessageListener<Object> {
 
         private final RecordHandler handler;
 
-        /** Last sequence Hazelcast handed us; kept so a restarted listener could resume. */
+        /**
+         * The sequence of the message being delivered. Hazelcast calls
+         * {@link #storeSequence} with a message's sequence immediately before it calls
+         * {@link #onMessage} with the message, on the same thread, so by the time the message
+         * arrives this is its position.
+         */
         private volatile long sequence = -1;
 
         private ReplayingListener(RecordHandler handler) {
@@ -115,7 +135,7 @@ final class TopicSubscription implements HazelcastSubscription {
 
         @Override
         public void onMessage(Message<Object> message) {
-            deliver(message, handler);
+            deliver(message, handler, sequence);
         }
 
         /**
@@ -163,35 +183,44 @@ final class TopicSubscription implements HazelcastSubscription {
      * <p>Runs on a Hazelcast event thread, and the pipeline runs inside
      * {@link RecordHandler#onRecord}: a handler that blocks blocks this subscription, which is
      * the back-pressure the framework wants. Nothing is read ahead onto another thread.
+     *
+     * @param seqno the ringbuffer sequence on a reliable topic, the delivery count on a plain one
      */
-    private void deliver(Message<Object> message, RecordHandler handler) {
+    private void deliver(Message<Object> message, RecordHandler handler, long seqno) {
         try {
             Object payload = message.getMessageObject();
-            if (!(payload instanceof String) && warnedAboutPayloadType.compareAndSet(false, true)) {
+            InboundRecord record = values.upsert(payload, null);
+            if (!HazelcastValues.isText(payload) && !record.type().isSet()
+                    && warnedAboutPayloadType.compareAndSet(false, true)) {
                 // Still published -- a bridge that silently dropped a feed's messages because
                 // they were published as objects would be worse than one that publishes their
-                // rendering. But say so once: toString() is the publisher's, not a contract.
-                log.warn("[{}] Hazelcast topic '{}' publishes {} rather than String; "
-                                + "bridging its toString() -- decoding may fail",
+                // rendering. But say so once: the rendering is a guess at what the feed meant.
+                log.warn("[{}] Hazelcast topic '{}' publishes {} rather than text; bridging "
+                                + "its JSON rendering -- decoding may fail",
                         connector.getName(), source.getTopic(), payload.getClass().getName());
             }
-            handler.onRecord(SourceRecord.of(String.valueOf(payload))
-                    .withAttributes(attributesOf(message)));
+            handler.onRecord(record
+                    .withSeqno(seqno)
+                    .withAttributes(attributesOf(message, payload)));
         } catch (RuntimeException e) {
             // One bad record is not a reason to drop the subscription.
             log.error("[{}] failed to handle Hazelcast message", connector.getName(), e);
         }
     }
 
-    /** Publish time and publisher: the only transport metadata a topic message carries. */
-    private static Map<String, String> attributesOf(Message<Object> message) {
-        Map<String, String> attributes = new LinkedHashMap<>(4);
+    /**
+     * Publish time and publisher, the only transport metadata a topic message carries -- and
+     * the value's own ids when it has them.
+     */
+    private static Map<String, String> attributesOf(Message<Object> message, Object payload) {
+        Map<String, String> attributes = new LinkedHashMap<>(6);
         attributes.put(HazelcastRecordSource.ATTRIBUTE_PUBLISH_TIME,
                 Long.toString(message.getPublishTime()));
         String member = HazelcastRecordSource.addressOf(message.getPublishingMember());
         if (member != null) {
             attributes.put(HazelcastRecordSource.ATTRIBUTE_MEMBER, member);
         }
+        HazelcastValues.describe(payload, attributes);
         return attributes;
     }
 }

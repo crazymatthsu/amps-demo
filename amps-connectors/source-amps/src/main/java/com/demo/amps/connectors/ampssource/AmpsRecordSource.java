@@ -9,13 +9,15 @@ import com.crankuptheamps.client.DefaultServerChooser;
 import com.crankuptheamps.client.HAClient;
 import com.crankuptheamps.client.Message;
 import com.crankuptheamps.client.exception.AMPSException;
+import com.demo.amps.connectors.codec.PayloadType;
 import com.demo.amps.connectors.config.AmpsServerProperties;
 import com.demo.amps.connectors.config.AmpsSourceProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.SourceFormat;
+import com.demo.amps.connectors.source.Acknowledger;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.SourceRecord;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -66,7 +68,12 @@ import org.slf4j.LoggerFactory;
  * <p>Every record carries the {@code topic} it came from (a regular-expression subscription
  * spans several), the AMPS {@code command} that delivered it, and its {@code bookmark} when
  * the subscription has one -- the last is what a rule can log to say exactly where in the
- * journal a record sat.
+ * journal a record sat. Its {@link InboundRecord#seqno() seqno} is a delivery counter that
+ * runs for the life of the source, not the bookmark: a bookmark is a string with a structure
+ * of its own, and the framework acknowledges by a number it can compare, so the number counts
+ * deliveries and the bookmark rides along as text. The payload is text under
+ * {@link PayloadType#UNSET}, decoded by the connector's {@code format} -- the message type on
+ * the URI already says what the topic carries.
  *
  * <h2>Connecting, reconnecting, resuming</h2>
  *
@@ -128,6 +135,9 @@ public class AmpsRecordSource implements RecordSource {
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean connected = new AtomicBoolean(false);
     private final AtomicLong handlerFailures = new AtomicLong();
+
+    /** Numbers the records handed over, for the life of the source: the record's seqno. */
+    private final AtomicLong delivered = new AtomicLong();
 
     /** Monitor the reconnect backoff waits on, so {@link #close()} cuts it short. */
     private final Object backoff = new Object();
@@ -362,7 +372,7 @@ public class AmpsRecordSource implements RecordSource {
     }
 
     /**
-     * Turn one AMPS message into a {@link SourceRecord} and hand it over.
+     * Turn one AMPS message into an {@link InboundRecord} and hand it over.
      *
      * <p>Runs on the client's receive thread, and the pipeline runs inside
      * {@link RecordHandler#onRecord}, which is the back-pressure: a connector that cannot keep
@@ -374,12 +384,14 @@ public class AmpsRecordSource implements RecordSource {
      */
     void dispatch(Message message, RecordHandler handler) {
         int command = message.getCommand();
-        String topic = message.getTopic();
-        SourceRecord record = toRecord(command, message.getData(), message.getSowKey(),
-                message.getBookmark(), hasText(topic) ? topic : source.getTopic());
-        if (record == null) {
+        if (actionOf(command) == null) {
+            // Group markers, acks and heartbeats: nothing to number and nothing to deliver.
             return;
         }
+        String topic = message.getTopic();
+        InboundRecord record = toRecord(command, message.getData(), message.getSowKey(),
+                message.getBookmark(), hasText(topic) ? topic : source.getTopic(),
+                delivered.incrementAndGet());
         try {
             handler.onRecord(record);
         } catch (RuntimeException e) {
@@ -405,19 +417,12 @@ public class AmpsRecordSource implements RecordSource {
      * @param sowKey the SowKey, or {@code null}/blank for a topic without one
      * @param bookmark the bookmark, or {@code null}/blank when the subscription has none
      * @param topic the topic the message was read from
+     * @param seqno the record's position in this source's stream: its delivery number
      * @return the record, or {@code null} for a command that carries none
      */
-    static SourceRecord toRecord(
-            int command, String data, String sowKey, String bookmark, String topic) {
-        SourceRecord.Action action = switch (command) {
-            case Message.Command.SOW, Message.Command.Publish, Message.Command.DeltaPublish ->
-                    SourceRecord.Action.UPSERT;
-            // The payload stays on a delete: an out-of-focus message carries the record's
-            // last state, and a target that deletes by filter needs the key fields in it.
-            case Message.Command.OOF, Message.Command.SOWDelete -> SourceRecord.Action.DELETE;
-            // GroupBegin/GroupEnd/Ack/Heartbeat carry no record.
-            default -> null;
-        };
+    static InboundRecord toRecord(
+            int command, String data, String sowKey, String bookmark, String topic, long seqno) {
+        InboundRecord.Action action = actionOf(command);
         if (action == null) {
             return null;
         }
@@ -429,8 +434,28 @@ public class AmpsRecordSource implements RecordSource {
         if (hasText(bookmark)) {
             attributes.put(ATTRIBUTE_BOOKMARK, bookmark);
         }
-        return new SourceRecord(data == null ? "" : data, hasText(sowKey) ? sowKey : null,
-                action, attributes, null);
+        // No acknowledger: the bookmark store is discarded on delivery (see the class
+        // comment), so there is nothing an acknowledgment would move.
+        return new InboundRecord(data == null ? "" : data, PayloadType.UNSET,
+                hasText(sowKey) ? sowKey : null, action, seqno, attributes, Acknowledger.NONE);
+    }
+
+    /**
+     * What a {@link Message.Command} says about the record it carries, if it carries one.
+     *
+     * @param command the command the message arrived as
+     * @return upsert, delete, or {@code null} for a command that carries no record
+     */
+    static InboundRecord.Action actionOf(int command) {
+        return switch (command) {
+            case Message.Command.SOW, Message.Command.Publish, Message.Command.DeltaPublish ->
+                    InboundRecord.Action.UPSERT;
+            // The payload stays on a delete: an out-of-focus message carries the record's
+            // last state, and a target that deletes by filter needs the key fields in it.
+            case Message.Command.OOF, Message.Command.SOWDelete -> InboundRecord.Action.DELETE;
+            // GroupBegin/GroupEnd/Ack/Heartbeat carry no record.
+            default -> null;
+        };
     }
 
     /**

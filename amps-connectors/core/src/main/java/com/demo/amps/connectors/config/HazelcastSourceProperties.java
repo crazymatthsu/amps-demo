@@ -5,7 +5,9 @@ import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The Hazelcast side of one connector: which cluster, and which structure on it.
@@ -49,6 +51,27 @@ import java.util.List;
  * client missed while it was away, so the snapshot is not an optimisation but the repair.
  * Turning it off ({@code snapshot: false}) buys a faster start for a feed that can live with a
  * SOW that never converges.
+ *
+ * <h2>Values that are objects</h2>
+ *
+ * <p>A value that is a {@code String} or a {@code HazelcastJsonValue} is text and goes to the
+ * connector's {@code format} decoder as it is. Anything else is an object the cluster stores
+ * as one, and what becomes of it is {@link #getTypedValues() typed-values}' business: by
+ * default ({@link TypedValues#JSON}) it is rendered as JSON, which is why a map connector is
+ * configured {@code format: JSON}; with {@link TypedValues#OBJECT}, an
+ * {@code IdentifiedDataSerializable} is handed to the pipeline <em>as the object</em>, tagged
+ * with its factory and class ids, so the codec the application registered for that pair
+ * decodes it and nothing is rendered in between. Either way the client can only deliver such
+ * a value once it can deserialize it, and that is what {@link #getSerializationFactories()
+ * serialization-factories} is for: the application's {@code DataSerializableFactory} beans,
+ * by factory id, registered on the client.
+ *
+ * <pre>{@code
+ * hazelcast:
+ *   map: positions
+ *   serialization-factories: { 1000: positionFactory }   # factory id -> bean name
+ *   typed-values: OBJECT                                # JSON (default) | OBJECT
+ * }</pre>
  */
 public class HazelcastSourceProperties {
 
@@ -58,6 +81,20 @@ public class HazelcastSourceProperties {
         NEWEST,
         /** Everything the ringbuffer still holds (sequence {@code 0}), then onwards. */
         OLDEST
+    }
+
+    /** What a value that is an object, rather than text, becomes on its way to the pipeline. */
+    public enum TypedValues {
+        /**
+         * Rendered as JSON text, decoded by the connector's {@code format}. The default, and
+         * what every value that is not an {@code IdentifiedDataSerializable} gets regardless.
+         */
+        JSON,
+        /**
+         * An {@code IdentifiedDataSerializable} is handed through as the object, under the
+         * payload type its factory and class ids spell, for the application's codec to decode.
+         */
+        OBJECT
     }
 
     /** Cluster name the client logs on with; must match the members'. */
@@ -109,6 +146,23 @@ public class HazelcastSourceProperties {
     /** How long to wait before reconnecting after the client loses the cluster. */
     @NotNull
     private Duration reconnectDelay = Duration.ofSeconds(5);
+
+    /**
+     * The application's {@code DataSerializableFactory} beans the client registers, by factory
+     * id: {@code serialization-factories: { <factoryId>: <bean name> }}.
+     *
+     * <p>Bean names rather than class names, because a factory is the application's own code
+     * and may well need its own dependencies; and registered on the <em>client</em> because
+     * that is where a value is deserialized on its way to the listener -- without the factory
+     * the client cannot deliver an {@code IdentifiedDataSerializable} value at all, whatever
+     * {@link #getTypedValues()} says.
+     */
+    @NotNull
+    private Map<Integer, String> serializationFactories = new LinkedHashMap<>();
+
+    /** What a value that is an object becomes; see {@link TypedValues}. */
+    @NotNull
+    private TypedValues typedValues = TypedValues.JSON;
 
     /**
      * Whether the snapshot runs, reading the absent setting as {@code true}.
@@ -197,5 +251,23 @@ public class HazelcastSourceProperties {
 
     public void setReconnectDelay(Duration reconnectDelay) {
         this.reconnectDelay = reconnectDelay;
+    }
+
+    public Map<Integer, String> getSerializationFactories() {
+        return serializationFactories;
+    }
+
+    public void setSerializationFactories(Map<Integer, String> serializationFactories) {
+        this.serializationFactories = serializationFactories == null
+                ? new LinkedHashMap<>()
+                : serializationFactories;
+    }
+
+    public TypedValues getTypedValues() {
+        return typedValues;
+    }
+
+    public void setTypedValues(TypedValues typedValues) {
+        this.typedValues = typedValues;
     }
 }

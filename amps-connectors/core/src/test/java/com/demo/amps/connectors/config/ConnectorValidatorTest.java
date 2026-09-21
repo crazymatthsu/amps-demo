@@ -56,7 +56,54 @@ class ConnectorValidatorTest {
         connector.getAmps().setMessageType("xml");
         assertThat(ConnectorValidator.validate(connector))
                 .anySatisfy(error -> assertThat(error).contains("amps.topic is required"))
-                .anySatisfy(error -> assertThat(error).contains("json/fix/nvfix"));
+                .anySatisfy(error -> assertThat(error).contains("json/fix/nvfix/protobuf/binary"));
+    }
+
+    @Test
+    @DisplayName("a payload type is both ids or neither, and never negative")
+    void refusesAHalfSetOrNegativePayloadType() {
+        ConnectorProperties halfSet = TestConnectors.tcp("ticks", 5001);
+        halfSet.getAmps().getPayloadType().setClassId(3);
+        assertThat(ConnectorValidator.validate(halfSet))
+                .singleElement().asString()
+                .contains("amps.payload-type 0/3").contains("names nothing");
+
+        ConnectorProperties otherHalf = TestConnectors.tcp("ticks", 5001);
+        otherHalf.getAmps().getPayloadType().setFactoryId(100);
+        assertThat(ConnectorValidator.validate(otherHalf))
+                .singleElement().asString().contains("amps.payload-type 100/0");
+
+        ConnectorProperties negative = TestConnectors.tcp("ticks", 5001);
+        negative.getAmps().getPayloadType().setFactoryId(-1);
+        negative.getAmps().getPayloadType().setClassId(1);
+        assertThat(ConnectorValidator.validate(negative))
+                .singleElement().asString().contains("non-negative");
+
+        ConnectorProperties typed = TestConnectors.tcp("ticks", 5001);
+        typed.getAmps().getPayloadType().setFactoryId(100);
+        typed.getAmps().getPayloadType().setClassId(1);
+        assertThat(ConnectorValidator.validate(typed))
+                .as("whether a codec is registered is the pipeline's question, not this one's")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("protobuf and binary have no text encoder, so they need a payload-type naming the codec")
+    void codecOnlyMessageTypesNeedAPayloadType() {
+        for (String type : List.of("protobuf", "binary")) {
+            ConnectorProperties untyped = TestConnectors.tcp("ticks", 5001);
+            untyped.getAmps().setMessageType(type);
+            assertThat(ConnectorValidator.validate(untyped)).as(type)
+                    .singleElement().asString()
+                    .contains("amps.message-type '" + type + "' has no text encoder")
+                    .contains("amps.payload-type");
+
+            ConnectorProperties typed = TestConnectors.tcp("ticks", 5001);
+            typed.getAmps().setMessageType(type);
+            typed.getAmps().getPayloadType().setFactoryId(100);
+            typed.getAmps().getPayloadType().setClassId(1);
+            assertThat(ConnectorValidator.validate(typed)).as(type + " with a codec").isEmpty();
+        }
     }
 
     @Test
@@ -67,6 +114,48 @@ class ConnectorValidatorTest {
         assertThat(ConnectorValidator.validate(connector))
                 .anySatisfy(error -> assertThat(error).contains("max-messages"))
                 .anySatisfy(error -> assertThat(error).contains("flush-interval"));
+    }
+
+    @Test
+    @DisplayName("PERSISTED acknowledgment needs a publish store to observe the acks through")
+    void refusesPersistedAckModeWithoutAPublishStore() {
+        ConnectorProperties persisted = TestConnectors.tcp("ticks", 5001);
+        persisted.getAmps().setAckMode(AmpsTargetProperties.AckMode.PERSISTED);
+        ConnectorsProperties storeless = properties(persisted);
+        storeless.getAmps().setPublishStore(AmpsServerProperties.PublishStore.NONE);
+
+        assertThat(ConnectorValidator.validate(storeless))
+                .singleElement().asString()
+                .contains("connector 'ticks'")
+                .contains("amps.ack-mode: PERSISTED")
+                .contains("amps-connectors.amps.publish-store is NONE");
+
+        // The same connector with a store, and a flushing connector without one, are fine.
+        assertThat(ConnectorValidator.validate(properties(persisted)))
+                .as("MEMORY is the default store").isEmpty();
+        ConnectorsProperties file = properties(persisted);
+        file.getAmps().setPublishStore(AmpsServerProperties.PublishStore.FILE);
+        assertThat(ConnectorValidator.validate(file)).isEmpty();
+
+        ConnectorProperties flushing = TestConnectors.tcp("ticks", 5001);
+        ConnectorsProperties flushingStoreless = properties(flushing);
+        flushingStoreless.getAmps().setPublishStore(AmpsServerProperties.PublishStore.NONE);
+        assertThat(ConnectorValidator.validate(flushingStoreless))
+                .as("FLUSH with NONE is fire-and-forget, deliberately").isEmpty();
+    }
+
+    @Test
+    void refusesANonPositiveMaxPending() {
+        ConnectorProperties connector = TestConnectors.tcp("ticks", 5001);
+        connector.getAmps().getBatch().setMaxPending(0);
+        assertThat(ConnectorValidator.validate(properties(connector)))
+                .singleElement().asString().contains("amps.batch.max-pending must be at least 1");
+
+        connector.getAmps().getBatch().setMaxPending(1);
+        assertThat(ConnectorValidator.validate(properties(connector))).isEmpty();
+        assertThat(new BatchProperties().getMaxPending()).isEqualTo(10_000);
+        assertThat(new AmpsTargetProperties().getAckMode())
+                .isEqualTo(AmpsTargetProperties.AckMode.FLUSH);
     }
 
     @Test

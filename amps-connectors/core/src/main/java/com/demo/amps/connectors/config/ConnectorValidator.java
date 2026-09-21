@@ -32,7 +32,11 @@ import org.springframework.expression.spel.standard.SpelExpressionParser;
 public final class ConnectorValidator {
 
     /** The message types AMPS knows here; the same word goes into the client URI. */
-    private static final Set<String> MESSAGE_TYPES = Set.of("json", "fix", "nvfix");
+    private static final Set<String> MESSAGE_TYPES =
+            Set.of("json", "fix", "nvfix", "protobuf", "binary");
+
+    /** The message types with a text encoder of their own; the others need a codec. */
+    private static final Set<String> TEXT_MESSAGE_TYPES = Set.of("json", "fix", "nvfix");
 
     private ConnectorValidator() {
     }
@@ -57,6 +61,7 @@ public final class ConnectorValidator {
         errors.addAll(validateResources(properties));
         errors.addAll(validateAlerts(properties));
         errors.addAll(validateControl(properties));
+        errors.addAll(validateAcknowledgment(properties));
         return errors;
     }
 
@@ -227,6 +232,7 @@ public final class ConnectorValidator {
         errors.addAll(validateFilter(id, connector));
         errors.addAll(validateTransforms(id, connector));
         errors.addAll(validateKey(id, connector));
+        errors.addAll(validateSourcePayloads(id, connector));
         return errors;
     }
 
@@ -400,7 +406,16 @@ public final class ConnectorValidator {
         return errors;
     }
 
-    /** The {@code amps:} block: the topic, the message type and the batching. */
+    /**
+     * The {@code amps:} block: the topic, the message type, the payload type and the batching.
+     *
+     * <p>The payload type is judged on shape alone -- both ids or neither, nothing negative --
+     * because whether a codec is actually registered for it is a question about the
+     * application's beans, which this static check cannot see; the pipeline asks the registry
+     * as it is built, and fails the connector's start with the same readable message. What
+     * <em>can</em> be said here is that {@code protobuf} and {@code binary} have no text
+     * encoder, so a target naming one of them without a codec has no way to write anything.
+     */
     private static List<String> validateTarget(String id, ConnectorProperties connector) {
         List<String> errors = new ArrayList<>();
         AmpsTargetProperties target = connector.getAmps();
@@ -412,8 +427,25 @@ public final class ConnectorValidator {
                 : target.getMessageType().toLowerCase(Locale.ROOT);
         if (!MESSAGE_TYPES.contains(type)) {
             errors.add(id + "amps.message-type '" + target.getMessageType()
-                    + "' is not one of json/fix/nvfix -- it names the client URI (/amps/<type>) "
-                    + "as well as the encoder, so it has to be spelled the way AMPS does");
+                    + "' is not one of json/fix/nvfix/protobuf/binary -- it names the client "
+                    + "URI (/amps/<type>) as well as the encoder, so it has to be spelled the "
+                    + "way AMPS does");
+        }
+        AmpsTargetProperties.PayloadTypeProperties payloadType = target.getPayloadType();
+        boolean typed = false;
+        if (payloadType.getFactoryId() < 0 || payloadType.getClassId() < 0) {
+            errors.add(id + "amps.payload-type " + payloadType + ": factory-id and class-id "
+                    + "are non-negative");
+        } else if ((payloadType.getFactoryId() == 0) != (payloadType.getClassId() == 0)) {
+            errors.add(id + "amps.payload-type " + payloadType + " names nothing: set both "
+                    + "factory-id and class-id to name a codec, or neither for text by "
+                    + "amps.message-type");
+        } else {
+            typed = payloadType.getFactoryId() != 0;
+        }
+        if (!typed && MESSAGE_TYPES.contains(type) && !TEXT_MESSAGE_TYPES.contains(type)) {
+            errors.add(id + "amps.message-type '" + target.getMessageType() + "' has no text "
+                    + "encoder, so it needs amps.payload-type to name the codec that writes it");
         }
         BatchProperties batch = target.getBatch();
         if (batch.getMaxMessages() < 1) {
@@ -666,7 +698,101 @@ public final class ConnectorValidator {
         }
     }
 
+    /**
+     * The acknowledgment rules, which span the server block and each connector's target:
+     * {@code ack-mode: PERSISTED} is driven by the persisted acks the publish store sees, so
+     * with {@code publish-store: NONE} there is no store to see them through and nothing
+     * would ever be acknowledged -- a connector that publishes everything and commits nothing,
+     * re-reading its whole feed on every restart. And {@code max-pending} bounds that mode's
+     * back-pressure, so a bound of nothing is a bound that never lets a batch through.
+     *
+     * <p>Here rather than in {@link #validate(ConnectorProperties)} because the per-connector
+     * check cannot see the application's {@code amps:} block, and the store is configured
+     * once for all of them.
+     */
+    private static List<String> validateAcknowledgment(ConnectorsProperties properties) {
+        List<String> errors = new ArrayList<>();
+        AmpsServerProperties server = properties.getAmps();
+        for (ConnectorProperties connector : properties.getConnectors()) {
+            String id = "connector '" + connector.getName() + "': ";
+            AmpsTargetProperties target = connector.getAmps();
+            if (target.getAckMode() == null) {
+                errors.add(id + "amps.ack-mode must be one of FLUSH/PERSISTED");
+            } else if (target.getAckMode() == AmpsTargetProperties.AckMode.PERSISTED
+                    && server != null
+                    && server.getPublishStore() == AmpsServerProperties.PublishStore.NONE) {
+                errors.add(id + "amps.ack-mode: PERSISTED needs a publish store to observe the "
+                        + "persisted acks through, and amps-connectors.amps.publish-store is "
+                        + "NONE: nothing would ever be acknowledged to the source -- set the "
+                        + "store to MEMORY or FILE, or use amps.ack-mode: FLUSH");
+            }
+            if (target.getBatch().getMaxPending() < 1) {
+                errors.add(id + "amps.batch.max-pending must be at least 1: it is how many "
+                        + "records may wait for their persisted ack before the publishing "
+                        + "thread flushes, and a bound of none would flush after every batch");
+            }
+        }
+        return errors;
+    }
+
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    /**
+     * The settings that type a source's payloads: Kafka's {@code payload-type} and Hazelcast's
+     * {@code serialization-factories} / {@code typed-values}.
+     *
+     * <p>Judged on shape alone, like the target's {@code payload-type}: whether a codec is
+     * registered for the pair, or a bean exists under the name, is a question about the
+     * application's beans that this static check cannot see, and the pipeline and the source
+     * factory each fail the connector's start with a readable message when the answer is no.
+     * What <em>can</em> be said here is that a half-set pair names nothing, that a factory id
+     * of zero or less can never spell a payload type (zero is the unset half of {@code 0/0},
+     * and Hazelcast keeps the negative ids for itself), and that {@code typed-values: OBJECT}
+     * with no factory registered is a mode that can never engage -- the client cannot
+     * deserialize an {@code IdentifiedDataSerializable} it has no factory for, so no value
+     * would ever reach the branch that hands it through.
+     */
+    private static List<String> validateSourcePayloads(String id, ConnectorProperties connector) {
+        List<String> errors = new ArrayList<>();
+        KafkaSourceProperties kafka = connector.getSource().getKafka();
+        if (kafka != null) {
+            AmpsTargetProperties.PayloadTypeProperties payloadType = kafka.getPayloadType();
+            if (payloadType.getFactoryId() < 0 || payloadType.getClassId() < 0) {
+                errors.add(id + "source.kafka.payload-type " + payloadType + ": factory-id and "
+                        + "class-id are non-negative");
+            } else if ((payloadType.getFactoryId() == 0) != (payloadType.getClassId() == 0)) {
+                errors.add(id + "source.kafka.payload-type " + payloadType + " names nothing: "
+                        + "set both factory-id and class-id to name the codec that decodes the "
+                        + "topic's bytes, or neither for text by format");
+            }
+        }
+        HazelcastSourceProperties hazelcast = connector.getSource().getHazelcast();
+        if (hazelcast != null) {
+            for (Map.Entry<Integer, String> factory
+                    : hazelcast.getSerializationFactories().entrySet()) {
+                if (factory.getKey() == null || factory.getKey() <= 0) {
+                    errors.add(id + "source.hazelcast.serialization-factories names factory id "
+                            + factory.getKey() + ", but a factory id is positive: zero is the "
+                            + "unset payload type and Hazelcast reserves the negative ids");
+                }
+                if (isBlank(factory.getValue())) {
+                    errors.add(id + "source.hazelcast.serialization-factories[" + factory.getKey()
+                            + "] names a blank bean: it has to be the name of a "
+                            + "DataSerializableFactory bean the client can register");
+                }
+            }
+            if (hazelcast.getTypedValues() == null) {
+                errors.add(id + "source.hazelcast.typed-values must be one of JSON/OBJECT");
+            } else if (hazelcast.getTypedValues() == HazelcastSourceProperties.TypedValues.OBJECT
+                    && hazelcast.getSerializationFactories().isEmpty()) {
+                errors.add(id + "source.hazelcast.typed-values: OBJECT needs "
+                        + "source.hazelcast.serialization-factories: a value is handed through "
+                        + "as an object only once the client has deserialized it, and without a "
+                        + "factory the client cannot -- so the mode would never engage");
+            }
+        }
+        return errors;
     }
 }

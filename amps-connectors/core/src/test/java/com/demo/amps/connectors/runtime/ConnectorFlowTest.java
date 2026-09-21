@@ -7,13 +7,18 @@ import com.demo.amps.connectors.alert.AlertingAmpsPublisher;
 import com.demo.amps.connectors.alert.RecordingAlertSink;
 import com.demo.amps.connectors.amps.AmpsPublisherFactory;
 import com.demo.amps.connectors.amps.RecordingAmpsPublisher;
+import com.demo.amps.connectors.codec.PayloadCodec;
+import com.demo.amps.connectors.codec.PayloadCodecRegistry;
+import com.demo.amps.connectors.codec.TestPojoCodec;
 import com.demo.amps.connectors.source.FakeRecordSource;
 import com.demo.amps.connectors.source.FakeSourceFactory;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -46,6 +51,17 @@ import org.springframework.test.annotation.DirtiesContext;
  * <p>Alerts ride on the same context: a {@code RecordingAlertSink} bean stands in for the
  * alerts topic, so a flush that fails is asserted twice over -- as the acknowledgments that
  * did not happen, and as the {@code PUBLISH_FLUSH_TIMEOUT} the connector raised about it.
+ *
+ * <p>The fourth connector is <em>typed</em>: its target names the test codec's payload type,
+ * a {@code PayloadCodec} bean puts that codec in the registry, and its records carry the
+ * codec's objects rather than text. It exists to show the seam end to end -- the object
+ * decoded lazily, edited by a transform through a copy, written by the codec as its wire
+ * form, and arriving at the publisher as bytes with the sequence the store assigned.
+ *
+ * <p>The fifth connector acknowledges in {@code ack-mode: PERSISTED}, and its publisher's
+ * acks are manual: a batch goes out without a flush, nothing is acknowledged until the test
+ * says the server persisted it, and {@code stop()} drains -- one flush, which for this
+ * publisher persists everything still waiting.
  */
 @SpringBootTest(properties = {
         "spring.main.web-application-type=none",
@@ -83,7 +99,35 @@ import org.springframework.test.annotation.DirtiesContext;
         "amps-connectors.connectors[2].amps.key.mode=PUBLISHER",
         "amps-connectors.connectors[2].amps.key.fields[0]=id",
         "amps-connectors.connectors[2].amps.batch.max-messages=500",
-        "amps-connectors.connectors[2].amps.batch.flush-interval=20ms"
+        "amps-connectors.connectors[2].amps.batch.flush-interval=20ms",
+        // Typed: the records are the test codec's objects, and the target is its wire form.
+        // Released by size, like bysize, with one transform so nothing passes through.
+        "amps-connectors.connectors[3].name=typed",
+        "amps-connectors.connectors[3].format=JSON",
+        "amps-connectors.connectors[3].source.tcp.mode=LISTEN",
+        "amps-connectors.connectors[3].source.tcp.port=15004",
+        "amps-connectors.connectors[3].transforms[0].set.status=FLOW",
+        "amps-connectors.connectors[3].amps.topic=sow/test/typed",
+        "amps-connectors.connectors[3].amps.message-type=json",
+        "amps-connectors.connectors[3].amps.payload-type.factory-id=100",
+        "amps-connectors.connectors[3].amps.payload-type.class-id=1",
+        "amps-connectors.connectors[3].amps.key.mode=PUBLISHER",
+        "amps-connectors.connectors[3].amps.key.fields[0]=id",
+        "amps-connectors.connectors[3].amps.batch.max-messages=2",
+        "amps-connectors.connectors[3].amps.batch.flush-interval=1h",
+        // Acknowledged as the persisted acks arrive, not after a flush; released by size.
+        "amps-connectors.connectors[4].name=persisted",
+        "amps-connectors.connectors[4].format=JSON",
+        "amps-connectors.connectors[4].source.tcp.mode=LISTEN",
+        "amps-connectors.connectors[4].source.tcp.port=15005",
+        "amps-connectors.connectors[4].amps.topic=sow/test/persisted",
+        "amps-connectors.connectors[4].amps.message-type=json",
+        "amps-connectors.connectors[4].amps.key.mode=PUBLISHER",
+        "amps-connectors.connectors[4].amps.key.fields[0]=id",
+        "amps-connectors.connectors[4].amps.ack-mode=PERSISTED",
+        "amps-connectors.connectors[4].amps.batch.max-messages=2",
+        "amps-connectors.connectors[4].amps.batch.max-pending=3",
+        "amps-connectors.connectors[4].amps.batch.flush-interval=1h"
 })
 // Each case drives the connectors and one of them stops them, so every method gets its own
 // context rather than inheriting whatever the last one left running.
@@ -108,6 +152,9 @@ class ConnectorFlowTest {
         private final FakeRecordSource bySize = new FakeRecordSource();
         private final FakeRecordSource byTimeout = new FakeRecordSource();
         private final FakeRecordSource slow = new FakeRecordSource();
+        private final FakeRecordSource typed = new FakeRecordSource();
+        private final FakeRecordSource persisted = new FakeRecordSource();
+        private final TestPojoCodec codec = new TestPojoCodec();
         private final Map<String, RecordingAmpsPublisher> publishers = new ConcurrentHashMap<>();
 
         @Bean
@@ -126,16 +173,36 @@ class ConnectorFlowTest {
             return new FakeSourceFactory(slow, connector -> "slow".equals(connector.getName()));
         }
 
+        @Bean
+        FakeSourceFactory typedFactory() {
+            return new FakeSourceFactory(typed, connector -> "typed".equals(connector.getName()));
+        }
+
+        @Bean
+        FakeSourceFactory persistedFactory() {
+            return new FakeSourceFactory(
+                    persisted, connector -> "persisted".equals(connector.getName()));
+        }
+
+        /** The one codec, contributed the way an application contributes its own. */
+        @Bean
+        PayloadCodec testPojoCodec() {
+            return codec;
+        }
+
         /**
          * One recording publisher per connector, exactly as the real factory does it; the
-         * {@code slow} connector's is the one whose flushes take as long as a real ack wait.
+         * {@code slow} connector's is the one whose flushes take as long as a real ack wait,
+         * and the {@code persisted} connector's acks are the test's to give.
          */
         @Bean
         AmpsPublisherFactory recordingPublishers() {
             return connector -> publishers.computeIfAbsent(
-                    connector.getName(), name -> "slow".equals(name)
-                            ? new RecordingAmpsPublisher().slowFlushes(SLOW_FLUSH)
-                            : new RecordingAmpsPublisher());
+                    connector.getName(), name -> switch (name) {
+                        case "slow" -> new RecordingAmpsPublisher().slowFlushes(SLOW_FLUSH);
+                        case "persisted" -> new RecordingAmpsPublisher().manualPersistedAcks(true);
+                        default -> new RecordingAmpsPublisher();
+                    });
         }
 
         /** Stands in for the alerts topic: whatever the connectors raise lands here. */
@@ -169,8 +236,9 @@ class ConnectorFlowTest {
         fakes.clearAll();
     }
 
-    private static SourceRecord record(String id, AtomicInteger acks) {
-        return SourceRecord.of("{\"id\":\"" + id + "\"}", id).withAck(acks::incrementAndGet);
+    private static InboundRecord record(String id, AtomicInteger acks) {
+        return InboundRecord.of("{\"id\":\"" + id + "\"}", id)
+                .withAck(seqno -> acks.incrementAndGet());
     }
 
     /**
@@ -206,11 +274,15 @@ class ConnectorFlowTest {
         }
     }
 
+    @Autowired
+    private PayloadCodecRegistry codecs;
+
     @Test
     @DisplayName("every configured connector starts, connects and subscribes")
     void startsEveryConnector() {
         assertThat(manager.connectors()).extracting(Connector::name)
-                .containsExactly("bysize", "bytimeout", "slow");
+                .containsExactly("bysize", "bytimeout", "slow", "typed", "persisted");
+        assertThat(codecs.types()).containsExactly(TestPojoCodec.TYPE);
         assertThat(manager.connectors()).allMatch(Connector::isStarted);
         assertThat(fakes.publisher("bysize").isConnected()).isTrue();
         assertThat(fakes.bySize.startCount()).isEqualTo(1);
@@ -368,12 +440,120 @@ class ConnectorFlowTest {
     }
 
     @Test
+    @DisplayName("a typed payload reaches the publisher as the codec's wire form, with its sequence")
+    void aTypedPayloadIsPublishedAsTheCodecsWireForm() {
+        List<Long> acked = new java.util.concurrent.CopyOnWriteArrayList<>();
+        AtomicLong seqno = new AtomicLong();
+        RecordingAmpsPublisher publisher = fakes.publisher("typed");
+        fakes.codec.reset();
+
+        TestPojoCodec.Order first = new TestPojoCodec.Order("O-1", 100, "185.50")
+                .party(new TestPojoCodec.Party("ACME", "buyer"));
+        TestPojoCodec.Order second = new TestPojoCodec.Order("O-2", 5, "1.25").addLeg("L1");
+        for (TestPojoCodec.Order order : List.of(first, second)) {
+            fakes.typed.emit(InboundRecord.of(order, order.id())
+                    .withType(TestPojoCodec.TYPE)
+                    .withSeqno(seqno.incrementAndGet())
+                    .withAck(acked::add));
+        }
+
+        // Two records fill the batch, so by now the publisher has seen it and the flush.
+        assertThat(publisher.calls()).hasSize(2);
+        assertThat(publisher.flushCount()).isEqualTo(1);
+        assertThat(acked).as("acknowledged with the in-side positions").containsExactly(1L, 2L);
+
+        RecordingAmpsPublisher.Call call = publisher.calls().get(0);
+        assertThat(call.topic()).isEqualTo("sow/test/typed");
+        assertThat(call.sowKeyOrFilter()).isEqualTo("O-1");
+        assertThat(call.data()).as("the codec's wire form, not the object").isInstanceOf(byte[].class);
+        assertThat(call.text()).isEqualTo(
+                "{\"id\":\"O-1\",\"qty\":100,\"price\":185.50,\"status\":\"FLOW\","
+                        + "\"party\":{\"name\":\"ACME\",\"role\":\"buyer\"}}");
+        assertThat(publisher.calls().get(1).text())
+                .isEqualTo("{\"id\":\"O-2\",\"qty\":5,\"price\":1.25,\"status\":\"FLOW\",\"legs\":[\"L1\"]}");
+        // The set landed in a copy: the objects the source delivered are untouched.
+        assertThat(first.status()).isNull();
+        assertThat(second.status()).isNull();
+        assertThat(fakes.codec.copies()).isEqualTo(2);
+        // The key extractor read `id` and nothing else was read through the map.
+        assertThat(fakes.codec.readsByField()).containsOnlyKeys("id");
+
+        Connector connector = manager.connectors().get(3);
+        assertThat(connector.pipeline().outType()).isEqualTo(TestPojoCodec.TYPE);
+        assertThat(connector.published()).isEqualTo(2);
+        assertThat(connector.rejected()).isZero();
+    }
+
+    @Test
+    @DisplayName("a PERSISTED connector acknowledges on the persisted ack, not on the release, and stop() drains")
+    void aPersistedConnectorAcknowledgesOnTheAckAndDrainsOnStop() {
+        List<Long> acked = new java.util.concurrent.CopyOnWriteArrayList<>();
+        AtomicLong seqno = new AtomicLong();
+        RecordingAmpsPublisher publisher = fakes.publisher("persisted");
+        Connector connector = manager.connectors().get(4);
+        assertThat(connector.batchPublisher().ackMode())
+                .isEqualTo(com.demo.amps.connectors.config.AmpsTargetProperties.AckMode.PERSISTED);
+        assertThat(publisher.listener()).as("wired before connect").isNotNull();
+
+        // Two records fill a batch: issued on this thread, no flush, nothing acknowledged.
+        for (int i = 0; i < 2; i++) {
+            long position = seqno.incrementAndGet();
+            fakes.persisted.emit(InboundRecord.of("{\"id\":\"P-" + position + "\"}", "P-" + position)
+                    .withSeqno(position).withAck(acked::add));
+        }
+        assertThat(publisher.calls()).hasSize(2);
+        assertThat(publisher.flushCount()).isZero();
+        assertThat(acked).isEmpty();
+        assertThat(connector.pending()).isEqualTo(2);
+        assertThat(connector.published()).isZero();
+        assertThat(connector.status()).contains("published=0").contains("pending=2")
+                .contains("publish-rejected=0");
+
+        // The server persisted the first: acknowledged with its in-side position.
+        publisher.persistUpTo(1);
+        assertThat(acked).containsExactly(1L);
+        assertThat(connector.pending()).isEqualTo(1);
+        assertThat(connector.published()).isEqualTo(1);
+
+        // Two more fill the next batch: three pending now, which is max-pending, not over it.
+        for (int i = 0; i < 2; i++) {
+            long position = seqno.incrementAndGet();
+            fakes.persisted.emit(InboundRecord.of("{\"id\":\"P-" + position + "\"}", "P-" + position)
+                    .withSeqno(position).withAck(acked::add));
+        }
+        assertThat(publisher.calls()).hasSize(4);
+        assertThat(connector.pending()).isEqualTo(3);
+        assertThat(publisher.flushCount()).as("3 pending is not over max-pending 3").isZero();
+
+        // A fifth is read but not batched (max-messages 2). stop() releases it -- now four
+        // are pending, over the line, so the release flushes -- and then drains. The
+        // publisher's flush persists nothing by itself (manual acks), so it is the test
+        // that stands in for the server at the end.
+        long last = seqno.incrementAndGet();
+        fakes.persisted.emit(InboundRecord.of("{\"id\":\"P-" + last + "\"}", "P-" + last)
+                .withSeqno(last).withAck(acked::add));
+        assertThat(publisher.calls()).hasSize(4);
+
+        publisher.manualPersistedAcks(false);
+        manager.stop();
+
+        assertThat(publisher.calls()).hasSize(5);
+        assertThat(publisher.flushCount()).as("the back-pressure flush, which drained everything, "
+                + "so drain() had nothing left to wait for").isEqualTo(1);
+        assertThat(acked).containsExactly(1L, 2L, 3L, 4L, 5L);
+        assertThat(connector.pending()).isZero();
+        assertThat(connector.published()).isEqualTo(5);
+        assertThat(connector.batchPublisher().backpressureFlushes()).isEqualTo(1);
+        assertThat(publisher.isConnected()).isFalse();
+    }
+
+    @Test
     @DisplayName("a record the pipeline rejects is counted, and the feed carries on")
     void survivesARejectedRecord() {
         AtomicInteger acks = new AtomicInteger();
         Connector connector = manager.connectors().get(0);
 
-        fakes.bySize.emit(SourceRecord.of("not json at all"));
+        fakes.bySize.emit(InboundRecord.of("not json at all"));
         fakes.bySize.emit(record("K-1", acks));
         fakes.bySize.emit(record("K-2", acks));
         fakes.bySize.emit(record("K-3", acks));

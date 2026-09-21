@@ -15,13 +15,13 @@ public class FakeRecordSource implements RecordSource {
 
     private final AtomicInteger starts = new AtomicInteger();
     private final AtomicInteger closes = new AtomicInteger();
-    private final List<SourceRecord> replay = new ArrayList<>();
+    private final List<InboundRecord> replay = new ArrayList<>();
 
     private volatile RecordHandler handler;
     private volatile boolean connected;
 
     /** Records delivered automatically on every {@link #start}, standing in for a replay. */
-    public FakeRecordSource withReplay(SourceRecord... records) {
+    public FakeRecordSource withReplay(InboundRecord... records) {
         replay.addAll(List.of(records));
         return this;
     }
@@ -35,12 +35,12 @@ public class FakeRecordSource implements RecordSource {
     }
 
     /** Push one record as if the source had read it. */
-    public void emit(SourceRecord record) {
+    public void emit(InboundRecord record) {
         handler().onRecord(record);
     }
 
     /** Push a group of records the way a Kafka poll or a JDBC result set would. */
-    public void emitAll(SourceRecord... records) {
+    public void emitAll(InboundRecord... records) {
         handler().onBatch(List.of(records));
     }
 

@@ -27,10 +27,11 @@ Kafka orders.fix (FIX)                                    AMPS sow/connectors/or
 (`enricher.symbol-tag`, tag 55), looks it up in the `instruments` resource, and on a hit
 writes every entry of `enricher.set` (a FIX tag taking a column of the row: `48` ← `sedol`,
 `15` ← `currency`) and every entry of `enricher.literals` (`22` ← `2`, SecurityIDSource 2 =
-SEDOL) into a **copy** of the field map. A miss is counted, raised as an `UNKNOWN_SYMBOL`
-alert, and then follows `enricher.on-miss`: `PASS` (the default) publishes the order as it
-came, `DROP` discards it. A `DELETE` record and a record with no symbol are not the
-transform's business and pass through untouched.
+SEDOL) into a **copy** of the field map — taken through `Fields.copy`, so a typed record's
+`FieldView` is cloned rather than flattened into a plain map. A miss is counted, raised as
+an `UNKNOWN_SYMBOL` alert, and then follows `enricher.on-miss`: `PASS` (the default)
+publishes the order as it came, `DROP` discards it. A `DELETE` record and a record with no
+symbol are not the transform's business and pass through untouched.
 
 The table is a `JdbcLookupTable` — the `resources[].jdbc` kind from
 `:amps-connectors:resource-jdbc` — held in memory as one immutable snapshot per load, swapped
@@ -169,7 +170,7 @@ line, and the resource beneath it:
 
 ```
 connector status:
-  orders-enriched          RUNNING   sow/connectors/orders        received=1200 published=1200 batches=240 failed=0 rejected=0 filtered=0 dropped=0 ignored-deletes=0 rules[limit-without-price=0,large-notional=0]
+  orders-enriched          RUNNING   sow/connectors/orders        received=1200 published=1200 batches=240 failed=0 rejected=0 filtered=0 dropped=0 ignored-deletes=0 pending=0 publish-rejected=0 rules[limit-without-price=0,large-notional=0]
 resource status:
   instruments AVAILABLE rows=5 loaded=2026-09-19T14:00:00Z reloads=0 failures=0
 ```
@@ -305,7 +306,8 @@ class MarketDataConfiguration {
         KdbMarketData md = registry.lookup("market-data", KdbMarketData.class);   // once, at boot
         return (record, fields) -> {
             Object ric = fields.get("ric");                                        // set by the enricher
-            Map<String, Object> out = new LinkedHashMap<>(fields);
+            // Fields.copy, never new LinkedHashMap<>(fields): a typed record's view is cloned, not flattened
+            Map<String, Object> out = Fields.copy(fields);
             if (ric != null) md.lastPrice(ric.toString()).ifPresent(px -> out.put("5010", px));
             return out;
         };

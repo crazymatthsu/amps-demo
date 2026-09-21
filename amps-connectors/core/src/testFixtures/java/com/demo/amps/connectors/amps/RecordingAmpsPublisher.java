@@ -1,9 +1,11 @@
 package com.demo.amps.connectors.amps;
 
+import com.demo.amps.connectors.codec.Payloads;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * An {@link AmpsPublisher} that records instead of connecting.
@@ -12,6 +14,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * aggregator, the timers, the acknowledgments -- and then assert on exactly the things that
  * matter and are hard to see against a real server: that the commands came out in the order
  * the records arrived, and that a batch of a hundred publishes made <em>one</em> flush.
+ *
+ * <p>Every command answers with a sequence number the way a client with a publish store does
+ * -- {@code 1, 2, 3…} in the order the commands were issued -- so a test can see the out-side
+ * sequence the batch publisher writes onto each {@code MessageContext}.
  *
  * <p>{@link #failFlushes(int)} is the other half. A failed flush is the interesting path of
  * the at-least-once contract: nothing is acknowledged, the sources re-read, and the connector
@@ -22,6 +28,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  * does: {@code publishFlush} waits for the server's persisted ack. A flush that returns
  * instantly hides every scheduling problem a slow one would expose, and the shared-scheduler
  * starvation in {@code ConnectorFlowTest} is exactly such a problem.
+ *
+ * <p>The persisted acks are modelled too, for {@code ack-mode: PERSISTED}. The
+ * {@link PublishListener} the batch publisher registers is kept, and by default a successful
+ * {@link #flush} tells it everything issued so far is persisted -- which is what a real flush
+ * means, and what keeps the FLUSH-mode tests true without their knowing. A test about the
+ * acks themselves switches to {@link #manualPersistedAcks(boolean) manual} and then says
+ * exactly what the server confirmed, with {@link #persistUpTo(long)}, or refused, with
+ * {@link #failWrite(long, int)}.
  */
 public class RecordingAmpsPublisher implements AmpsPublisher {
 
@@ -31,23 +45,42 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
      * @param kind {@code publish}, {@code delta_publish}, {@code sow_delete_by_key} or
      *     {@code sow_delete_by_filter}
      * @param topic the topic it named
-     * @param data the payload, or {@code null} for a delete
+     * @param data the payload as the batch handed it over -- a {@code String}, a
+     *     {@code byte[]} or a passed-through object -- or {@code null} for a delete
      * @param sowKeyOrFilter the SowKey or the delete filter, whichever the call carried
      */
-    public record Call(String kind, String topic, String data, String sowKeyOrFilter) {
+    public record Call(String kind, String topic, Object data, String sowKeyOrFilter) {
+
+        /** The payload as text: bytes decoded as UTF-8, {@code ""} for a delete. */
+        public String text() {
+            return Payloads.text(data);
+        }
     }
 
     private final List<Call> calls = java.util.Collections.synchronizedList(new ArrayList<>());
     private final AtomicInteger flushes = new AtomicInteger();
     private final AtomicInteger flushFailures = new AtomicInteger();
+    private final AtomicLong sequence = new AtomicLong();
 
     private volatile Duration flushDelay = Duration.ZERO;
+    private volatile PublishListener listener;
+    private volatile boolean manualPersistedAcks;
 
     private volatile boolean connected;
 
     @Override
     public void connect() {
         connected = true;
+    }
+
+    @Override
+    public void setPublishListener(PublishListener listener) {
+        this.listener = listener;
+    }
+
+    /** The listener the batch publisher registered, or {@code null}. */
+    public PublishListener listener() {
+        return listener;
     }
 
     @Override
@@ -61,23 +94,29 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
     }
 
     @Override
-    public void publish(String topic, String data, String sowKey) {
-        calls.add(new Call("publish", topic, data, sowKey));
+    public long publish(String topic, Object data, String sowKey) {
+        return record(new Call("publish", topic, data, sowKey));
     }
 
     @Override
-    public void deltaPublish(String topic, String data, String sowKey) {
-        calls.add(new Call("delta_publish", topic, data, sowKey));
+    public long deltaPublish(String topic, Object data, String sowKey) {
+        return record(new Call("delta_publish", topic, data, sowKey));
     }
 
     @Override
-    public void sowDeleteByKey(String topic, String sowKey) {
-        calls.add(new Call("sow_delete_by_key", topic, null, sowKey));
+    public long sowDeleteByKey(String topic, String sowKey) {
+        return record(new Call("sow_delete_by_key", topic, null, sowKey));
     }
 
     @Override
-    public void sowDeleteByFilter(String topic, String filter) {
-        calls.add(new Call("sow_delete_by_filter", topic, null, filter));
+    public long sowDeleteByFilter(String topic, String filter) {
+        return record(new Call("sow_delete_by_filter", topic, null, filter));
+    }
+
+    /** Record the call and answer the next sequence number, as a publish store would. */
+    private long record(Call call) {
+        calls.add(call);
+        return sequence.incrementAndGet();
     }
 
     @Override
@@ -92,7 +131,51 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
                 return false;
             }
         }
-        return flushFailures.getAndUpdate(remaining -> Math.max(0, remaining - 1)) == 0;
+        boolean flushed = flushFailures.getAndUpdate(remaining -> Math.max(0, remaining - 1)) == 0;
+        if (flushed && !manualPersistedAcks) {
+            // A real flush returns once the store is empty, i.e. once every sequence issued
+            // so far has been discarded -- and reported -- as persisted.
+            persistUpTo(sequence.get());
+        }
+        return flushed;
+    }
+
+    /**
+     * Whether a successful flush stops standing in for the server's persisted acks. On, the
+     * listener hears nothing until {@link #persistUpTo(long)} or {@link #failWrite(long, int)}
+     * says so; off (the default), every flush that returns {@code true} persists everything
+     * issued so far.
+     */
+    public RecordingAmpsPublisher manualPersistedAcks(boolean manual) {
+        this.manualPersistedAcks = manual;
+        return this;
+    }
+
+    /**
+     * The server's persisted ack: everything up to {@code sequence} is in the transaction log,
+     * as the client's store would report it through {@code discardUpTo}.
+     */
+    public RecordingAmpsPublisher persistUpTo(long sequence) {
+        PublishListener current = listener;
+        if (current != null) {
+            current.persistedUpTo(sequence);
+        }
+        return this;
+    }
+
+    /**
+     * The server refused, or already had, the command with this sequence, as the client's
+     * failed-write handler would report it.
+     *
+     * @param sequence the command's sequence
+     * @param reason one of the {@code Message.Reason} constants
+     */
+    public RecordingAmpsPublisher failWrite(long sequence, int reason) {
+        PublishListener current = listener;
+        if (current != null) {
+            current.failedWrite(sequence, reason);
+        }
+        return this;
     }
 
     @Override
@@ -129,7 +212,12 @@ public class RecordingAmpsPublisher implements AmpsPublisher {
         return flushes.get();
     }
 
-    /** Forget everything recorded, keeping the connection state. */
+    /** The last sequence number handed out; the number of commands issued since construction. */
+    public long lastSequence() {
+        return sequence.get();
+    }
+
+    /** Forget everything recorded, keeping the connection state and the sequence. */
     public void clear() {
         calls.clear();
         flushes.set(0);

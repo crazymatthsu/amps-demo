@@ -2,9 +2,9 @@ package com.demo.amps.connectors.tcp;
 
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.TcpSourceProperties;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.SourceRecord;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,13 +63,18 @@ import org.slf4j.LoggerFactory;
  *
  * <h2>A socket has no state to replay</h2>
  *
- * <p>Every frame becomes an {@code UPSERT} {@link SourceRecord} with <strong>no key</strong>
- * and <strong>no {@link com.demo.amps.connectors.source.Acknowledgment}</strong>, and this
+ * <p>Every frame becomes an {@code UPSERT} {@link InboundRecord} with <strong>no key</strong>
+ * and <strong>{@link com.demo.amps.connectors.source.Acknowledger#NONE}</strong>, and this
  * source never produces a {@code DELETE}. A raw feed carries no per-message key, no notion of
  * a record leaving it, and no position to commit: there is nothing a removal could address and
  * nothing an acknowledgment could rewind to. The only metadata worth carrying is who sent the
  * frame, which rides along as the {@code remote} attribute -- the one thing a {@code LISTEN}
- * connector reading several clients cannot reconstruct afterwards.
+ * connector reading several clients cannot reconstruct afterwards. What a frame does get is
+ * a number: the seqno is a frame counter that runs for the life of the source, across every
+ * connection and, in {@code LISTEN} mode, across every client, so that a record still says
+ * where in this source's stream it sat. The payload is the frame decoded in the configured
+ * charset, as text under {@code PayloadType.UNSET} -- a binary framing that hands the bytes
+ * to a codec is a follow-up, not a setting.
  *
  * <p>It follows that a reconnect replays nothing. Where the Kafka source re-seeks and a
  * reliable Hazelcast topic re-reads its ringbuffer, this one simply redials and picks up the
@@ -131,6 +137,9 @@ public class TcpRecordSource implements RecordSource {
 
     /** Numbers the reader threads, purely so a stack dump names which client is which. */
     private final AtomicInteger readerCount = new AtomicInteger();
+
+    /** Numbers every frame handed over, for the life of the source: the record's seqno. */
+    private final AtomicLong frames = new AtomicLong();
 
     private volatile Socket socket;
     private volatile ServerSocket server;
@@ -395,7 +404,8 @@ public class TcpRecordSource implements RecordSource {
             return;
         }
         try {
-            handler.onRecord(SourceRecord.of(new String(buffer, offset, length, charset))
+            handler.onRecord(InboundRecord.of(new String(buffer, offset, length, charset))
+                    .withSeqno(frames.incrementAndGet())
                     .withAttributes(attributes));
         } catch (RuntimeException e) {
             // One bad record is not a reason to drop the feed: the pipeline counts it, we
@@ -408,7 +418,7 @@ public class TcpRecordSource implements RecordSource {
      * The attribute map every frame from one socket carries.
      *
      * <p>Built once per connection, not once per frame: it is the same map for the socket's
-     * whole lifetime, and {@link SourceRecord} copies what it is given anyway.
+     * whole lifetime, and {@link InboundRecord} copies what it is given anyway.
      */
     private static Map<String, String> attributesOf(Socket client) {
         return Map.of(ATTRIBUTE_REMOTE, peerOf(client));

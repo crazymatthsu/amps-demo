@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.demo.amps.connectors.TestConnectors;
+import com.demo.amps.connectors.codec.PayloadType;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import java.time.Duration;
 import java.util.List;
@@ -52,7 +53,7 @@ class SimulatedSourceTest {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch released = new CountDownLatch(1);
         AtomicBoolean interrupted = new AtomicBoolean();
-        List<SourceRecord> delivered = new CopyOnWriteArrayList<>();
+        List<InboundRecord> delivered = new CopyOnWriteArrayList<>();
 
         source = new SimulatedSource(fastTicking("sim-close"));
         source.start(record -> {
@@ -91,6 +92,10 @@ class SimulatedSourceTest {
         assertThat(interrupted).as("the tick was never interrupted").isFalse();
         assertThat(delivered).hasSize(1);
         assertThat(delivered.get(0).key()).isEqualTo("K-1");
+        // Text at the tick's position, with nothing to acknowledge: the generator's shape.
+        assertThat(delivered.get(0).seqno()).isEqualTo(1L);
+        assertThat(delivered.get(0).type()).isEqualTo(PayloadType.UNSET);
+        assertThat(delivered.get(0).acknowledger()).isSameAs(Acknowledger.NONE);
 
         // And no tick starts after close: the generator stays at one record.
         Awaitility.await().during(Duration.ofMillis(200)).atMost(BUDGET)
@@ -101,7 +106,7 @@ class SimulatedSourceTest {
     @DisplayName("close() from inside the handler returns instead of waiting for itself")
     void closeFromTheTickThreadDoesNotDeadlock() throws Exception {
         AtomicReference<Duration> closeTook = new AtomicReference<>();
-        List<SourceRecord> delivered = new CopyOnWriteArrayList<>();
+        List<InboundRecord> delivered = new CopyOnWriteArrayList<>();
 
         source = new SimulatedSource(fastTicking("sim-self-close"));
         source.start(record -> {

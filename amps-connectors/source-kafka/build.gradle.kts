@@ -9,7 +9,7 @@ plugins {
     `java-library`
 }
 
-description = "Kafka RecordSource for amps-connectors: a consumer subscription -> SourceRecord"
+description = "Kafka RecordSource for amps-connectors: a consumer subscription -> InboundRecord"
 
 dependencies {
     // Same Boot BOM as core, so a source module never writes a Spring version either.
