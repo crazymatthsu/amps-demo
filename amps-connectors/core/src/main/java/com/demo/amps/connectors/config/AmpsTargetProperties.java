@@ -19,6 +19,11 @@ import jakarta.validation.constraints.NotNull;
  * one through the codec's own JSON rendering. Left at {@code 0/0}, the message type's text
  * encoder writes the field map, as it always has.
  *
+ * <p>{@link #getAckMode() ack-mode} is when a record is acknowledged back to its source:
+ * after its batch's flush, or when the server's persisted ack for it arrives. The default
+ * waits, because waiting is simple to reason about; the other needs a publish store to
+ * observe and is bounded by {@code batch.max-pending}.
+ *
  * <pre>{@code
  * amps:
  *   topic: sow/connectors/orders
@@ -26,10 +31,27 @@ import jakarta.validation.constraints.NotNull;
  *   command: PUBLISH
  *   key: { fields: [ "11" ], mode: SERVER }
  *   batch: { max-messages: 500, flush-interval: 250ms }
+ *   # ack-mode: PERSISTED                              # acknowledge as the acks arrive
  *   # payload-type: { factory-id: 100, class-id: 1 }   # a codec writes the payload
  * }</pre>
  */
 public class AmpsTargetProperties {
+
+    /** When a record is acknowledged to its source. */
+    public enum AckMode {
+        /**
+         * After its batch's one {@code publishFlush} returns: every record of a batch is
+         * acknowledged together, on the thread that published it, or none of them is.
+         */
+        FLUSH,
+        /**
+         * As the server's persisted acks arrive, on the client's receive thread, one record at
+         * a time and without a wait per batch. Needs a publish store ({@code MEMORY} or
+         * {@code FILE}) -- the acks are observed through it -- and is bounded by
+         * {@code batch.max-pending}, beyond which the publishing thread flushes and waits.
+         */
+        PERSISTED
+    }
 
     /** Which publish command carries the record. */
     public enum Command {
@@ -98,6 +120,10 @@ public class AmpsTargetProperties {
     @NotNull
     private Passthrough passthrough = Passthrough.AUTO;
 
+    /** When a record is acknowledged to its source: after the batch's flush, or per ack. */
+    @NotNull
+    private AckMode ackMode = AckMode.FLUSH;
+
     /** How many records ride on one flush, and how long a partial batch waits. */
     @Valid
     @NotNull
@@ -149,6 +175,14 @@ public class AmpsTargetProperties {
 
     public void setPassthrough(Passthrough passthrough) {
         this.passthrough = passthrough;
+    }
+
+    public AckMode getAckMode() {
+        return ackMode;
+    }
+
+    public void setAckMode(AckMode ackMode) {
+        this.ackMode = ackMode;
     }
 
     public BatchProperties getBatch() {

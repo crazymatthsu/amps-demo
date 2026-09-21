@@ -117,6 +117,48 @@ class ConnectorValidatorTest {
     }
 
     @Test
+    @DisplayName("PERSISTED acknowledgment needs a publish store to observe the acks through")
+    void refusesPersistedAckModeWithoutAPublishStore() {
+        ConnectorProperties persisted = TestConnectors.tcp("ticks", 5001);
+        persisted.getAmps().setAckMode(AmpsTargetProperties.AckMode.PERSISTED);
+        ConnectorsProperties storeless = properties(persisted);
+        storeless.getAmps().setPublishStore(AmpsServerProperties.PublishStore.NONE);
+
+        assertThat(ConnectorValidator.validate(storeless))
+                .singleElement().asString()
+                .contains("connector 'ticks'")
+                .contains("amps.ack-mode: PERSISTED")
+                .contains("amps-connectors.amps.publish-store is NONE");
+
+        // The same connector with a store, and a flushing connector without one, are fine.
+        assertThat(ConnectorValidator.validate(properties(persisted)))
+                .as("MEMORY is the default store").isEmpty();
+        ConnectorsProperties file = properties(persisted);
+        file.getAmps().setPublishStore(AmpsServerProperties.PublishStore.FILE);
+        assertThat(ConnectorValidator.validate(file)).isEmpty();
+
+        ConnectorProperties flushing = TestConnectors.tcp("ticks", 5001);
+        ConnectorsProperties flushingStoreless = properties(flushing);
+        flushingStoreless.getAmps().setPublishStore(AmpsServerProperties.PublishStore.NONE);
+        assertThat(ConnectorValidator.validate(flushingStoreless))
+                .as("FLUSH with NONE is fire-and-forget, deliberately").isEmpty();
+    }
+
+    @Test
+    void refusesANonPositiveMaxPending() {
+        ConnectorProperties connector = TestConnectors.tcp("ticks", 5001);
+        connector.getAmps().getBatch().setMaxPending(0);
+        assertThat(ConnectorValidator.validate(properties(connector)))
+                .singleElement().asString().contains("amps.batch.max-pending must be at least 1");
+
+        connector.getAmps().getBatch().setMaxPending(1);
+        assertThat(ConnectorValidator.validate(properties(connector))).isEmpty();
+        assertThat(new BatchProperties().getMaxPending()).isEqualTo(10_000);
+        assertThat(new AmpsTargetProperties().getAckMode())
+                .isEqualTo(AmpsTargetProperties.AckMode.FLUSH);
+    }
+
+    @Test
     void refusesAFilterRuleThatNamesNoOperatorOrSeveral() {
         ConnectorProperties connector = TestConnectors.tcp("ticks", 5001);
         FilterProperties filter = new FilterProperties();

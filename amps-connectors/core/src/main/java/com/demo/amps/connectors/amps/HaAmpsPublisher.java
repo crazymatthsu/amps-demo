@@ -9,6 +9,7 @@ import com.crankuptheamps.client.MemoryPublishStore;
 import com.crankuptheamps.client.Message;
 import com.crankuptheamps.client.MessageStream;
 import com.crankuptheamps.client.PublishStore;
+import com.crankuptheamps.client.Store;
 import com.crankuptheamps.client.exception.AMPSException;
 import com.demo.amps.connectors.codec.Payloads;
 import com.demo.amps.connectors.config.AmpsServerProperties;
@@ -46,6 +47,14 @@ import org.slf4j.LoggerFactory;
  * a record by the number the server's persisted acks will count up to. Bytes are sent as
  * bytes, through the client's {@code byte[]} overloads, and anything else as text.
  *
+ * <p>A {@link PublishListener}, when one is set before {@link #connect()}, hears the other
+ * end of that: the publish store is wrapped in an {@link ObservingStore}, so every persisted
+ * ack the client hands to the store as {@code discardUpTo} reaches the listener, and the
+ * client's {@code FailedWriteHandler} is installed so a publish the server refuses -- or
+ * answers as a duplicate after a replay -- reaches it too. With {@code publish-store: NONE}
+ * there is no store to observe: the listener is kept, the failed-write handler is still
+ * installed, and {@code persistedUpTo} simply never fires.
+ *
  * <p>{@link #connect()} gives up after about {@code logon-timeout} against a server that is
  * not there, and throws; every reconnect after that first success is the HA client's own and
  * never gives up. The distinction matters because the two callers are different threads with
@@ -70,6 +79,7 @@ public final class HaAmpsPublisher implements AmpsPublisher {
     private final String uri;
 
     private volatile HAClient client;
+    private volatile PublishListener listener;
 
     /**
      * @param server the application's AMPS server block
@@ -85,6 +95,22 @@ public final class HaAmpsPublisher implements AmpsPublisher {
         this.uri = server.uri(messageType);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalStateException if already connected: the store is wrapped and the
+     *     failed-write handler installed as the client is built, so a listener set afterwards
+     *     would hear nothing, and silently hearing nothing is the one thing this must not do
+     */
+    @Override
+    public synchronized void setPublishListener(PublishListener listener) {
+        if (client != null) {
+            throw new IllegalStateException("[" + connectorName
+                    + "] the publish listener must be set before connect()");
+        }
+        this.listener = listener;
+    }
+
     @Override
     public synchronized void connect() throws AMPSException {
         if (client != null) {
@@ -94,6 +120,7 @@ public final class HaAmpsPublisher implements AmpsPublisher {
         int reconnectDelay = (int) server.getReconnectDelay().toMillis();
         try {
             attachPublishStore(connecting);
+            attachFailedWriteHandler(connecting);
             connecting.setServerChooser(new RememberingServerChooser().add(uri));
             // Bounded for the FIRST connect only. connectAndLogon() retries through the
             // server chooser until a strategy tells it to stop, and the plain fixed delay
@@ -130,7 +157,8 @@ public final class HaAmpsPublisher implements AmpsPublisher {
     /** MEMORY, FILE or NONE -- the difference between replaying a reconnect and not. */
     private void attachPublishStore(HAClient connecting) throws AMPSException {
         switch (server.getPublishStore()) {
-            case MEMORY -> connecting.setPublishStore(new MemoryPublishStore(MEMORY_STORE_BLOCKS));
+            case MEMORY -> connecting.setPublishStore(
+                    observed(new MemoryPublishStore(MEMORY_STORE_BLOCKS)));
             case FILE -> {
                 Path directory = Path.of(server.getPublishStoreDir());
                 try {
@@ -139,15 +167,44 @@ public final class HaAmpsPublisher implements AmpsPublisher {
                     throw new UncheckedIOException(
                             "cannot create publish store directory " + directory, e);
                 }
-                connecting.setPublishStore(
-                        new PublishStore(directory.resolve(clientName + ".publish").toString()));
+                connecting.setPublishStore(observed(
+                        new PublishStore(directory.resolve(clientName + ".publish").toString())));
             }
             case NONE -> {
                 // Fire and forget: nothing is replayed after a disconnect, so the connector
                 // degrades to at-most-once. Configured deliberately, for a feed that would
-                // rather lose a message than repeat one.
+                // rather lose a message than repeat one. Nothing to observe either: a
+                // listener set on this publisher never hears a persisted ack.
             }
         }
+    }
+
+    /** The store as configured, wrapped so a listener hears every {@code discardUpTo}. */
+    private Store observed(Store store) {
+        PublishListener observer = listener;
+        return observer == null ? store : new ObservingStore(store, observer, connectorName);
+    }
+
+    /**
+     * The client reports a refused or duplicate publish through this handler, on its receive
+     * thread, with the stored message -- whose sequence is the one the store assigned. The
+     * client absorbs an exception out of it, but silently; contained here, it is at least a
+     * log line.
+     */
+    private void attachFailedWriteHandler(HAClient connecting) {
+        PublishListener observer = listener;
+        if (observer == null) {
+            return;
+        }
+        connecting.setFailedWriteHandler((message, reason) -> {
+            long sequence = message.isSequenceNull() ? 0 : message.getSequence();
+            try {
+                observer.failedWrite(sequence, reason);
+            } catch (RuntimeException e) {
+                log.warn("[{}] publish listener threw on failed write {} (reason {})",
+                        connectorName, sequence, reason, e);
+            }
+        });
     }
 
     @Override
