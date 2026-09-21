@@ -4,7 +4,7 @@ import com.demo.amps.connectors.alert.Alert;
 import com.demo.amps.connectors.alert.Alerts;
 import com.demo.amps.connectors.decode.Fields;
 import com.demo.amps.connectors.resource.jdbc.JdbcLookupTable;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.transform.RecordTransform;
 import com.demo.amps.connectors.transform.TransformContext;
 import java.util.LinkedHashMap;
@@ -101,7 +101,7 @@ public final class InstrumentEnricher implements RecordTransform {
     }
 
     @Override
-    public Map<String, Object> apply(SourceRecord record, Map<String, Object> fields) {
+    public Map<String, Object> apply(InboundRecord record, Map<String, Object> fields) {
         return apply(null, record, fields);
     }
 
@@ -115,8 +115,8 @@ public final class InstrumentEnricher implements RecordTransform {
         return (record, fields) -> apply(connector, record, fields);
     }
 
-    private Map<String, Object> apply(String connector, SourceRecord record, Map<String, Object> fields) {
-        if (record.action() == SourceRecord.Action.DELETE) {
+    private Map<String, Object> apply(String connector, InboundRecord record, Map<String, Object> fields) {
+        if (record.action() == InboundRecord.Action.DELETE) {
             return copy(fields);
         }
         String symbol = Fields.text(Fields.get(fields, properties.getSymbolTag()));

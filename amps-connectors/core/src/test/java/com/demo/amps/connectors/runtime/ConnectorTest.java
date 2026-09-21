@@ -13,7 +13,7 @@ import com.demo.amps.connectors.config.RuleProperties;
 import com.demo.amps.connectors.config.TransformStep;
 import com.demo.amps.connectors.source.FakeRecordSource;
 import com.demo.amps.connectors.source.FakeSourceFactory;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.source.SourceResolver;
 import com.demo.amps.connectors.transform.TransformRegistry;
 import java.util.ArrayList;
@@ -86,8 +86,8 @@ class ConnectorTest {
         connector.start();
 
         // The source's thread survives: emit() returns, and the second record is counted too.
-        source.emit(SourceRecord.of("{\"id\":\"1\"}"));
-        source.emit(SourceRecord.of("{\"id\":\"2\"}"));
+        source.emit(InboundRecord.of("{\"id\":\"1\"}"));
+        source.emit(InboundRecord.of("{\"id\":\"2\"}"));
 
         assertThat(connector.sourceErrors()).isEqualTo(2);
         assertThat(raised).hasSize(2);
@@ -139,8 +139,8 @@ class ConnectorTest {
         assertThat(connector.pipeline().ruleSets()).hasSize(1);
         assertThat(connector.status()).endsWith("rules[large=0,never=0]");
 
-        connector.pipeline().apply(SourceRecord.of("{\"id\":\"1\",\"qty\":500}"));
-        connector.pipeline().apply(SourceRecord.of("{\"id\":\"2\",\"qty\":5}"));
+        connector.pipeline().apply(InboundRecord.of("{\"id\":\"1\",\"qty\":500}"));
+        connector.pipeline().apply(InboundRecord.of("{\"id\":\"2\",\"qty\":5}"));
 
         assertThat(connector.status()).endsWith("rules[large=1,never=0]");
         assertThat(raised).singleElement().satisfies(fired -> {
@@ -169,9 +169,9 @@ class ConnectorTest {
         connector.start();
         recording.failFlushes(1);
 
-        SourceRecord record = SourceRecord.of("{\"id\":\"1\"}");
+        InboundRecord record = InboundRecord.of("{\"id\":\"1\"}");
         connector.batchPublisher().publish(List.of(
-                PublishRequest.publish("test/orders", Command.PUBLISH, record.data(), null, record)));
+                OutboundRecord.publish("test/orders", Command.PUBLISH, record.data(), null, record)));
 
         assertThat(recording.calls()).hasSize(1);
         assertThat(connector.batchPublisher().failedBatches()).isEqualTo(1);

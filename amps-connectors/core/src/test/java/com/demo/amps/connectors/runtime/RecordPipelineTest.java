@@ -10,7 +10,7 @@ import com.demo.amps.connectors.config.FilterRule;
 import com.demo.amps.connectors.config.KeyProperties;
 import com.demo.amps.connectors.config.SourceFormat;
 import com.demo.amps.connectors.config.TransformStep;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.transform.TransformRegistry;
 import java.util.List;
 import java.util.Map;
@@ -39,7 +39,7 @@ class RecordPipelineTest {
     void passesTheOriginalPayloadThroughWhenNothingTouchedIt() {
         RecordPipeline pipeline = pipeline(json("ticks"));
         String payload = "{\"id\":\"C-1\",\"price\":185.50}";
-        PublishRequest request = pipeline.apply(SourceRecord.of(payload));
+        OutboundRecord request = pipeline.apply(InboundRecord.of(payload));
         assertThat(request).isNotNull();
         assertThat(request.data()).isSameAs(payload);
         assertThat(request.command()).isEqualTo(Command.PUBLISH);
@@ -55,8 +55,8 @@ class RecordPipelineTest {
         set.setSet(Map.of("source", "tcp"));
         connector.setTransforms(List.of(set));
 
-        PublishRequest request = pipeline(connector).apply(
-                SourceRecord.of("{\"id\":\"C-1\"}"));
+        OutboundRecord request = pipeline(connector).apply(
+                InboundRecord.of("{\"id\":\"C-1\"}"));
         assertThat(request.data()).isEqualTo("{\"id\":\"C-1\",\"source\":\"tcp\"}");
     }
 
@@ -65,8 +65,8 @@ class RecordPipelineTest {
     void passthroughNeverAlwaysEncodes() {
         ConnectorProperties connector = json("ticks");
         connector.getAmps().setPassthrough(AmpsTargetProperties.Passthrough.NEVER);
-        PublishRequest request = pipeline(connector).apply(
-                SourceRecord.of("{ \"id\" : \"C-1\" }"));
+        OutboundRecord request = pipeline(connector).apply(
+                InboundRecord.of("{ \"id\" : \"C-1\" }"));
         assertThat(request.data()).isEqualTo("{\"id\":\"C-1\"}");
     }
 
@@ -77,7 +77,7 @@ class RecordPipelineTest {
         TransformStep set = new TransformStep();
         set.setSet(Map.of("source", "tcp"));
         connector.setTransforms(List.of(set));
-        assertThat(pipeline(connector).apply(SourceRecord.of("{\"id\":\"C-1\"}")).data())
+        assertThat(pipeline(connector).apply(InboundRecord.of("{\"id\":\"C-1\"}")).data())
                 .isEqualTo("{\"id\":\"C-1\"}");
     }
 
@@ -86,7 +86,7 @@ class RecordPipelineTest {
     void translatesFixToJson() {
         ConnectorProperties connector = fix("orders");
         connector.getAmps().setMessageType("json");
-        PublishRequest request = pipeline(connector).apply(SourceRecord.of(
+        OutboundRecord request = pipeline(connector).apply(InboundRecord.of(
                 TestConnectors.delimited("11", "ORD-1", "55", "AAPL")));
         assertThat(request.data()).isEqualTo("{\"11\":\"ORD-1\",\"55\":\"AAPL\"}");
     }
@@ -96,7 +96,7 @@ class RecordPipelineTest {
     void textIsAlwaysEncoded() {
         ConnectorProperties connector =
                 TestConnectors.withFormat(TestConnectors.simulated("logs"), SourceFormat.TEXT);
-        assertThat(pipeline(connector).apply(SourceRecord.of("a log line")).data())
+        assertThat(pipeline(connector).apply(InboundRecord.of("a log line")).data())
                 .isEqualTo("{\"text\":\"a log line\"}");
     }
 
@@ -104,7 +104,7 @@ class RecordPipelineTest {
     void sendsTheSowKeyInPublisherMode() {
         ConnectorProperties connector = TestConnectors.withKey(
                 fix("orders"), KeyProperties.Mode.PUBLISHER, "11");
-        PublishRequest request = pipeline(connector).apply(SourceRecord.of(
+        OutboundRecord request = pipeline(connector).apply(InboundRecord.of(
                 TestConnectors.delimited("11", "ORD-1", "55", "AAPL")));
         assertThat(request.sowKey()).isEqualTo("ORD-1");
     }
@@ -116,11 +116,11 @@ class RecordPipelineTest {
                 fix("orders"), KeyProperties.Mode.SERVER, "11");
         RecordPipeline pipeline = pipeline(connector);
 
-        PublishRequest request = pipeline.apply(SourceRecord.of(
+        OutboundRecord request = pipeline.apply(InboundRecord.of(
                 TestConnectors.delimited("11", "ORD-1")));
         assertThat(request.sowKey()).isNull();
 
-        assertThat(pipeline.apply(SourceRecord.of(TestConnectors.delimited("55", "AAPL"))))
+        assertThat(pipeline.apply(InboundRecord.of(TestConnectors.delimited("55", "AAPL"))))
                 .isNull();
         assertThat(pipeline.rejected()).isEqualTo(1);
     }
@@ -130,7 +130,7 @@ class RecordPipelineTest {
         ConnectorProperties connector = TestConnectors.withKey(
                 json("positions"), KeyProperties.Mode.PUBLISHER, "id");
         connector.getAmps().setCommand(AmpsTargetProperties.Command.DELTA_PUBLISH);
-        assertThat(pipeline(connector).apply(SourceRecord.of("{\"id\":\"P-1\"}")).command())
+        assertThat(pipeline(connector).apply(InboundRecord.of("{\"id\":\"P-1\"}")).command())
                 .isEqualTo(Command.DELTA_PUBLISH);
     }
 
@@ -139,7 +139,7 @@ class RecordPipelineTest {
     void deletesByKey() {
         ConnectorProperties connector = TestConnectors.withKey(
                 json("positions"), KeyProperties.Mode.PUBLISHER, "id");
-        PublishRequest request = pipeline(connector).apply(SourceRecord.delete("", "P-1"));
+        OutboundRecord request = pipeline(connector).apply(InboundRecord.delete("", "P-1"));
         assertThat(request.command()).isEqualTo(Command.SOW_DELETE);
         assertThat(request.sowKey()).isEqualTo("P-1");
         assertThat(request.deleteFilter()).isNull();
@@ -150,8 +150,8 @@ class RecordPipelineTest {
     void deletesByFilter() {
         ConnectorProperties connector = TestConnectors.withKey(
                 json("events"), KeyProperties.Mode.SERVER, "id");
-        PublishRequest request = pipeline(connector)
-                .apply(SourceRecord.delete("{\"id\":\"e1\"}", "e1"));
+        OutboundRecord request = pipeline(connector)
+                .apply(InboundRecord.delete("{\"id\":\"e1\"}", "e1"));
         assertThat(request.command()).isEqualTo(Command.SOW_DELETE);
         assertThat(request.deleteFilter()).isEqualTo("/id = 'e1'");
         assertThat(request.sowKey()).isNull();
@@ -163,7 +163,7 @@ class RecordPipelineTest {
         ConnectorProperties connector = TestConnectors.withKey(
                 json("events"), KeyProperties.Mode.SERVER, "id");
         RecordPipeline pipeline = pipeline(connector);
-        assertThat(pipeline.apply(SourceRecord.delete("", "e1"))).isNull();
+        assertThat(pipeline.apply(InboundRecord.delete("", "e1"))).isNull();
         assertThat(pipeline.dropped()).isEqualTo(1);
     }
 
@@ -172,7 +172,7 @@ class RecordPipelineTest {
         ConnectorProperties connector = json("ticks");
         connector.getAmps().setOnDelete(AmpsTargetProperties.OnDelete.IGNORE);
         RecordPipeline pipeline = pipeline(connector);
-        assertThat(pipeline.apply(SourceRecord.delete("", "K-1"))).isNull();
+        assertThat(pipeline.apply(InboundRecord.delete("", "K-1"))).isNull();
         assertThat(pipeline.ignoredDeletes()).isEqualTo(1);
         assertThat(pipeline.published()).isZero();
     }
@@ -188,9 +188,9 @@ class RecordPipelineTest {
         connector.setFilter(filter);
 
         RecordPipeline pipeline = pipeline(connector);
-        assertThat(pipeline.apply(SourceRecord.of(TestConnectors.delimited("35", "8"))))
+        assertThat(pipeline.apply(InboundRecord.of(TestConnectors.delimited("35", "8"))))
                 .isNull();
-        assertThat(pipeline.apply(SourceRecord.of(TestConnectors.delimited("35", "D"))))
+        assertThat(pipeline.apply(InboundRecord.of(TestConnectors.delimited("35", "D"))))
                 .isNotNull();
         assertThat(pipeline.filtered()).isEqualTo(1);
         assertThat(pipeline.rejected()).isZero();
@@ -210,7 +210,7 @@ class RecordPipelineTest {
         connector.setFilter(filter);
 
         RecordPipeline pipeline = pipeline(connector);
-        assertThat(pipeline.apply(SourceRecord.delete("", "P-1"))).isNotNull();
+        assertThat(pipeline.apply(InboundRecord.delete("", "P-1"))).isNotNull();
         assertThat(pipeline.filtered()).isZero();
     }
 
@@ -224,7 +224,7 @@ class RecordPipelineTest {
         connector.setTransforms(List.of(bean));
 
         RecordPipeline pipeline = new RecordPipeline(connector, registry);
-        assertThat(pipeline.apply(SourceRecord.of(TestConnectors.delimited("35", "D"))))
+        assertThat(pipeline.apply(InboundRecord.of(TestConnectors.delimited("35", "D"))))
                 .isNull();
         assertThat(pipeline.dropped()).isEqualTo(1);
         assertThat(pipeline.filtered()).isZero();
@@ -234,8 +234,8 @@ class RecordPipelineTest {
     @DisplayName("a payload the decoder cannot read is rejected and the pipeline carries on")
     void countsUndecodableRecordsAsRejected() {
         RecordPipeline pipeline = pipeline(json("ticks"));
-        assertThat(pipeline.apply(SourceRecord.of("not json at all"))).isNull();
-        assertThat(pipeline.apply(SourceRecord.of("{\"id\":\"C-1\"}"))).isNotNull();
+        assertThat(pipeline.apply(InboundRecord.of("not json at all"))).isNull();
+        assertThat(pipeline.apply(InboundRecord.of("{\"id\":\"C-1\"}"))).isNotNull();
         assertThat(pipeline.rejected()).isEqualTo(1);
         assertThat(pipeline.published()).isEqualTo(1);
     }
@@ -247,13 +247,13 @@ class RecordPipelineTest {
         connector.getAmps().setMessageType("fix");
         connector.getAmps().setPassthrough(AmpsTargetProperties.Passthrough.NEVER);
         RecordPipeline pipeline = pipeline(connector);
-        assertThat(pipeline.apply(SourceRecord.of("{\"symbol\":\"AAPL\"}"))).isNull();
+        assertThat(pipeline.apply(InboundRecord.of("{\"symbol\":\"AAPL\"}"))).isNull();
         assertThat(pipeline.rejected()).isEqualTo(1);
     }
 
     @Test
     void theRecordRidesAlongForItsAcknowledgment() {
-        SourceRecord record = SourceRecord.of("{\"id\":\"C-1\"}");
+        InboundRecord record = InboundRecord.of("{\"id\":\"C-1\"}");
         assertThat(pipeline(json("ticks")).apply(record).record()).isSameAs(record);
     }
 }

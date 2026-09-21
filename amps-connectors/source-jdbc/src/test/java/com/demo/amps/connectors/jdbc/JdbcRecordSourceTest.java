@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.JdbcSourceProperties;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -97,18 +97,18 @@ class JdbcRecordSourceTest {
     }
 
     private static JdbcRecordSource started(
-            ConnectorProperties connector, List<SourceRecord> received) {
+            ConnectorProperties connector, List<InboundRecord> received) {
         JdbcRecordSource source = new JdbcRecordSource(connector);
         source.start(received::add);
         Awaitility.await().atMost(Duration.ofSeconds(5)).until(source::isConnected);
         return source;
     }
 
-    private static void awaitRecords(List<SourceRecord> received, int count) {
+    private static void awaitRecords(List<InboundRecord> received, int count) {
         Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> received.size() >= count);
     }
 
-    private static JsonNode payload(SourceRecord record) {
+    private static JsonNode payload(InboundRecord record) {
         try {
             return MAPPER.readTree(record.data());
         } catch (IOException e) {
@@ -116,7 +116,7 @@ class JdbcRecordSourceTest {
         }
     }
 
-    private static String text(SourceRecord record, String field) {
+    private static String text(InboundRecord record, String field) {
         return payload(record).get(field).asText();
     }
 
@@ -130,9 +130,9 @@ class JdbcRecordSourceTest {
                 .anyMatch(thread -> thread.getName().equals(NAME + "-jdbc") && thread.isAlive());
     }
 
-    private static List<SourceRecord> deletes(List<SourceRecord> received) {
+    private static List<InboundRecord> deletes(List<InboundRecord> received) {
         return received.stream()
-                .filter(record -> record.action() == SourceRecord.Action.DELETE)
+                .filter(record -> record.action() == InboundRecord.Action.DELETE)
                 .toList();
     }
 
@@ -149,14 +149,14 @@ class JdbcRecordSourceTest {
                 "INSERT INTO positions VALUES ('ACC-1', 250, 101.2500, TRUE, "
                         + "TIMESTAMP '2026-09-18 12:34:56', NULL)");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source =
                 new JdbcRecordSource(connector(url, "SELECT * FROM positions"))) {
             source.start(received::add);
             awaitRecords(received, 1);
 
-            SourceRecord record = received.get(0);
-            assertThat(record.action()).isEqualTo(SourceRecord.Action.UPSERT);
+            InboundRecord record = received.get(0);
+            assertThat(record.action()).isEqualTo(InboundRecord.Action.UPSERT);
             assertThat(record.key()).as("no key-columns configured").isNull();
             // A snapshot has no position to remember: the next poll re-reads the row whatever
             // AMPS said about this one, so there is nothing an acknowledgment could advance.
@@ -196,7 +196,7 @@ class JdbcRecordSourceTest {
                 connector(url, "SELECT * FROM positions ORDER BY \"symbol\""),
                 "account", "symbol");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             awaitRecords(received, 2);
@@ -205,11 +205,11 @@ class JdbcRecordSourceTest {
             // columns themselves and not a synthetic key column AMPS would have to store.
             // A copy, because the poll thread keeps appending to `received` and a subList
             // view of a live CopyOnWriteArrayList throws on the next append.
-            List<SourceRecord> firstPoll = List.copyOf(received).subList(0, 2);
-            assertThat(firstPoll).extracting(SourceRecord::key)
+            List<InboundRecord> firstPoll = List.copyOf(received).subList(0, 2);
+            assertThat(firstPoll).extracting(InboundRecord::key)
                     .containsExactly("ACC-1|AAPL", "ACC-1|MSFT");
-            assertThat(firstPoll).extracting(SourceRecord::action)
-                    .containsOnly(SourceRecord.Action.UPSERT);
+            assertThat(firstPoll).extracting(InboundRecord::action)
+                    .containsOnly(InboundRecord.Action.UPSERT);
             assertThat(payload(firstPoll.get(0)).has("account")).isTrue();
         }
     }
@@ -228,7 +228,7 @@ class JdbcRecordSourceTest {
                 connector(url, "SELECT * FROM positions ORDER BY \"account\""),
                 "account", "symbol");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             awaitRecords(received, 2);
@@ -257,7 +257,7 @@ class JdbcRecordSourceTest {
                 connector(url, "SELECT * FROM positions ORDER BY \"symbol\""),
                 "account", "symbol");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             awaitRecords(received, 2);
@@ -266,7 +266,7 @@ class JdbcRecordSourceTest {
             Awaitility.await().atMost(Duration.ofSeconds(5))
                     .until(() -> !deletes(received).isEmpty());
 
-            SourceRecord delete = deletes(received).get(0);
+            InboundRecord delete = deletes(received).get(0);
             assertThat(delete.key()).isEqualTo("ACC-1|MSFT");
             // The key columns and nothing else: a PUBLISHER-keyed connector deletes by the
             // key above, but a SERVER-keyed one has to build "/account = 'ACC-1' AND
@@ -300,7 +300,7 @@ class JdbcRecordSourceTest {
         ConnectorProperties connector =
                 incremental(connector(url, "SELECT * FROM trades ORDER BY \"seq\""), "seq");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             // Poll 1: no mark yet, so everything the column can order.
@@ -318,10 +318,10 @@ class JdbcRecordSourceTest {
                     // Skipped, and skipped quietly after the first warning: emitting it would
                     // re-emit it on every poll for as long as it sits in the table.
                     .containsExactly("T-1", "T-2", "T-3");
-            assertThat(received).extracting(SourceRecord::action)
-                    .containsOnly(SourceRecord.Action.UPSERT);
+            assertThat(received).extracting(InboundRecord::action)
+                    .containsOnly(InboundRecord.Action.UPSERT);
             // Unlike a snapshot row, this one has a position worth remembering.
-            assertThat(received).extracting(SourceRecord::ack).doesNotContainNull();
+            assertThat(received).extracting(InboundRecord::ack).doesNotContainNull();
         }
     }
 
@@ -342,7 +342,7 @@ class JdbcRecordSourceTest {
                 incremental(connector(url, "SELECT * FROM trades ORDER BY \"seq\""), "seq");
         connector.getSource().getJdbc().setStateFile(stateFile.toString());
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             awaitRecords(received, 2);
@@ -360,7 +360,7 @@ class JdbcRecordSourceTest {
 
         execute(url, "INSERT INTO trades VALUES ('T-3', 3)");
 
-        List<SourceRecord> resumed = new CopyOnWriteArrayList<>();
+        List<InboundRecord> resumed = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(resumed::add);
             awaitRecords(resumed, 1);
@@ -387,7 +387,7 @@ class JdbcRecordSourceTest {
         ConnectorProperties connector = keyedOn(
                 connector(url, "SELECT * FROM positions"), "account", "symbol");
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (JdbcRecordSource source = new JdbcRecordSource(connector)) {
             source.start(received::add);
             awaitRecords(received, 1);
@@ -421,7 +421,7 @@ class JdbcRecordSourceTest {
         // Long enough that a close waiting out the interval would be obvious.
         connector.getSource().getJdbc().setPollInterval(Duration.ofSeconds(30));
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         JdbcRecordSource source = started(connector, received);
         awaitRecords(received, 1);
 

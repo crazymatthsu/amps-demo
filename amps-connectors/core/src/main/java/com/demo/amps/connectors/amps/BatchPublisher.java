@@ -1,6 +1,6 @@
 package com.demo.amps.connectors.amps;
 
-import com.demo.amps.connectors.runtime.PublishRequest;
+import com.demo.amps.connectors.runtime.OutboundRecord;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -53,14 +53,14 @@ public final class BatchPublisher {
     /**
      * Issue a batch and, if it lands, acknowledge it.
      *
-     * @param batch the requests, in the order they were produced
+     * @param batch the outbound records, in the order they were produced
      */
-    public void publish(List<PublishRequest> batch) {
+    public void publish(List<OutboundRecord> batch) {
         if (batch == null || batch.isEmpty()) {
             return;
         }
         try {
-            for (PublishRequest request : batch) {
+            for (OutboundRecord request : batch) {
                 issue(request);
             }
             if (!publisher.flush(flushTimeout)) {
@@ -71,7 +71,7 @@ public final class BatchPublisher {
             failed(batch, e.toString());
             return;
         }
-        for (PublishRequest request : batch) {
+        for (OutboundRecord request : batch) {
             request.record().acknowledge();
         }
         publishedMessages.addAndGet(batch.size());
@@ -79,7 +79,7 @@ public final class BatchPublisher {
         log.debug("[{}] published a batch of {}", connectorName, batch.size());
     }
 
-    private void issue(PublishRequest request) {
+    private void issue(OutboundRecord request) {
         switch (request.command()) {
             case PUBLISH -> publisher.publish(request.topic(), request.data(), request.sowKey());
             case DELTA_PUBLISH ->
@@ -98,7 +98,7 @@ public final class BatchPublisher {
      * A batch that did not land. Nothing is acknowledged, so the sources re-read it; the
      * publish store replays whatever AMPS never confirmed.
      */
-    private void failed(List<PublishRequest> batch, String reason) {
+    private void failed(List<OutboundRecord> batch, String reason) {
         long count = failedBatches.incrementAndGet();
         log.warn("[{}] batch of {} not acknowledged ({} failed batch(es) so far): {}",
                 connectorName, batch.size(), count, reason);

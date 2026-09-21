@@ -6,7 +6,7 @@ import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.ControlProperties;
 import com.demo.amps.connectors.config.SourceFormat;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.source.SourceResolver;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -215,10 +215,10 @@ public final class CommandDispatcher implements SmartLifecycle {
     }
 
     /** One record from the control source: parse, address, dispatch, log, acknowledge. */
-    void onRecord(SourceRecord record) {
+    void onRecord(InboundRecord record) {
         received.incrementAndGet();
         try {
-            if (record.action() == SourceRecord.Action.DELETE) {
+            if (record.action() == InboundRecord.Action.DELETE) {
                 ignored.incrementAndGet();
                 log.debug("[control] ignored a removal: it carries no command");
                 return;

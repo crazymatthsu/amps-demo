@@ -6,7 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.HazelcastSourceProperties;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.hazelcast.client.HazelcastClient;
 import com.hazelcast.cluster.Address;
 import com.hazelcast.config.Config;
@@ -131,7 +131,7 @@ class HazelcastRecordSourceTest {
         return connector;
     }
 
-    private static void awaitRecords(List<SourceRecord> received, int count) {
+    private static void awaitRecords(List<InboundRecord> received, int count) {
         Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> received.size() >= count);
     }
 
@@ -145,7 +145,7 @@ class HazelcastRecordSourceTest {
     @Order(1)
     @DisplayName("plain topic messages arrive as keyless upserts carrying publishTime + member")
     void plainTopicMessagesBecomeRecords() {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         long before = System.currentTimeMillis();
         try (HazelcastRecordSource source =
                 new HazelcastRecordSource(connector("events-hazelcast", "events"))) {
@@ -160,15 +160,15 @@ class HazelcastRecordSourceTest {
             topic.publish(42);
             awaitRecords(received, 2);
 
-            assertThat(received).extracting(SourceRecord::data)
+            assertThat(received).extracting(InboundRecord::data)
                     .containsExactly("{\"id\":1}", "42");
-            SourceRecord record = received.get(0);
+            InboundRecord record = received.get(0);
             assertThat(record.data()).isEqualTo("{\"id\":1}");
             // No key, no ack and never a DELETE: a topic message is a payload and nothing
             // more, and there is no position the connector could ask Hazelcast to go back to.
             assertThat(record.key()).isNull();
             assertThat(record.ack()).isNull();
-            assertThat(record.action()).isEqualTo(SourceRecord.Action.UPSERT);
+            assertThat(record.action()).isEqualTo(InboundRecord.Action.UPSERT);
             assertThat(record.attributes()).containsOnlyKeys("publishTime", "member");
             assertThat(Long.parseLong(record.attributes().get("publishTime")))
                     .isGreaterThanOrEqualTo(before);
@@ -180,7 +180,7 @@ class HazelcastRecordSourceTest {
     @Order(2)
     @DisplayName("a plain topic replays nothing: what was published before the subscription is gone")
     void plainTopicReplaysNothing() {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         ITopic<String> topic = member.getTopic("plain-replay");
         topic.publish("before-anyone-listened");
 
@@ -195,7 +195,7 @@ class HazelcastRecordSourceTest {
             // that must survive a restart is configured `reliable: true`.
             Awaitility.await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(3))
                     .until(() -> received.size() == 1);
-            assertThat(received).extracting(SourceRecord::data).containsExactly("after");
+            assertThat(received).extracting(InboundRecord::data).containsExactly("after");
         }
     }
 
@@ -205,7 +205,7 @@ class HazelcastRecordSourceTest {
     @Order(3)
     @DisplayName("reliable + OLDEST replays the ringbuffer, including what predates the listener")
     void reliableOldestReplaysTheRingbuffer() {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         ITopic<String> topic = member.getReliableTopic("replay-oldest");
         topic.publish("early");
 
@@ -220,7 +220,7 @@ class HazelcastRecordSourceTest {
 
             // Initial sequence 0 is the head of the ringbuffer, so the backlog comes first
             // and in order -- this is the only way this transport survives a restart.
-            assertThat(received).extracting(SourceRecord::data)
+            assertThat(received).extracting(InboundRecord::data)
                     .containsExactly("early", "late");
         }
     }
@@ -229,7 +229,7 @@ class HazelcastRecordSourceTest {
     @Order(4)
     @DisplayName("reliable + NEWEST starts at the tail and skips the backlog")
     void reliableNewestSkipsTheBacklog() {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         ITopic<String> topic = member.getReliableTopic("replay-newest");
         topic.publish("early");
 
@@ -244,7 +244,7 @@ class HazelcastRecordSourceTest {
 
             Awaitility.await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(3))
                     .until(() -> received.size() == 1);
-            assertThat(received).extracting(SourceRecord::data).containsExactly("late");
+            assertThat(received).extracting(InboundRecord::data).containsExactly("late");
         }
     }
 
@@ -265,7 +265,7 @@ class HazelcastRecordSourceTest {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch released = new CountDownLatch(1);
         AtomicBoolean interrupted = new AtomicBoolean();
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         ITopic<String> topic = member.getTopic("draining");
         HazelcastRecordSource source =
                 new HazelcastRecordSource(connector("draining-hazelcast", "draining"));
@@ -310,7 +310,7 @@ class HazelcastRecordSourceTest {
             closer.shutdownNow();
         }
         assertThat(interrupted).as("the event thread was never interrupted").isFalse();
-        assertThat(received).extracting(SourceRecord::data).containsExactly("{\"id\":1}");
+        assertThat(received).extracting(InboundRecord::data).containsExactly("{\"id\":1}");
         assertThat(HazelcastClient.getAllHazelcastClients()).isEmpty();
     }
 
@@ -318,7 +318,7 @@ class HazelcastRecordSourceTest {
     @Order(6)
     @DisplayName("close() removes the listener and shuts the client down")
     void closeShutsTheClientDown() {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         HazelcastRecordSource source =
                 new HazelcastRecordSource(connector("closing-hazelcast", "closing"));
         source.start(received::add);
@@ -346,7 +346,7 @@ class HazelcastRecordSourceTest {
     @Order(7)
     @DisplayName("a cluster that is not up yet is waited for, not a failed start")
     void aMemberThatIsNotUpYetIsWaitedFor() {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         member.shutdown();
 
         ConnectorProperties connector = connector("late-hazelcast", "late");
@@ -365,7 +365,7 @@ class HazelcastRecordSourceTest {
             member.<String>getTopic("late").publish("arrived");
             awaitRecords(received, 1);
 
-            assertThat(received).extracting(SourceRecord::data).containsExactly("arrived");
+            assertThat(received).extracting(InboundRecord::data).containsExactly("arrived");
         }
     }
 }

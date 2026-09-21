@@ -4,7 +4,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * One message delivered by a {@link RecordSource}, before decoding.
+ * The inbound record: one message as a {@link RecordSource} delivered it, before decoding.
  *
  * <p>The seam between a transport and the pipeline, and deliberately narrow: a payload string,
  * whatever the source calls its own key, whether the message asserts or removes the record,
@@ -23,7 +23,7 @@ import java.util.Objects;
  * @param ack what to call once the record has been published and the batch flushed, or
  *     {@code null} for a source with nothing to acknowledge
  */
-public record SourceRecord(
+public record InboundRecord(
         String data, String key, Action action, Map<String, String> attributes, Acknowledgment ack) {
 
     /** What the message says about the record. */
@@ -38,19 +38,19 @@ public record SourceRecord(
      * Canonical constructor: defensive copy of the attributes so a source that reuses a map
      * across records cannot mutate one already in flight.
      */
-    public SourceRecord {
+    public InboundRecord {
         attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
         Objects.requireNonNull(action, "action");
     }
 
     /** An upsert with no source key -- the journal-feed shape. */
-    public static SourceRecord of(String data) {
-        return new SourceRecord(data, null, Action.UPSERT, Map.of(), null);
+    public static InboundRecord of(String data) {
+        return new InboundRecord(data, null, Action.UPSERT, Map.of(), null);
     }
 
     /** An upsert carrying the source's own key (a Kafka message key, a JDBC row key). */
-    public static SourceRecord of(String data, String key) {
-        return new SourceRecord(data, key, Action.UPSERT, Map.of(), null);
+    public static InboundRecord of(String data, String key) {
+        return new InboundRecord(data, key, Action.UPSERT, Map.of(), null);
     }
 
     /**
@@ -58,18 +58,18 @@ public record SourceRecord(
      * Kafka tombstone), or a payload carrying the key fields when the target topic derives its
      * key server-side and the delete has to be expressed as a filter.
      */
-    public static SourceRecord delete(String data, String key) {
-        return new SourceRecord(data, key, Action.DELETE, Map.of(), null);
+    public static InboundRecord delete(String data, String key) {
+        return new InboundRecord(data, key, Action.DELETE, Map.of(), null);
     }
 
     /** This record with an acknowledgment attached; content and identity kept. */
-    public SourceRecord withAck(Acknowledgment ack) {
-        return new SourceRecord(data, key, action, attributes, ack);
+    public InboundRecord withAck(Acknowledgment ack) {
+        return new InboundRecord(data, key, action, attributes, ack);
     }
 
     /** This record with transport metadata attached; content and identity kept. */
-    public SourceRecord withAttributes(Map<String, String> attributes) {
-        return new SourceRecord(data, key, action, attributes, ack);
+    public InboundRecord withAttributes(Map<String, String> attributes) {
+        return new InboundRecord(data, key, action, attributes, ack);
     }
 
     /**

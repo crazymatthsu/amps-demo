@@ -5,7 +5,7 @@ import com.demo.amps.connectors.config.JdbcSourceProperties;
 import com.demo.amps.connectors.source.Acknowledgment;
 import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
@@ -307,7 +307,7 @@ public class JdbcRecordSource implements RecordSource {
                     // to remember -- the next poll re-reads it whatever AMPS said.
                     Object rowWatermark = rowMark;
                     Acknowledgment ack = snapshot() ? null : () -> acknowledge(rowWatermark);
-                    emit(json(rows, meta), key, SourceRecord.Action.UPSERT, attributes, ack,
+                    emit(json(rows, meta), key, InboundRecord.Action.UPSERT, attributes, ack,
                             handler);
                 }
             }
@@ -319,7 +319,7 @@ public class JdbcRecordSource implements RecordSource {
                     // The JDBC spelling of an out-of-focus message. The payload is the key
                     // columns and nothing else, so a SERVER-keyed topic can still turn the
                     // removal into a filter.
-                    emit(gone.getValue(), gone.getKey(), SourceRecord.Action.DELETE, attributes,
+                    emit(gone.getValue(), gone.getKey(), InboundRecord.Action.DELETE, attributes,
                             null, handler);
                 }
             }
@@ -357,15 +357,15 @@ public class JdbcRecordSource implements RecordSource {
         return key.toString();
     }
 
-    private void emit(String data, String key, SourceRecord.Action action,
+    private void emit(String data, String key, InboundRecord.Action action,
             Map<String, String> attributes, Acknowledgment ack, RecordHandler handler) {
         try {
-            SourceRecord record = action == SourceRecord.Action.DELETE
-                    ? SourceRecord.delete(data, key)
+            InboundRecord record = action == InboundRecord.Action.DELETE
+                    ? InboundRecord.delete(data, key)
                     // The key rides along on upserts too, the way a Kafka message key does,
                     // so a PUBLISHER-keyed connector has one on every record and not just on
                     // the ones that leave.
-                    : SourceRecord.of(data, key);
+                    : InboundRecord.of(data, key);
             record = record.withAttributes(attributes);
             handler.onRecord(ack == null ? record : record.withAck(ack));
         } catch (RuntimeException e) {

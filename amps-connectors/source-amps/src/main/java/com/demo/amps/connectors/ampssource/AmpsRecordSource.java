@@ -15,7 +15,7 @@ import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.SourceFormat;
 import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -362,7 +362,7 @@ public class AmpsRecordSource implements RecordSource {
     }
 
     /**
-     * Turn one AMPS message into a {@link SourceRecord} and hand it over.
+     * Turn one AMPS message into an {@link InboundRecord} and hand it over.
      *
      * <p>Runs on the client's receive thread, and the pipeline runs inside
      * {@link RecordHandler#onRecord}, which is the back-pressure: a connector that cannot keep
@@ -375,7 +375,7 @@ public class AmpsRecordSource implements RecordSource {
     void dispatch(Message message, RecordHandler handler) {
         int command = message.getCommand();
         String topic = message.getTopic();
-        SourceRecord record = toRecord(command, message.getData(), message.getSowKey(),
+        InboundRecord record = toRecord(command, message.getData(), message.getSowKey(),
                 message.getBookmark(), hasText(topic) ? topic : source.getTopic());
         if (record == null) {
             return;
@@ -407,14 +407,14 @@ public class AmpsRecordSource implements RecordSource {
      * @param topic the topic the message was read from
      * @return the record, or {@code null} for a command that carries none
      */
-    static SourceRecord toRecord(
+    static InboundRecord toRecord(
             int command, String data, String sowKey, String bookmark, String topic) {
-        SourceRecord.Action action = switch (command) {
+        InboundRecord.Action action = switch (command) {
             case Message.Command.SOW, Message.Command.Publish, Message.Command.DeltaPublish ->
-                    SourceRecord.Action.UPSERT;
+                    InboundRecord.Action.UPSERT;
             // The payload stays on a delete: an out-of-focus message carries the record's
             // last state, and a target that deletes by filter needs the key fields in it.
-            case Message.Command.OOF, Message.Command.SOWDelete -> SourceRecord.Action.DELETE;
+            case Message.Command.OOF, Message.Command.SOWDelete -> InboundRecord.Action.DELETE;
             // GroupBegin/GroupEnd/Ack/Heartbeat carry no record.
             default -> null;
         };
@@ -429,7 +429,7 @@ public class AmpsRecordSource implements RecordSource {
         if (hasText(bookmark)) {
             attributes.put(ATTRIBUTE_BOOKMARK, bookmark);
         }
-        return new SourceRecord(data == null ? "" : data, hasText(sowKey) ? sowKey : null,
+        return new InboundRecord(data == null ? "" : data, hasText(sowKey) ? sowKey : null,
                 action, attributes, null);
     }
 

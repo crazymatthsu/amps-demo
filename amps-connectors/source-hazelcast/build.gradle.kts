@@ -12,7 +12,7 @@ plugins {
     `java-library`
 }
 
-description = "Hazelcast RecordSource for amps-connectors: a topic or map subscription -> SourceRecord"
+description = "Hazelcast RecordSource for amps-connectors: a topic or map subscription -> InboundRecord"
 
 dependencies {
     // Same Boot BOM as core, so a source module never writes a Spring version either.

@@ -6,12 +6,12 @@ import com.demo.amps.connectors.ampssource.AmpsSourceFactory;
 import com.demo.amps.connectors.hazelcast.HazelcastSourceFactory;
 import com.demo.amps.connectors.jdbc.JdbcSourceFactory;
 import com.demo.amps.connectors.kafka.KafkaSourceFactory;
-import com.demo.amps.connectors.runtime.PublishRequest;
+import com.demo.amps.connectors.runtime.OutboundRecord;
 import com.demo.amps.connectors.runtime.RecordPipeline;
 import com.demo.amps.connectors.source.RecordSource;
 import com.demo.amps.connectors.source.SimulatedSource;
 import com.demo.amps.connectors.source.SourceFactory;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.source.SourceResolver;
 import com.demo.amps.connectors.tcp.TcpSourceFactory;
 import com.demo.amps.connectors.transform.TransformRegistry;
@@ -274,13 +274,13 @@ class ApplicationYamlBindingTest {
         SourceResolver resolver = new SourceResolver(FACTORIES);
         for (ConnectorProperties connector : properties.getConnectors()) {
             RecordPipeline pipeline = new RecordPipeline(connector, noBeans);
-            BlockingQueue<SourceRecord> generated = new LinkedBlockingQueue<>();
+            BlockingQueue<InboundRecord> generated = new LinkedBlockingQueue<>();
             try (RecordSource source = resolver.resolve(connector)) {
                 source.start(generated::add);
-                SourceRecord record = generated.poll(5, TimeUnit.SECONDS);
+                InboundRecord record = generated.poll(5, TimeUnit.SECONDS);
                 assertThat(record).as("%s generated a record", connector.getName()).isNotNull();
 
-                PublishRequest request = pipeline.apply(record);
+                OutboundRecord request = pipeline.apply(record);
                 assertThat(request).as("%s: the pipeline kept its own record", connector.getName())
                         .isNotNull();
                 assertThat(request.topic()).isEqualTo(connector.getAmps().getTopic());
@@ -308,14 +308,14 @@ class ApplicationYamlBindingTest {
     }
 
     /** One generated record of a connector, as its pipeline would publish it. */
-    private PublishRequest publishedBy(String name) throws Exception {
+    private OutboundRecord publishedBy(String name) throws Exception {
         ConnectorProperties connector = connector(name);
-        BlockingQueue<SourceRecord> generated = new LinkedBlockingQueue<>();
+        BlockingQueue<InboundRecord> generated = new LinkedBlockingQueue<>();
         try (RecordSource source = new SourceResolver(FACTORIES).resolve(connector)) {
             source.start(generated::add);
-            SourceRecord record = generated.poll(5, TimeUnit.SECONDS);
+            InboundRecord record = generated.poll(5, TimeUnit.SECONDS);
             assertThat(record).as("%s generated a record", name).isNotNull();
-            PublishRequest request =
+            OutboundRecord request =
                     new RecordPipeline(connector, new TransformRegistry(Map.of())).apply(record);
             assertThat(request).as("%s published something", name).isNotNull();
             return request;

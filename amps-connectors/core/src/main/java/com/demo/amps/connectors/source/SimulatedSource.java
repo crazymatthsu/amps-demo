@@ -94,7 +94,7 @@ public final class SimulatedSource implements RecordSource {
     }
 
     /** One synthetic record: the template with its placeholders filled in. */
-    private SourceRecord next(SimulatedProperties simulated) {
+    private InboundRecord next(SimulatedProperties simulated) {
         long seq = sequence.incrementAndGet();
         String key = "K-" + Math.floorMod(seq, simulated.getKeys());
         String payload = simulated.getTemplate()
@@ -104,7 +104,7 @@ public final class SimulatedSource implements RecordSource {
         if (connector.getFormat().delimited()) {
             payload = payload.replace('|', connector.getFieldSeparator());
         }
-        return SourceRecord.of(payload, key);
+        return InboundRecord.of(payload, key);
     }
 
     @Override

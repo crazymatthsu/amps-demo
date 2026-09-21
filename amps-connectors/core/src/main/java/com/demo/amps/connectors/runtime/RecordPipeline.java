@@ -9,7 +9,7 @@ import com.demo.amps.connectors.decode.RecordDecoderFactory;
 import com.demo.amps.connectors.encode.PayloadEncoder;
 import com.demo.amps.connectors.encode.PayloadEncoderFactory;
 import com.demo.amps.connectors.filter.RecordFilter;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.transform.TransformChain;
 import com.demo.amps.connectors.transform.TransformContext;
 import com.demo.amps.connectors.transform.TransformRegistry;
@@ -23,8 +23,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * One connector's record processing, as a plain function: a {@link SourceRecord} in, a
- * {@link PublishRequest} or {@code null} out.
+ * One connector's record processing, as a plain function: an {@link InboundRecord} in, an
+ * {@link OutboundRecord} or {@code null} out.
  *
  * <p>Decode, filter, transform, key, encode -- all of it, with no Spring, no threads and no
  * AMPS, which is what makes the interesting behaviour testable without any of those. The
@@ -39,7 +39,7 @@ import org.slf4j.LoggerFactory;
  *   <li>{@link #filtered()} -- the filter said no. Working as configured</li>
  *   <li>{@link #dropped()} -- a transform said no. Also working as configured</li>
  *   <li>{@link #ignoredDeletes()} -- a removal on a connector with nothing to remove from</li>
- *   <li>{@link #published()} -- requests produced, which is what should reach AMPS</li>
+ *   <li>{@link #published()} -- outbound records produced, which is what should reach AMPS</li>
  * </ul>
  *
  * <p>Two decisions worth knowing about deletes. A {@code DELETE} whose payload is empty
@@ -136,16 +136,16 @@ public final class RecordPipeline {
     }
 
     /**
-     * Turn one source record into the AMPS command it deserves.
+     * Turn one inbound record into the AMPS command it deserves.
      *
      * @param record the record as the source delivered it
-     * @return the request to batch, or {@code null} when the record is not published --
+     * @return the outbound record to batch, or {@code null} when the record is not published --
      *     rejected, filtered, dropped or an ignored removal, each of them counted
      */
-    public PublishRequest apply(SourceRecord record) {
+    public OutboundRecord apply(InboundRecord record) {
         received.incrementAndGet();
         try {
-            return record.action() == SourceRecord.Action.DELETE
+            return record.action() == InboundRecord.Action.DELETE
                     ? delete(record)
                     : upsert(record);
         } catch (RuntimeException e) {
@@ -157,7 +157,7 @@ public final class RecordPipeline {
         }
     }
 
-    private PublishRequest upsert(SourceRecord record) {
+    private OutboundRecord upsert(InboundRecord record) {
         Map<String, Object> fields = decoder.decode(record.data());
         if (filter != null && !filter.accepts(fields)) {
             filtered.incrementAndGet();
@@ -174,10 +174,10 @@ public final class RecordPipeline {
                 ? Command.DELTA_PUBLISH
                 : Command.PUBLISH;
         published.incrementAndGet();
-        return PublishRequest.publish(topic, command, data, sowKey, record);
+        return OutboundRecord.publish(topic, command, data, sowKey, record);
     }
 
-    private PublishRequest delete(SourceRecord record) {
+    private OutboundRecord delete(InboundRecord record) {
         if (target.getOnDelete() == AmpsTargetProperties.OnDelete.IGNORE) {
             // A journal topic has nothing to remove from. Counted so a feed that turns out to
             // be mostly removals is visible rather than merely quiet.
@@ -208,7 +208,7 @@ public final class RecordPipeline {
                 return null;
             }
             published.incrementAndGet();
-            return PublishRequest.deleteByFilter(topic, deleteFilter, record);
+            return OutboundRecord.deleteByFilter(topic, deleteFilter, record);
         }
         String sowKey = sowKeyForDelete(record, transformed);
         if (sowKey == null) {
@@ -217,11 +217,11 @@ public final class RecordPipeline {
             return null;
         }
         published.incrementAndGet();
-        return PublishRequest.deleteByKey(topic, sowKey, record);
+        return OutboundRecord.deleteByKey(topic, sowKey, record);
     }
 
     /** A delete's SowKey: the configured fields if it carries them, else the source's own. */
-    private String sowKeyForDelete(SourceRecord record, Map<String, Object> fields) {
+    private String sowKeyForDelete(InboundRecord record, Map<String, Object> fields) {
         if (keys != null) {
             try {
                 return keys.key(record, fields);
@@ -238,7 +238,7 @@ public final class RecordPipeline {
      * A removal may carry no body at all -- the source identifies it by its own key -- so
      * decode what is there and never fail on what is not.
      */
-    private Map<String, Object> decodeQuietly(SourceRecord record) {
+    private Map<String, Object> decodeQuietly(InboundRecord record) {
         if (record.data() == null || record.data().isEmpty()) {
             return new LinkedHashMap<>();
         }

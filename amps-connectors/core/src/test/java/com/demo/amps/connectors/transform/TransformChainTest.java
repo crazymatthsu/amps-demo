@@ -7,7 +7,7 @@ import com.demo.amps.connectors.alert.Alert;
 import com.demo.amps.connectors.config.RuleAlert;
 import com.demo.amps.connectors.config.RuleProperties;
 import com.demo.amps.connectors.config.TransformStep;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.transform.rules.RuleSet;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
 
 class TransformChainTest {
 
-    private static final SourceRecord RECORD = SourceRecord.of("", "C-1");
+    private static final InboundRecord RECORD = InboundRecord.of("", "C-1");
 
     private static Map<String, Object> order() {
         Map<String, Object> fields = new LinkedHashMap<>();

@@ -7,7 +7,7 @@ import com.demo.amps.connectors.alert.Alert;
 import com.demo.amps.connectors.config.RuleAlert;
 import com.demo.amps.connectors.config.RuleProperties;
 import com.demo.amps.connectors.config.RuleThen;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.transform.RecordTransform;
 import com.demo.amps.connectors.transform.TransformContext;
 import com.demo.amps.connectors.transform.TransformRegistry;
@@ -21,7 +21,7 @@ import org.springframework.expression.ParseException;
 
 class RuleSetTest {
 
-    private static final SourceRecord RECORD = SourceRecord.of("", "ORD-1")
+    private static final InboundRecord RECORD = InboundRecord.of("", "ORD-1")
             .withAttributes(Map.of("topic", "orders"));
 
     private static final RecordTransform TAGGER = (record, fields) -> {
@@ -189,7 +189,7 @@ class RuleSetTest {
                 setting("by-key", "#r.key == 'ORD-1' && #r.attributes['topic'] == 'orders'", "k", "1"),
                 setting("deletes", "#r.action.name() == 'DELETE'", "d", "1"));
         assertThat(rules.apply(RECORD, limitOrder())).containsEntry("k", "1").doesNotContainKey("d");
-        assertThat(rules.apply(SourceRecord.delete("", "ORD-1"), limitOrder()))
+        assertThat(rules.apply(InboundRecord.delete("", "ORD-1"), limitOrder()))
                 .containsEntry("d", "1").doesNotContainKey("k");
     }
 

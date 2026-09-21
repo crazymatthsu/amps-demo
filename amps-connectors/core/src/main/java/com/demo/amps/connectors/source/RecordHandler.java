@@ -21,7 +21,7 @@ public interface RecordHandler {
      *
      * @param record the received record
      */
-    void onRecord(SourceRecord record);
+    void onRecord(InboundRecord record);
 
     /**
      * Handle a group of records a source read together.
@@ -32,8 +32,8 @@ public interface RecordHandler {
      *
      * @param records the received records, in wire order
      */
-    default void onBatch(List<SourceRecord> records) {
-        for (SourceRecord record : records) {
+    default void onBatch(List<InboundRecord> records) {
+        for (InboundRecord record : records) {
             onRecord(record);
         }
     }

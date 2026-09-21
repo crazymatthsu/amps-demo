@@ -52,7 +52,7 @@ class SimulatedSourceTest {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch released = new CountDownLatch(1);
         AtomicBoolean interrupted = new AtomicBoolean();
-        List<SourceRecord> delivered = new CopyOnWriteArrayList<>();
+        List<InboundRecord> delivered = new CopyOnWriteArrayList<>();
 
         source = new SimulatedSource(fastTicking("sim-close"));
         source.start(record -> {
@@ -101,7 +101,7 @@ class SimulatedSourceTest {
     @DisplayName("close() from inside the handler returns instead of waiting for itself")
     void closeFromTheTickThreadDoesNotDeadlock() throws Exception {
         AtomicReference<Duration> closeTook = new AtomicReference<>();
-        List<SourceRecord> delivered = new CopyOnWriteArrayList<>();
+        List<InboundRecord> delivered = new CopyOnWriteArrayList<>();
 
         source = new SimulatedSource(fastTicking("sim-self-close"));
         source.start(record -> {

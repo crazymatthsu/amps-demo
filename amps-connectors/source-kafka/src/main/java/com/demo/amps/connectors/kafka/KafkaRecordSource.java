@@ -4,7 +4,7 @@ import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.KafkaSourceProperties;
 import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -282,7 +282,7 @@ public class KafkaRecordSource implements RecordSource {
     }
 
     /**
-     * Turn one Kafka record into a {@link SourceRecord} and hand it over.
+     * Turn one Kafka record into an {@link InboundRecord} and hand it over.
      *
      * <p>Runs on the poll thread and the pipeline runs inside
      * {@link RecordHandler#onRecord}, which is the back-pressure: a connector that cannot keep
@@ -292,12 +292,12 @@ public class KafkaRecordSource implements RecordSource {
     private void dispatch(ConsumerRecord<String, String> record, RecordHandler handler) {
         TopicPartition partition = new TopicPartition(record.topic(), record.partition());
         try {
-            SourceRecord delivered = record.value() == null
+            InboundRecord delivered = record.value() == null
                     // A tombstone: key, no value. The empty payload keeps the DELETE path's
                     // decode quiet -- a removal is addressed by its key, and on a compacted
                     // topic the message key is the only thing that can carry it.
-                    ? SourceRecord.delete("", record.key())
-                    : SourceRecord.of(record.value(), record.key());
+                    ? InboundRecord.delete("", record.key())
+                    : InboundRecord.of(record.value(), record.key());
             handler.onRecord(delivered
                     .withAttributes(attributesOf(record))
                     .withAck(() -> acknowledge(partition, record.offset())));

@@ -12,7 +12,7 @@ import com.demo.amps.connectors.config.JdbcResourceProperties;
 import com.demo.amps.connectors.config.ResourceProperties;
 import com.demo.amps.connectors.encode.FixEncoder;
 import com.demo.amps.connectors.resource.jdbc.JdbcLookupTable;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.transform.RecordTransform;
 import com.demo.amps.connectors.transform.TransformContext;
 import com.demo.amps.connectors.transform.TransformRegistry;
@@ -100,8 +100,8 @@ class InstrumentEnricherTest {
         return fields;
     }
 
-    private static SourceRecord upsert() {
-        return SourceRecord.of("ignored by the transform");
+    private static InboundRecord upsert() {
+        return InboundRecord.of("ignored by the transform");
     }
 
     private List<Alert> alerts(String code) {
@@ -278,7 +278,7 @@ class InstrumentEnricherTest {
         Map<String, Object> input = order("ORD-1", "K-0");
 
         Map<String, Object> result =
-                enricher.apply(SourceRecord.delete("", "ORD-1"), input);
+                enricher.apply(InboundRecord.delete("", "ORD-1"), input);
 
         assertThat(result).isNotSameAs(input).containsExactlyEntriesOf(input);
         assertThat(enricher.hits()).isZero();
@@ -352,7 +352,7 @@ class InstrumentEnricherTest {
 
         assertThat(enricher.apply(upsert(), hit)).containsEntry("48", "B0YQ5W0");
         assertThat(enricher.apply(upsert(), miss)).containsExactlyEntriesOf(miss);
-        assertThat(enricher.apply(SourceRecord.delete("", "ORD-1"), hit))
+        assertThat(enricher.apply(InboundRecord.delete("", "ORD-1"), hit))
                 .containsExactlyEntriesOf(hit);
         assertThat(enricher.apply(upsert(), frozen)).containsExactlyEntriesOf(frozen);
 

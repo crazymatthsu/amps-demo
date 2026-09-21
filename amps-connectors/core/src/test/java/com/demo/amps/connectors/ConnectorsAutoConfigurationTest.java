@@ -20,7 +20,7 @@ import com.demo.amps.connectors.resource.ResourceRegistry;
 import com.demo.amps.connectors.runtime.ConnectorManager;
 import com.demo.amps.connectors.source.FakeRecordSource;
 import com.demo.amps.connectors.source.FakeSourceFactory;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -246,9 +246,9 @@ class ConnectorsAutoConfigurationTest {
 
                     Control control = context.getBean(Control.class);
                     assertThat(control.source.startCount()).isEqualTo(1);
-                    control.source.emit(SourceRecord.of(
+                    control.source.emit(InboundRecord.of(
                             "{\"command\":\"flush\",\"to\":\"instrument-enricher\"}"));
-                    control.source.emit(SourceRecord.of("{\"command\":\"status\"}"));
+                    control.source.emit(InboundRecord.of("{\"command\":\"status\"}"));
                     assertThat(control.flushed).hasSize(1);
                     assertThat(dispatcher.succeeded()).isEqualTo(2);
 

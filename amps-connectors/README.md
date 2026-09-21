@@ -105,7 +105,7 @@ flowchart LR
         STREAM["STREAMING feed (a socket, an INCREMENTAL query,<br/>a plain Hazelcast topic, an AMPS subscribe)<br/>a log, and often not even that: a socket replays<br/>nothing at all and never deletes"]
     end
 
-    SUB["RecordSource → SourceRecord(data, key, UPSERT / DELETE, ack)<br/>TcpRecordSource (LISTEN binds and accepts N feeds;<br/>CONNECT redials) · KafkaRecordSource (group offsets<br/>committed only for ACKNOWLEDGED records) ·<br/>JdbcRecordSource (polls; rows → JSON; a key that<br/>stopped appearing → DELETE) · HazelcastRecordSource<br/>(client; a plain or reliable TOPIC, or an IMap whose<br/>entry events key and delete) · AmpsRecordSource<br/>(its own HAClient, named &lt;prefix&gt;-&lt;connector&gt;-source;<br/>sow/publish/delta_publish → UPSERT, oof/sow_delete<br/>→ DELETE) · SimulatedSource<br/>(driver: SIMULATED — the demo profile)"]
+    SUB["RecordSource → InboundRecord(data, key, UPSERT / DELETE, ack)<br/>TcpRecordSource (LISTEN binds and accepts N feeds;<br/>CONNECT redials) · KafkaRecordSource (group offsets<br/>committed only for ACKNOWLEDGED records) ·<br/>JdbcRecordSource (polls; rows → JSON; a key that<br/>stopped appearing → DELETE) · HazelcastRecordSource<br/>(client; a plain or reliable TOPIC, or an IMap whose<br/>entry events key and delete) · AmpsRecordSource<br/>(its own HAClient, named &lt;prefix&gt;-&lt;connector&gt;-source;<br/>sow/publish/delta_publish → UPSERT, oof/sow_delete<br/>→ DELETE) · SimulatedSource<br/>(driver: SIMULATED — the demo profile)"]
 
     DEC["RecordDecoder — format:<br/>JSON (nesting and types kept: a price stays a<br/>BigDecimal, so 185.50 survives) · FIX / NVFIX<br/>(tag=value on field-separator; a repeated tag<br/>becomes tag#2, so groups survive) · TEXT<br/>malformed input → IllegalArgumentException → rejected"]
 
@@ -320,7 +320,7 @@ and less than code:
 ```
 
 `when` is SpEL in the one dialect every expression here speaks — `#f` is the field map as the
-earlier steps *and the earlier rules* left it, `#r` is the `SourceRecord` (`#r.key`,
+earlier steps *and the earlier rules* left it, `#r` is the `InboundRecord` (`#r.key`,
 `#r.action`, `#r.attributes['topic']`), `#num(x)` and `#str(x)` coerce — and it has to answer
 a boolean. `then` names one or more actions, and they always run in the one order that makes
 sense: **`set`** the literal fields, run the **`bean`** (a `RecordTransform` bean, by name),
@@ -971,7 +971,7 @@ way, prefixed `control:`. The block is not looked at while `enabled` is `false`.
 ## Writing a code transform
 
 Everything the YAML cannot say is a **`RecordTransform`** bean:
-`Map<String, Object> apply(SourceRecord record, Map<String, Object> fields)` — the fields to
+`Map<String, Object> apply(InboundRecord record, Map<String, Object> fields)` — the fields to
 carry on with, or `null` to drop the record. The contract is short and every clause has a
 reason: it must be **stateless and thread-safe**, because one instance serves every connector
 that names it and it runs on the source's reader thread (of which a `LISTEN` TCP connector has
@@ -1427,7 +1427,7 @@ Spring Integration earns its place for exactly one job — the **batch**:
   so connectors stay **config-driven** — fifty connectors are fifty registrations, not fifty
   beans.
 
-The pipeline itself (`RecordPipeline`) is a plain function — `SourceRecord` in, `PublishRequest`
+The pipeline itself (`RecordPipeline`) is a plain function — `InboundRecord` in, `OutboundRecord`
 or `null` out — so everything interesting about decoding, filtering, transforming and keying is
 unit-tested with no framework at all.
 

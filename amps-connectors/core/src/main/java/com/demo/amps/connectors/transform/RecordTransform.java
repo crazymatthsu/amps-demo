@@ -1,6 +1,6 @@
 package com.demo.amps.connectors.transform;
 
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.util.Map;
 
 /**
@@ -21,7 +21,7 @@ import java.util.Map;
  *       TCP connector in {@code LISTEN} mode has one per connected client.</li>
  *   <li>A {@code null} return <strong>drops</strong> the record. The connector counts that as
  *       dropped rather than rejected: it is a decision, not a failure.</li>
- *   <li>Transforms also see {@link SourceRecord.Action#DELETE} records, because a delete's key
+ *   <li>Transforms also see {@link InboundRecord.Action#DELETE} records, because a delete's key
  *       is extracted from its fields the same way an upsert's is. A transform that derives a
  *       key field has to derive it for deletes too, or the removal cannot be addressed.</li>
  *   <li>The map passed in must not be mutated; return a new one. The chain hands each step its
@@ -45,7 +45,7 @@ public interface RecordTransform {
      * @param fields the fields so far, in wire order
      * @return the fields to carry on with, or {@code null} to drop the record
      */
-    Map<String, Object> apply(SourceRecord record, Map<String, Object> fields);
+    Map<String, Object> apply(InboundRecord record, Map<String, Object> fields);
 
     /**
      * The view of this transform for one connector.

@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.TcpSourceProperties;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -140,7 +140,7 @@ class TcpRecordSourceTest {
         return out.toByteArray();
     }
 
-    private static void awaitRecords(List<SourceRecord> received, int count) {
+    private static void awaitRecords(List<InboundRecord> received, int count) {
         Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> received.size() >= count);
     }
 
@@ -157,20 +157,20 @@ class TcpRecordSourceTest {
     @Test
     @DisplayName("delimited frames arrive as keyless upserts tagged with the remote peer")
     void delimitedFramesBecomeKeylessUpserts() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (Feed feed = new Feed(out -> write(out, "{\"px\":1}\n{\"px\":2}\n"));
                 TcpRecordSource source = new TcpRecordSource(dialling(feed.port()))) {
             source.start(received::add);
             awaitRecords(received, 2);
 
-            assertThat(received).extracting(SourceRecord::data)
+            assertThat(received).extracting(InboundRecord::data)
                     .containsExactly("{\"px\":1}", "{\"px\":2}");
             // No key, no ack and never a DELETE: the three things this transport cannot
             // express, because a socket has neither a key space nor a position to rewind to.
-            assertThat(received).extracting(SourceRecord::key).containsOnlyNulls();
-            assertThat(received).extracting(SourceRecord::ack).containsOnlyNulls();
-            assertThat(received).extracting(SourceRecord::action)
-                    .containsOnly(SourceRecord.Action.UPSERT);
+            assertThat(received).extracting(InboundRecord::key).containsOnlyNulls();
+            assertThat(received).extracting(InboundRecord::ack).containsOnlyNulls();
+            assertThat(received).extracting(InboundRecord::action)
+                    .containsOnly(InboundRecord.Action.UPSERT);
             assertThat(received).extracting(r -> r.attributes().get("remote"))
                     .containsOnly("127.0.0.1:" + feed.port());
         }
@@ -179,7 +179,7 @@ class TcpRecordSourceTest {
     @Test
     @DisplayName("a frame split across two writes is reassembled, not delivered in halves")
     void aFrameSplitAcrossWritesIsReassembled() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         Session split = out -> {
             write(out, "{\"px\":");
             // Long enough that the reader really does return the partial frame first.
@@ -195,14 +195,14 @@ class TcpRecordSourceTest {
             source.start(received::add);
             awaitRecords(received, 1);
 
-            assertThat(received).extracting(SourceRecord::data).containsExactly("{\"px\":42}");
+            assertThat(received).extracting(InboundRecord::data).containsExactly("{\"px\":42}");
         }
     }
 
     @Test
     @DisplayName("a multi-byte delimiter (CRLF) is matched as a byte sequence")
     void aMultiByteDelimiterSplitsFrames() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (Feed feed = new Feed(out -> write(out, "one\r\ntwo\r\nthree\r\n"))) {
             ConnectorProperties connector = framed(dialling(feed.port()),
                     TcpSourceProperties.Framing.DELIMITED, "\r\n");
@@ -211,7 +211,7 @@ class TcpRecordSourceTest {
                 awaitRecords(received, 3);
 
                 // Not split on the bare CR or LF, and not carrying either of them along.
-                assertThat(received).extracting(SourceRecord::data)
+                assertThat(received).extracting(InboundRecord::data)
                         .containsExactly("one", "two", "three");
             }
         }
@@ -220,13 +220,13 @@ class TcpRecordSourceTest {
     @Test
     @DisplayName("an empty frame is skipped -- a trailing delimiter is not a message")
     void emptyFramesAreSkipped() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (Feed feed = new Feed(out -> write(out, "alpha\n\nbravo\n"));
                 TcpRecordSource source = new TcpRecordSource(dialling(feed.port()))) {
             source.start(received::add);
             awaitRecords(received, 2);
 
-            assertThat(received).extracting(SourceRecord::data).containsExactly("alpha", "bravo");
+            assertThat(received).extracting(InboundRecord::data).containsExactly("alpha", "bravo");
         }
     }
 
@@ -242,7 +242,7 @@ class TcpRecordSourceTest {
         assertThat(wire[2]).isEqualTo((byte) 0);
         assertThat(wire[3]).isEqualTo((byte) 5);
 
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (Feed feed = new Feed(out -> {
             out.write(wire);
             out.flush();
@@ -253,7 +253,7 @@ class TcpRecordSourceTest {
                 source.start(received::add);
                 awaitRecords(received, 2);
 
-                assertThat(received).extracting(SourceRecord::data)
+                assertThat(received).extracting(InboundRecord::data)
                         .containsExactly("hello", "{\"px\":7}");
             }
         }
@@ -264,7 +264,7 @@ class TcpRecordSourceTest {
     @Test
     @DisplayName("a dropped connection is redialled and the feed resumes")
     void aDroppedConnectionIsRedialled() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         // Two sessions: the server hangs up after the first, which is the EOF the source
         // has to treat as "redial", not as "done".
         try (Feed feed = new Feed(
@@ -274,7 +274,7 @@ class TcpRecordSourceTest {
             source.start(received::add);
             awaitRecords(received, 2);
 
-            assertThat(received).extracting(SourceRecord::data)
+            assertThat(received).extracting(InboundRecord::data)
                     .containsExactly("before", "after");
             // Two connections, not one that happened to carry both frames: the redial is the
             // thing under test.
@@ -286,7 +286,7 @@ class TcpRecordSourceTest {
     @Test
     @DisplayName("close() unblocks a blocked read and stops the thread well inside 5s")
     void closeStopsTheReaderThread() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         // The feed sends one frame and then holds the connection open, so the reader is
         // parked inside a read() with no timeout when close() arrives.
         CountDownLatch hangUp = new CountDownLatch(1);
@@ -324,7 +324,7 @@ class TcpRecordSourceTest {
     @Test
     @DisplayName("LISTEN is connected once it is bound, before any client has dialled in")
     void listenIsConnectedBeforeAnyClientArrives() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         try (TcpRecordSource source = new TcpRecordSource(listening(freePort()))) {
             source.start(received::add);
 
@@ -338,7 +338,7 @@ class TcpRecordSourceTest {
     @Test
     @DisplayName("LISTEN reads two concurrent clients and tags each frame with its sender")
     void listenReadsTwoConcurrentClients() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         int port = freePort();
         try (TcpRecordSource source = new TcpRecordSource(listening(port))) {
             source.start(received::add);
@@ -350,7 +350,7 @@ class TcpRecordSourceTest {
                 write(two.getOutputStream(), "from-two\n");
                 awaitRecords(received, 2);
 
-                assertThat(received).extracting(SourceRecord::data)
+                assertThat(received).extracting(InboundRecord::data)
                         .containsExactlyInAnyOrder("from-one", "from-two");
                 // Each client is read on its own thread, and `remote` is the only thing that
                 // says which of them a frame came from once they are interleaved.

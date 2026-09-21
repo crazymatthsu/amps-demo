@@ -1,7 +1,7 @@
 package com.demo.amps.connectors.hazelcast;
 
 import com.demo.amps.connectors.source.RecordHandler;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
@@ -59,7 +59,7 @@ final class DeliveryGate {
     RecordHandler guard(RecordHandler handler) {
         return new RecordHandler() {
             @Override
-            public void onRecord(SourceRecord record) {
+            public void onRecord(InboundRecord record) {
                 if (!enter()) {
                     return;
                 }
@@ -71,7 +71,7 @@ final class DeliveryGate {
             }
 
             @Override
-            public void onBatch(List<SourceRecord> records) {
+            public void onBatch(List<InboundRecord> records) {
                 if (!enter()) {
                     return;
                 }

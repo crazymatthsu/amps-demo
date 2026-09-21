@@ -14,7 +14,7 @@ import com.demo.amps.connectors.config.AmpsServerProperties;
 import com.demo.amps.connectors.config.AmpsSourceProperties;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.SourceFormat;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
@@ -195,11 +195,11 @@ class AmpsRecordSourceTest {
         @ValueSource(ints = {Message.Command.SOW, Message.Command.Publish, Message.Command.DeltaPublish})
         @DisplayName("sow, publish and delta_publish are upserts keyed by the SowKey")
         void dataCommandsAreUpserts(int command) {
-            SourceRecord record = AmpsRecordSource.toRecord(
+            InboundRecord record = AmpsRecordSource.toRecord(
                     command, "{\"id\":\"ORD-1\"}", "12345", null, TOPIC);
 
             assertThat(record).isNotNull();
-            assertThat(record.action()).isEqualTo(SourceRecord.Action.UPSERT);
+            assertThat(record.action()).isEqualTo(InboundRecord.Action.UPSERT);
             assertThat(record.data()).isEqualTo("{\"id\":\"ORD-1\"}");
             assertThat(record.key()).isEqualTo("12345");
             assertThat(record.ack()).isNull();
@@ -209,11 +209,11 @@ class AmpsRecordSourceTest {
         @ValueSource(ints = {Message.Command.OOF, Message.Command.SOWDelete})
         @DisplayName("oof and sow_delete are deletes that keep the payload and the SowKey")
         void removalCommandsAreDeletes(int command) {
-            SourceRecord record = AmpsRecordSource.toRecord(
+            InboundRecord record = AmpsRecordSource.toRecord(
                     command, "{\"id\":\"ORD-1\"}", "12345", null, TOPIC);
 
             assertThat(record).isNotNull();
-            assertThat(record.action()).isEqualTo(SourceRecord.Action.DELETE);
+            assertThat(record.action()).isEqualTo(InboundRecord.Action.DELETE);
             // A target that deletes by filter needs the key fields, and the last state of
             // the record is exactly what an out-of-focus message carries.
             assertThat(record.data()).isEqualTo("{\"id\":\"ORD-1\"}");
@@ -231,13 +231,13 @@ class AmpsRecordSourceTest {
         @Test
         @DisplayName("the topic and the command ride along as attributes; a bookmark only when there is one")
         void attributesNameTheTopicTheCommandAndTheBookmark() {
-            SourceRecord live = AmpsRecordSource.toRecord(
+            InboundRecord live = AmpsRecordSource.toRecord(
                     Message.Command.Publish, "{}", null, null, TOPIC);
             assertThat(live.attributes()).containsExactlyInAnyOrderEntriesOf(Map.of(
                     AmpsRecordSource.ATTRIBUTE_TOPIC, TOPIC,
                     AmpsRecordSource.ATTRIBUTE_COMMAND, "publish"));
 
-            SourceRecord replayed = AmpsRecordSource.toRecord(
+            InboundRecord replayed = AmpsRecordSource.toRecord(
                     Message.Command.SOWDelete, "{}", "k", "1|9|", TOPIC);
             assertThat(replayed.attributes())
                     .containsEntry(AmpsRecordSource.ATTRIBUTE_COMMAND, "sow_delete")
@@ -254,11 +254,11 @@ class AmpsRecordSourceTest {
         @Test
         @DisplayName("a topic without a SowKey yields an unkeyed record, and a null payload an empty one")
         void journalTopicsHaveNoKey() {
-            SourceRecord blank = AmpsRecordSource.toRecord(Message.Command.Publish, null, "  ", null, TOPIC);
+            InboundRecord blank = AmpsRecordSource.toRecord(Message.Command.Publish, null, "  ", null, TOPIC);
             assertThat(blank.key()).isNull();
             assertThat(blank.data()).isEmpty();
 
-            SourceRecord absent = AmpsRecordSource.toRecord(Message.Command.Publish, "{}", null, null, null);
+            InboundRecord absent = AmpsRecordSource.toRecord(Message.Command.Publish, "{}", null, null, null);
             assertThat(absent.key()).isNull();
             assertThat(absent.attributes()).doesNotContainKey(AmpsRecordSource.ATTRIBUTE_TOPIC);
         }
@@ -279,7 +279,7 @@ class AmpsRecordSourceTest {
         @DisplayName("a handler that throws costs one record, counted, and the next one is delivered")
         void handlerFailureIsCountedAndSurvived() {
             AmpsRecordSource source = source(connector(AmpsSourceProperties.Mode.SUBSCRIBE));
-            List<SourceRecord> delivered = new CopyOnWriteArrayList<>();
+            List<InboundRecord> delivered = new CopyOnWriteArrayList<>();
             AtomicInteger calls = new AtomicInteger();
 
             source.dispatch(message(Message.Command.Publish, "{\"n\":1}"), record -> {
@@ -305,7 +305,7 @@ class AmpsRecordSourceTest {
         @DisplayName("group markers never reach the handler")
         void groupMarkersAreDropped() {
             AmpsRecordSource source = source(connector(AmpsSourceProperties.Mode.SOW_AND_SUBSCRIBE));
-            List<SourceRecord> delivered = new CopyOnWriteArrayList<>();
+            List<InboundRecord> delivered = new CopyOnWriteArrayList<>();
 
             source.dispatch(message(Message.Command.GroupBegin, ""), delivered::add);
             source.dispatch(message(Message.Command.SOW, "{\"n\":1}"), delivered::add);
@@ -321,7 +321,7 @@ class AmpsRecordSourceTest {
         @DisplayName("a message with no topic of its own is attributed to the configured one")
         void topicFallsBackToTheConfiguredOne() {
             AmpsRecordSource source = source(connector(AmpsSourceProperties.Mode.SUBSCRIBE));
-            List<SourceRecord> delivered = new CopyOnWriteArrayList<>();
+            List<InboundRecord> delivered = new CopyOnWriteArrayList<>();
             Message message = new JSONMessage(
                     StandardCharsets.UTF_8.newEncoder(), StandardCharsets.UTF_8.newDecoder())
                     .setCommand(Message.Command.Publish).setData("{}");
@@ -459,7 +459,7 @@ class AmpsRecordSourceTest {
             connector.getSource().getAmps().setReconnectDelay(Duration.ofMillis(50));
             connector.getSource().getAmps().setTimeout(Duration.ofMillis(500));
             AmpsRecordSource source = new AmpsRecordSource(connector, defaults);
-            List<SourceRecord> received = new CopyOnWriteArrayList<>();
+            List<InboundRecord> received = new CopyOnWriteArrayList<>();
 
             ListAppender<ILoggingEvent> warnings = capture();
             try {

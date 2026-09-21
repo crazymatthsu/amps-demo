@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.demo.amps.connectors.TestConnectors;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.KafkaSourceProperties;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
@@ -177,7 +177,7 @@ class KafkaRecordSourceTest {
         Awaitility.await().atMost(Duration.ofSeconds(5)).until(source::isConnected);
     }
 
-    private static void awaitRecords(List<SourceRecord> received, int count) {
+    private static void awaitRecords(List<InboundRecord> received, int count) {
         Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> received.size() >= count);
     }
 
@@ -257,7 +257,7 @@ class KafkaRecordSourceTest {
     @Test
     @DisplayName("an upsert carries the message key, where it came from, and an acknowledgment")
     void deliversRecordsWithKeyAttributesAndAck() {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         MockConsumer<String, String> consumer = mockConsumer();
 
         try (KafkaRecordSource source =
@@ -269,14 +269,14 @@ class KafkaRecordSourceTest {
                     record(BEGINNING + 1, "ORD-2", "{\"orderId\":\"ORD-2\"}"));
             awaitRecords(received, 2);
 
-            assertThat(received).extracting(SourceRecord::key).containsExactly("ORD-1", "ORD-2");
-            assertThat(received).extracting(SourceRecord::data)
+            assertThat(received).extracting(InboundRecord::key).containsExactly("ORD-1", "ORD-2");
+            assertThat(received).extracting(InboundRecord::data)
                     .containsExactly("{\"orderId\":\"ORD-1\"}", "{\"orderId\":\"ORD-2\"}");
-            assertThat(received).extracting(SourceRecord::action)
-                    .containsOnly(SourceRecord.Action.UPSERT);
+            assertThat(received).extracting(InboundRecord::action)
+                    .containsOnly(InboundRecord.Action.UPSERT);
             // Unlike TCP and Hazelcast, every record here can be acknowledged: an offset is
             // exactly the position the framework's at-least-once contract needs.
-            assertThat(received).extracting(SourceRecord::ack).doesNotContainNull();
+            assertThat(received).extracting(InboundRecord::ack).doesNotContainNull();
             assertThat(received.get(0).attributes())
                     .containsEntry("topic", TOPIC)
                     .containsEntry("partition", "0")
@@ -289,7 +289,7 @@ class KafkaRecordSourceTest {
     @Test
     @DisplayName("a tombstone arrives as a DELETE carrying its key and an empty payload")
     void aNullValueBecomesADelete() {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         MockConsumer<String, String> consumer = mockConsumer();
 
         try (KafkaRecordSource source =
@@ -301,8 +301,8 @@ class KafkaRecordSourceTest {
                     record(BEGINNING + 1, "ORD-1", null));
             awaitRecords(received, 2);
 
-            SourceRecord tombstone = received.get(1);
-            assertThat(tombstone.action()).isEqualTo(SourceRecord.Action.DELETE);
+            InboundRecord tombstone = received.get(1);
+            assertThat(tombstone.action()).isEqualTo(InboundRecord.Action.DELETE);
             assertThat(tombstone.key()).isEqualTo("ORD-1");
             // Empty rather than null: the DELETE path still decodes the payload, and an
             // empty document is the quiet answer.
@@ -317,7 +317,7 @@ class KafkaRecordSourceTest {
     @Test
     @DisplayName("nothing is committed until the pipeline acknowledges the record")
     void offsetsAreCommittedOnlyForAcknowledgedRecords() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         MockConsumer<String, String> consumer = mockConsumer();
 
         try (KafkaRecordSource source =
@@ -349,7 +349,7 @@ class KafkaRecordSourceTest {
     @Test
     @DisplayName("acknowledgments that arrive out of order commit the highest offset, once")
     void outOfOrderAcknowledgmentsCommitTheHighestOffset() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         MockConsumer<String, String> consumer = mockConsumer();
 
         try (KafkaRecordSource source =
@@ -404,7 +404,7 @@ class KafkaRecordSourceTest {
     @Test
     @DisplayName("a revoked partition is committed synchronously and then forgotten")
     void revokedPartitionsAreCommittedThenForgotten() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         InFlightCommitMockConsumer consumer = prepared(new InFlightCommitMockConsumer());
 
         try (KafkaRecordSource source =
@@ -445,7 +445,7 @@ class KafkaRecordSourceTest {
     @Test
     @DisplayName("close() commits what is still owed, synchronously, and stops the poll thread")
     void closeCommitsWhatIsOwedAndStopsThePollThread() throws Exception {
-        List<SourceRecord> received = new CopyOnWriteArrayList<>();
+        List<InboundRecord> received = new CopyOnWriteArrayList<>();
         InFlightCommitMockConsumer consumer = prepared(new InFlightCommitMockConsumer());
         KafkaRecordSource source =
                 source(connector(KafkaSourceProperties.From.EARLIEST), consumer);

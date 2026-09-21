@@ -3,7 +3,7 @@ package com.demo.amps.connectors.transform;
 import com.demo.amps.connectors.config.TransformStep;
 import com.demo.amps.connectors.decode.Fields;
 import com.demo.amps.connectors.filter.FieldExpressions;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.transform.rules.RuleSet;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -112,7 +112,7 @@ public final class TransformChain {
      * @param fields the decoded fields
      * @return the fields to publish, or {@code null} when a step dropped the record
      */
-    public Map<String, Object> apply(SourceRecord record, Map<String, Object> fields) {
+    public Map<String, Object> apply(InboundRecord record, Map<String, Object> fields) {
         Map<String, Object> current = fields;
         for (RecordTransform transform : transforms) {
             current = transform.apply(record, current);

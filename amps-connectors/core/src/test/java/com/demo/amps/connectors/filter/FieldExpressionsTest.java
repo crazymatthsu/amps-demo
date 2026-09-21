@@ -3,7 +3,7 @@ package com.demo.amps.connectors.filter;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -13,7 +13,7 @@ import org.springframework.expression.ParseException;
 
 class FieldExpressionsTest {
 
-    private static final SourceRecord RECORD = SourceRecord.delete("", "ORD-1")
+    private static final InboundRecord RECORD = InboundRecord.delete("", "ORD-1")
             .withAttributes(Map.of("topic", "orders", "partition", "3"));
 
     private static Map<String, Object> order() {
@@ -47,7 +47,7 @@ class FieldExpressionsTest {
     @DisplayName("#r is the record: its key, its action and its transport attributes")
     void bindsTheRecordAsItself() {
         assertThat(eval("#r.key")).isEqualTo("ORD-1");
-        assertThat(eval("#r.action")).isEqualTo(SourceRecord.Action.DELETE);
+        assertThat(eval("#r.action")).isEqualTo(InboundRecord.Action.DELETE);
         assertThat(eval("#r.attributes['topic']")).isEqualTo("orders");
         assertThat(eval("#r.attributes['missing']")).isNull();
         assertThat(test("#r.action.name() == 'DELETE'")).isTrue();

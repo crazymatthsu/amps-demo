@@ -3,7 +3,7 @@ package com.demo.amps.connectors.hazelcast;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.HazelcastSourceProperties;
 import com.demo.amps.connectors.source.RecordHandler;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.google.gson.Gson;
 import com.hazelcast.cluster.Member;
 import com.hazelcast.core.EntryEvent;
@@ -83,11 +83,11 @@ import org.slf4j.LoggerFactory;
  * <table border="1">
  *   <caption>Map events as records</caption>
  *   <tr><th>Hazelcast</th><th>record</th><th>{@code event} attribute</th></tr>
- *   <tr><td>added / updated</td><td>{@code SourceRecord.of(value, key)}</td>
+ *   <tr><td>added / updated</td><td>{@code InboundRecord.of(value, key)}</td>
  *       <td>{@code ADDED} / {@code UPDATED}</td></tr>
- *   <tr><td>removed / evicted / expired</td><td>{@code SourceRecord.delete("", key)}</td>
+ *   <tr><td>removed / evicted / expired</td><td>{@code InboundRecord.delete("", key)}</td>
  *       <td>{@code REMOVED} / {@code EVICTED} / {@code EXPIRED}</td></tr>
- *   <tr><td>the snapshot's rows</td><td>{@code SourceRecord.of(value, key)}</td>
+ *   <tr><td>the snapshot's rows</td><td>{@code InboundRecord.of(value, key)}</td>
  *       <td>{@code SNAPSHOT}</td></tr>
  *   <tr><td>map cleared / map evicted</td><td>none -- a WARN and a counter</td><td></td></tr>
  * </table>
@@ -251,7 +251,7 @@ final class MapSubscription implements HazelcastSubscription {
     /** One snapshot row. Failures are per-entry: a map is not abandoned over one value. */
     private void emit(Object key, Object value, String member, RecordHandler handler) {
         try {
-            handler.onRecord(SourceRecord.of(text(value), String.valueOf(key))
+            handler.onRecord(InboundRecord.of(text(value), String.valueOf(key))
                     .withAttributes(attributes("SNAPSHOT", member)));
         } catch (RuntimeException e) {
             log.error("[{}] failed to handle Hazelcast map entry '{}'",
@@ -326,7 +326,7 @@ final class MapSubscription implements HazelcastSubscription {
     /** An entry that exists with this value. */
     private void upsert(EntryEvent<Object, Object> event, String kind, RecordHandler handler) {
         try {
-            handler.onRecord(SourceRecord
+            handler.onRecord(InboundRecord
                     .of(text(event.getValue()), String.valueOf(event.getKey()))
                     .withAttributes(attributes(kind, memberOf(event))));
         } catch (RuntimeException e) {
@@ -347,7 +347,7 @@ final class MapSubscription implements HazelcastSubscription {
      */
     private void removed(EntryEvent<Object, Object> event, String kind, RecordHandler handler) {
         try {
-            handler.onRecord(SourceRecord.delete("", String.valueOf(event.getKey()))
+            handler.onRecord(InboundRecord.delete("", String.valueOf(event.getKey()))
                     .withAttributes(attributes(kind, memberOf(event))));
         } catch (RuntimeException e) {
             log.error("[{}] failed to handle Hazelcast map {} event for key '{}'",

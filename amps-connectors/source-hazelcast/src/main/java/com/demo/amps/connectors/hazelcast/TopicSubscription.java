@@ -3,7 +3,7 @@ package com.demo.amps.connectors.hazelcast;
 import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.HazelcastSourceProperties;
 import com.demo.amps.connectors.source.RecordHandler;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.topic.ITopic;
 import com.hazelcast.topic.Message;
@@ -175,7 +175,7 @@ final class TopicSubscription implements HazelcastSubscription {
                                 + "bridging its toString() -- decoding may fail",
                         connector.getName(), source.getTopic(), payload.getClass().getName());
             }
-            handler.onRecord(SourceRecord.of(String.valueOf(payload))
+            handler.onRecord(InboundRecord.of(String.valueOf(payload))
                     .withAttributes(attributesOf(message)));
         } catch (RuntimeException e) {
             // One bad record is not a reason to drop the subscription.

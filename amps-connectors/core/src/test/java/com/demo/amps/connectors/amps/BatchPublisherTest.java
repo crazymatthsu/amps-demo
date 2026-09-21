@@ -3,8 +3,8 @@ package com.demo.amps.connectors.amps;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.demo.amps.connectors.runtime.Command;
-import com.demo.amps.connectors.runtime.PublishRequest;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.runtime.OutboundRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,23 +18,23 @@ class BatchPublisherTest {
     private final BatchPublisher batches =
             new BatchPublisher(publisher, "orders", Duration.ofSeconds(1));
 
-    private static SourceRecord acking(AtomicInteger acks) {
-        return SourceRecord.of("{}", "K-1").withAck(acks::incrementAndGet);
+    private static InboundRecord acking(AtomicInteger acks) {
+        return InboundRecord.of("{}", "K-1").withAck(acks::incrementAndGet);
     }
 
-    private static PublishRequest publish(String data, SourceRecord record) {
-        return PublishRequest.publish("sow/orders", Command.PUBLISH, data, "K-1", record);
+    private static OutboundRecord publish(String data, InboundRecord record) {
+        return OutboundRecord.publish("sow/orders", Command.PUBLISH, data, "K-1", record);
     }
 
     @Test
     @DisplayName("the commands come out in the order the records arrived")
     void preservesOrderAcrossTheUpsertDeleteBoundary() {
-        SourceRecord record = SourceRecord.of("{}");
+        InboundRecord record = InboundRecord.of("{}");
         batches.publish(List.of(
                 publish("{\"n\":1}", record),
-                PublishRequest.deleteByKey("sow/orders", "K-1", record),
+                OutboundRecord.deleteByKey("sow/orders", "K-1", record),
                 publish("{\"n\":2}", record),
-                PublishRequest.deleteByFilter("sow/orders", "/id = 'K-1'", record)));
+                OutboundRecord.deleteByFilter("sow/orders", "/id = 'K-1'", record)));
 
         assertThat(publisher.calls()).extracting(RecordingAmpsPublisher.Call::kind)
                 .containsExactly("publish", "sow_delete_by_key", "publish",
@@ -44,8 +44,8 @@ class BatchPublisherTest {
     @Test
     @DisplayName("a batch of many publishes makes exactly one flush")
     void flushesOncePerBatch() {
-        List<PublishRequest> batch = new ArrayList<>();
-        SourceRecord record = SourceRecord.of("{}");
+        List<OutboundRecord> batch = new ArrayList<>();
+        InboundRecord record = InboundRecord.of("{}");
         for (int i = 0; i < 100; i++) {
             batch.add(publish("{\"n\":" + i + "}", record));
         }
@@ -121,10 +121,10 @@ class BatchPublisherTest {
 
     @Test
     void routesEachCommandToItsCall() {
-        SourceRecord record = SourceRecord.of("{}");
+        InboundRecord record = InboundRecord.of("{}");
         batches.publish(List.of(
-                PublishRequest.publish("t", Command.PUBLISH, "{\"a\":1}", "K-1", record),
-                PublishRequest.publish("t", Command.DELTA_PUBLISH, "{\"a\":2}", "K-1", record)));
+                OutboundRecord.publish("t", Command.PUBLISH, "{\"a\":1}", "K-1", record),
+                OutboundRecord.publish("t", Command.DELTA_PUBLISH, "{\"a\":2}", "K-1", record)));
 
         assertThat(publisher.calls()).containsExactly(
                 new RecordingAmpsPublisher.Call("publish", "t", "{\"a\":1}", "K-1"),

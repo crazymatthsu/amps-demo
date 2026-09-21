@@ -9,7 +9,7 @@ import com.demo.amps.connectors.amps.AmpsPublisherFactory;
 import com.demo.amps.connectors.amps.RecordingAmpsPublisher;
 import com.demo.amps.connectors.source.FakeRecordSource;
 import com.demo.amps.connectors.source.FakeSourceFactory;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -169,8 +169,8 @@ class ConnectorFlowTest {
         fakes.clearAll();
     }
 
-    private static SourceRecord record(String id, AtomicInteger acks) {
-        return SourceRecord.of("{\"id\":\"" + id + "\"}", id).withAck(acks::incrementAndGet);
+    private static InboundRecord record(String id, AtomicInteger acks) {
+        return InboundRecord.of("{\"id\":\"" + id + "\"}", id).withAck(acks::incrementAndGet);
     }
 
     /**
@@ -373,7 +373,7 @@ class ConnectorFlowTest {
         AtomicInteger acks = new AtomicInteger();
         Connector connector = manager.connectors().get(0);
 
-        fakes.bySize.emit(SourceRecord.of("not json at all"));
+        fakes.bySize.emit(InboundRecord.of("not json at all"));
         fakes.bySize.emit(record("K-1", acks));
         fakes.bySize.emit(record("K-2", acks));
         fakes.bySize.emit(record("K-3", acks));

@@ -7,7 +7,7 @@ import com.demo.amps.connectors.config.RuleProperties;
 import com.demo.amps.connectors.config.RuleThen;
 import com.demo.amps.connectors.decode.Fields;
 import com.demo.amps.connectors.filter.FieldExpressions;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.transform.RecordTransform;
 import com.demo.amps.connectors.transform.TransformContext;
 import java.util.ArrayList;
@@ -146,7 +146,7 @@ public final class RuleSet implements RecordTransform {
     }
 
     @Override
-    public Map<String, Object> apply(SourceRecord record, Map<String, Object> fields) {
+    public Map<String, Object> apply(InboundRecord record, Map<String, Object> fields) {
         Map<String, Object> current = fields;
         for (CompiledRule rule : rules) {
             if (!FieldExpressions.test(rule.when, rule.whenText, record, current)) {
@@ -244,7 +244,7 @@ public final class RuleSet implements RecordTransform {
     private record AlertTemplate(
             Alert.Severity severity, String code, String text, Expression template) {
 
-        Alert render(SourceRecord record, Map<String, Object> fields) {
+        Alert render(InboundRecord record, Map<String, Object> fields) {
             return Alert.of(
                     severity, code, FieldExpressions.render(template, text, record, fields));
         }

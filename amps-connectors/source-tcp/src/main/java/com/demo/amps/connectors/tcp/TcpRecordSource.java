@@ -4,7 +4,7 @@ import com.demo.amps.connectors.config.ConnectorProperties;
 import com.demo.amps.connectors.config.TcpSourceProperties;
 import com.demo.amps.connectors.source.RecordHandler;
 import com.demo.amps.connectors.source.RecordSource;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
@@ -62,7 +62,7 @@ import org.slf4j.LoggerFactory;
  *
  * <h2>A socket has no state to replay</h2>
  *
- * <p>Every frame becomes an {@code UPSERT} {@link SourceRecord} with <strong>no key</strong>
+ * <p>Every frame becomes an {@code UPSERT} {@link InboundRecord} with <strong>no key</strong>
  * and <strong>no {@link com.demo.amps.connectors.source.Acknowledgment}</strong>, and this
  * source never produces a {@code DELETE}. A raw feed carries no per-message key, no notion of
  * a record leaving it, and no position to commit: there is nothing a removal could address and
@@ -395,7 +395,7 @@ public class TcpRecordSource implements RecordSource {
             return;
         }
         try {
-            handler.onRecord(SourceRecord.of(new String(buffer, offset, length, charset))
+            handler.onRecord(InboundRecord.of(new String(buffer, offset, length, charset))
                     .withAttributes(attributes));
         } catch (RuntimeException e) {
             // One bad record is not a reason to drop the feed: the pipeline counts it, we
@@ -408,7 +408,7 @@ public class TcpRecordSource implements RecordSource {
      * The attribute map every frame from one socket carries.
      *
      * <p>Built once per connection, not once per frame: it is the same map for the socket's
-     * whole lifetime, and {@link SourceRecord} copies what it is given anyway.
+     * whole lifetime, and {@link InboundRecord} copies what it is given anyway.
      */
     private static Map<String, String> attributesOf(Socket client) {
         return Map.of(ATTRIBUTE_REMOTE, peerOf(client));

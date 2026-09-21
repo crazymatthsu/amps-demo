@@ -7,7 +7,7 @@ import com.demo.amps.connectors.alert.Alert;
 import com.demo.amps.connectors.config.RuleAlert;
 import com.demo.amps.connectors.config.RuleProperties;
 import com.demo.amps.connectors.config.TransformStep;
-import com.demo.amps.connectors.source.SourceRecord;
+import com.demo.amps.connectors.source.InboundRecord;
 import com.demo.amps.connectors.transform.rules.RuleSet;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -62,7 +62,7 @@ class TransformRegistryTest {
         fields.put("11", "ORD-1");
         fields.put("55", "AAPL");
         TransformChain chain = new TransformChain(resolved);
-        assertThat(chain.apply(SourceRecord.of(""), fields))
+        assertThat(chain.apply(InboundRecord.of(""), fields))
                 .containsExactly(Map.entry("55", "AAPL"), Map.entry("enriched", true));
     }
 
@@ -89,7 +89,7 @@ class TransformRegistryTest {
 
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put("11", "ORD-1");
-        new TransformChain(resolved).apply(SourceRecord.of(""), fields);
+        new TransformChain(resolved).apply(InboundRecord.of(""), fields);
         assertThat(raised).singleElement().satisfies(fired -> {
             assertThat(fired.code()).isEqualTo("ENRICHED");
             assertThat(fired.message()).isEqualTo("enriched-buys");
@@ -114,7 +114,7 @@ class TransformRegistryTest {
         final List<String> boundTo = new ArrayList<>();
 
         @Override
-        public Map<String, Object> apply(SourceRecord record, Map<String, Object> fields) {
+        public Map<String, Object> apply(InboundRecord record, Map<String, Object> fields) {
             return fields;
         }
 
@@ -138,7 +138,7 @@ class TransformRegistryTest {
 
         RecordTransform bound = registry.resolve(List.of(bean("aware")), orders).get(0);
         assertThat(bound).isNotSameAs(enricher);
-        assertThat(bound.apply(SourceRecord.of("{}"), Map.of("55", "VOD.L")))
+        assertThat(bound.apply(InboundRecord.of("{}"), Map.of("55", "VOD.L")))
                 .containsEntry("55", "VOD.L")
                 .containsEntry("connector", "orders");
         // The default bind() is the bean itself: a transform that does not care sees nothing.
@@ -153,7 +153,7 @@ class TransformRegistryTest {
         TransformStep rules = new TransformStep();
         rules.setRules(List.of(rule));
         RuleSet ruleSet = (RuleSet) registry.resolve(List.of(rules), orders).get(0);
-        assertThat(ruleSet.apply(SourceRecord.of("{}"), Map.of("55", "VOD.L")))
+        assertThat(ruleSet.apply(InboundRecord.of("{}"), Map.of("55", "VOD.L")))
                 .containsEntry("connector", "orders");
         assertThat(enricher.boundTo).containsExactly("orders", "", "orders");
     }
