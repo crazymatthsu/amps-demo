@@ -74,6 +74,11 @@ class AmpsReplicatedFileStoreTest {
         InMemorySeqnoReplicator replicator = new InMemorySeqnoReplicator();
         try (AmpsReplicatedFileStoreFactory factory = factory(replicator, RecoveryPolicy.AMPS_WINS, true, "host-a")) {
             MessageStore store = factory.create(ID);
+            // Let the startup checkpoint reach the replicator before the increments start:
+            // the publisher is write-behind and coalesces a session's pending checkpoints,
+            // so on a slow machine five quick increments would replace the 1/1 checkpoint
+            // before its thread ever published it, and "came first" could not be asserted.
+            assertThat(factory.publisher().flush(Duration.ofSeconds(5))).isTrue();
             store.incrNextSenderMsgSeqNum();
             store.incrNextSenderMsgSeqNum();
             store.incrNextSenderMsgSeqNum();
