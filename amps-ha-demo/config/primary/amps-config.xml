@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  amps-ha-demo: the PRIMARY of a replicated pair.
+
+  The two instances, this one and config/secondary/amps-config.xml, are
+  exact replicas: the same Group, the same topics, each replicating every
+  message it receives to the other with synchronous acknowledgment. Either
+  one can be the instance a client happens to be connected to, which is
+  what lets an HAClient fail over between them without losing anything:
+
+    - A publisher with a publish store only discards a message once AMPS
+      acknowledges it as persisted, and with SyncType sync that
+      acknowledgment is not sent until the OTHER instance has the message
+      too. So whichever instance dies, every message the publisher believes
+      is safe is on the survivor, and every message it does not believe is
+      safe is replayed to the survivor, where a message that did arrive
+      before the crash is dropped as a duplicate by (client name, sequence).
+
+    - A bookmark subscriber resumes from its bookmark store. Bookmarks are
+      preserved by replication (a message keeps the bookmark of the instance
+      that first accepted it), so the position it held on the dead instance
+      means the same thing on the survivor.
+
+  Naming: the in-container hostnames are amps-primary and amps-secondary,
+  both in compose.yml (service names) and in the integration test (network
+  aliases), which is why the Destination address below is a fixed name.
+
+  The two files differ only in <Name>, the Destination's <Name>, and the
+  Destination's <InetAddr>.
+-->
+<AMPSConfig>
+
+    <Name>amps-ha-primary</Name>
+
+    <!--
+      Instances in the same Group are declared to be fully equivalent
+      failover alternatives; a Destination's Group must match the remote
+      instance's Group or AMPS refuses the connection.
+    -->
+    <Group>amps-ha-demo</Group>
+
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <SQLTransport>amps-websocket</SQLTransport>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+        <!--
+          Incoming replication: the other instance connects here. One per
+          instance, and it carries replication only, clients cannot use it.
+        -->
+        <Transport>
+            <Name>amps-replication</Name>
+            <Type>amps-replication</Type>
+            <InetAddr>9010</InetAddr>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <!--
+      One SOW topic, keyed on the order id, persistent so it survives a
+      restart of this instance on its own data. Replicated topics must also
+      be in the transaction log (below): replication is a replay of the
+      journal, not of the SOW.
+    -->
+    <SOW>
+        <Topic>
+            <Name>orders</Name>
+            <MessageType>json</MessageType>
+            <Key>/id</Key>
+            <FileName>./sow/orders.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+    </SOW>
+
+    <!--
+      MinJournalSize 10MB is the floor AMPS accepts (verified on 5.3.5.135).
+      The journal is what bookmark subscribers replay from and what the
+      publisher's persisted acknowledgments refer to.
+    -->
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
+        <MinJournalSize>10MB</MinJournalSize>
+        <Topic>
+            <Name>orders</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+    </TransactionLog>
+
+    <!--
+      Outgoing replication to the secondary. SyncType sync is the whole
+      point: a publisher is not told its message is persisted until the
+      secondary has it, so the publisher's own publish store never lets go
+      of a message that exists on only one instance. PassThrough .* also
+      forwards messages this instance received from elsewhere, so the pair
+      stays a full mirror whichever instance a publisher connected to.
+    -->
+    <Replication>
+        <Destination>
+            <Name>amps-ha-secondary</Name>
+            <Group>amps-ha-demo</Group>
+            <SyncType>sync</SyncType>
+            <PassThrough>.*</PassThrough>
+            <Topic>
+                <Name>orders</Name>
+                <MessageType>json</MessageType>
+            </Topic>
+            <Transport>
+                <Type>amps-replication</Type>
+                <InetAddr>amps-secondary:9010</InetAddr>
+            </Transport>
+        </Destination>
+    </Replication>
+
+    <!--
+      The price of sync: while the other instance is DOWN, no publisher on
+      this instance gets a persisted acknowledgment, so publish stores grow
+      and publishFlush never returns. The documented remedy is to downgrade
+      the link to async acknowledgment once the destination has been
+      unresponsive for longer than an operator would call an outage, and to
+      upgrade it again once it is back and caught up. The intervals here are
+      demo-short (seconds, not minutes) so a failover is watchable; in
+      production the downgrade Age should exceed the time at which monitoring
+      would already be alerting that the instance is gone.
+    -->
+    <Actions>
+        <Action>
+            <On>
+                <Module>amps-action-on-schedule</Module>
+                <Options>
+                    <Every>2s</Every>
+                </Options>
+            </On>
+            <Do>
+                <Module>amps-action-do-downgrade-replication</Module>
+                <Options>
+                    <Age>6s</Age>
+                </Options>
+            </Do>
+            <Do>
+                <Module>amps-action-do-upgrade-replication</Module>
+                <Options>
+                    <Age>2s</Age>
+                </Options>
+            </Do>
+        </Action>
+    </Actions>
+
+</AMPSConfig>

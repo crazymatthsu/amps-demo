@@ -1,0 +1,68 @@
+# The replicated pair, declaratively: two AMPS instances on one compose
+# network, each replicating to the other with synchronous acknowledgment.
+#
+# NOT meant to be run with a bare `podman compose up`: every ${VAR} below is
+# resolved from the calling shell, the mounted data folders have to exist
+# first, and knowing when the pair is actually READY (both started, the
+# replication link up in both directions) is a log-reading job. Run
+# scripts/ha-compose.sh and treat this file as its target.
+#
+#   AMPS_IMAGE=<your image> ./amps-ha-demo/scripts/ha-compose.sh start
+#   ./amps-ha-demo/scripts/ha-compose.sh failover      # SIGKILL the primary
+#   ./amps-ha-demo/scripts/ha-compose.sh revive primary
+#
+# The service names ARE the hostnames the configs replicate to:
+# config/primary/amps-config.xml points its Destination at
+# amps-secondary:9010 and the secondary's points back at amps-primary:9010.
+# The integration test gives its Testcontainers the same names as network
+# aliases, so one pair of config files serves both.
+#
+# Mounts, per instance (relative to this file):
+#   ./config/<instance>  -> /amps/config   the instance's amps-config.xml
+#   ./deploy/<instance>  -> /amps/data     its SOW, journal and stats
+#
+# Host ports: the primary takes the repository's usual 9007/9008/8085, the
+# secondary the same numbers plus 100 (9107/9108/8185). The replication port
+# (9010 in both) is not published: it is instance-to-instance traffic on the
+# compose network, and a client must never connect to it.
+
+services:
+
+  amps-primary:
+    # No default, on purpose: there is no public AMPS server image. Build one
+    # from server/Containerfile and export AMPS_IMAGE.
+    image: ${AMPS_IMAGE:?AMPS_IMAGE is not set -- build an image from server/Containerfile and export it}
+    platform: ${AMPS_PLATFORM:-linux/amd64}
+    container_name: ${HA_STACK:-amps-ha}-primary
+    hostname: amps-primary
+    entrypoint: ["${AMPS_BIN:-/opt/amps/bin/ampServer}"]
+    command: ["/amps/config/amps-config.xml"]
+    working_dir: /amps/data
+    ports:
+      - "${HA_PRIMARY_PORT:-9007}:9007"
+      - "${HA_PRIMARY_WS_PORT:-9008}:9008"
+      - "${HA_PRIMARY_ADMIN_PORT:-8085}:8085"
+    volumes:
+      - ./config/primary:/amps/config${HA_MOUNT_SUFFIX:-}
+      - ./deploy/primary:/amps/data${HA_MOUNT_SUFFIX:-}
+    # Never auto-restart: `failover` kills this container to demonstrate
+    # that the clients survive its absence, and a restart policy would end
+    # the demonstration before anyone saw it.
+    restart: "no"
+
+  amps-secondary:
+    image: ${AMPS_IMAGE:?AMPS_IMAGE is not set -- build an image from server/Containerfile and export it}
+    platform: ${AMPS_PLATFORM:-linux/amd64}
+    container_name: ${HA_STACK:-amps-ha}-secondary
+    hostname: amps-secondary
+    entrypoint: ["${AMPS_BIN:-/opt/amps/bin/ampServer}"]
+    command: ["/amps/config/amps-config.xml"]
+    working_dir: /amps/data
+    ports:
+      - "${HA_SECONDARY_PORT:-9107}:9007"
+      - "${HA_SECONDARY_WS_PORT:-9108}:9008"
+      - "${HA_SECONDARY_ADMIN_PORT:-8185}:8085"
+    volumes:
+      - ./config/secondary:/amps/config${HA_MOUNT_SUFFIX:-}
+      - ./deploy/secondary:/amps/data${HA_MOUNT_SUFFIX:-}
+    restart: "no"
