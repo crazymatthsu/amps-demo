@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  amps-ha-demo: the SECONDARY of a replicated pair.
+
+  Identical to config/primary/amps-config.xml except for the instance
+  <Name>, the Destination's <Name>, and the Destination's <InetAddr>, which
+  points back at the primary. The reasoning behind every element is written
+  up in the primary's file; "secondary" is only which one the clients try
+  first, not a difference in role, both accept publishes, both replicate
+  to the other with synchronous acknowledgment, both are in the same Group.
+-->
+<AMPSConfig>
+
+    <Name>amps-ha-secondary</Name>
+    <Group>amps-ha-demo</Group>
+
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <SQLTransport>amps-websocket</SQLTransport>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-replication</Name>
+            <Type>amps-replication</Type>
+            <InetAddr>9010</InetAddr>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <SOW>
+        <Topic>
+            <Name>orders</Name>
+            <MessageType>json</MessageType>
+            <Key>/id</Key>
+            <FileName>./sow/orders.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+    </SOW>
+
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
+        <MinJournalSize>10MB</MinJournalSize>
+        <Topic>
+            <Name>orders</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+    </TransactionLog>
+
+    <Replication>
+        <Destination>
+            <Name>amps-ha-primary</Name>
+            <Group>amps-ha-demo</Group>
+            <SyncType>sync</SyncType>
+            <PassThrough>.*</PassThrough>
+            <Topic>
+                <Name>orders</Name>
+                <MessageType>json</MessageType>
+            </Topic>
+            <Transport>
+                <Type>amps-replication</Type>
+                <InetAddr>amps-primary:9010</InetAddr>
+            </Transport>
+        </Destination>
+    </Replication>
+
+    <Actions>
+        <Action>
+            <On>
+                <Module>amps-action-on-schedule</Module>
+                <Options>
+                    <Every>2s</Every>
+                </Options>
+            </On>
+            <Do>
+                <Module>amps-action-do-downgrade-replication</Module>
+                <Options>
+                    <Age>6s</Age>
+                </Options>
+            </Do>
+            <Do>
+                <Module>amps-action-do-upgrade-replication</Module>
+                <Options>
+                    <Age>2s</Age>
+                </Options>
+            </Do>
+        </Action>
+    </Actions>
+
+</AMPSConfig>

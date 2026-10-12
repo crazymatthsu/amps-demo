@@ -22,6 +22,7 @@ amps-demo/
 ├── fix-pub-seqno/  FIX publisher sequence recovery: find the last tag 8888 AMPS holds, republish the gap
 ├── quickfixj-v2-demo/  QuickFIX/J 2.x drop-copy engine on Spring Boot + Spring Integration, sequence numbers replicated to AMPS for failover
 ├── amps-connectors/  source -> AMPS connector framework (TCP, Kafka, JDBC, Hazelcast, AMPS) with resources, rules, alerts and a control channel + the generic Spring Boot runner its config tree deploys
+├── amps-ha-demo/  a replicated AMPS pair (primary + secondary) with an HAClient publisher and consumer, and a Testcontainers failover test that kills an instance mid-stream and proves nothing was lost
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -189,6 +190,28 @@ modes and their traps, rules, resources, alerts and the control channel, the
 configuration reference for every block, how to write a code transform, the
 config tree and its compose generator, and why Spring Integration is used
 for the batch and nothing else.
+
+`amps-ha-demo` is **high availability**: two AMPS instances replicating to
+each other with synchronous acknowledgment, a publisher on an `HAClient` with a
+publish store, a consumer on an `HAClient` with a bookmark store, and the
+proof. Its integration test starts both instances as Testcontainers,
+SIGKILLs the primary while the publisher is mid-stream, brings it back, kills
+the secondary, and checks that every message reached the consumer exactly
+once and in order -- and that a brand-new consumer replays the whole run from
+the survivor. The write-up names the five things that have to be true for that
+to hold, including the one that is easy to miss (`fully_durable` on the
+subscription) and the price of synchronous replication (the scheduled link
+downgrade while a peer is down).
+
+```bash
+./amps-ha-demo/scripts/ha-compose.sh start          # both instances in podman
+./gradlew :amps-ha-demo:run --args="both"           # publisher + consumer
+./amps-ha-demo/scripts/ha-compose.sh failover       # SIGKILL the primary, watch them move
+```
+
+-> [amps-ha-demo/README.md](amps-ha-demo/README.md)
+for the run guide, the test's three stages, the replication config explained
+element by element, and the client behaviours worth knowing.
 
 ## Operator tools
 

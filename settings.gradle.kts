@@ -39,6 +39,12 @@ include("fix-pub-seqno")
 // take over without a resequence; see quickfixj-v2-demo/README.md.
 include("quickfixj-v2-demo")
 
+// amps-ha-demo is a replicated AMPS pair (primary + secondary, sync
+// replication both ways) plus a publisher and a consumer on HAClient, and an
+// integration test that kills an instance mid-stream and proves nothing was
+// lost; see amps-ha-demo/README.md.
+include("amps-ha-demo")
+
 // amps-connectors is framework + drivers + applications: the core library (the
 // decode -> filter -> transform -> key -> encode -> batch -> publish pipeline and
 // the source SPI), one module per source transport, the generic runner every

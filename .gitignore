@@ -27,6 +27,12 @@ quickfixj-v2-demo/data/
 quickfixj-v2-demo/log/
 quickfixj-v2-demo/deploy/
 
+# amps-ha-demo runtime state: the two AMPS instances' bind-mounted data
+# (SOW, journal, stats) the compose stack writes under deploy/, and the
+# file-backed publish/bookmark stores the demo keeps under data/.
+amps-ha-demo/deploy/
+amps-ha-demo/data/
+
 # IDE
 .idea/
 *.iml
