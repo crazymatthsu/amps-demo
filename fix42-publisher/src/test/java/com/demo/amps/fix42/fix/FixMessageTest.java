@@ -1,6 +1,7 @@
 package com.demo.amps.fix42.fix;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -34,6 +35,22 @@ class FixMessageTest {
 
         assertThat(parsed.asMap()).isEqualTo(original.asMap());
         assertThat(parsed.msgType()).isEqualTo("8");
+    }
+
+    @Test
+    @DisplayName("parse keeps the wire order of the fields")
+    void parsePreservesWireOrder() {
+        FixMessage parsed = FixMessage.parse("150=1\u000135=8\u000111=C1\u0001");
+
+        assertThat(parsed.printable()).isEqualTo("150=1|35=8|11=C1|");
+        assertThat(parsed.tags()).containsExactly(150, 35, 11);
+    }
+
+    @Test
+    @DisplayName("parse rejects a malformed field rather than dropping it")
+    void parseRejectsMalformedInput() {
+        assertThatThrownBy(() -> FixMessage.parse("35=8\u0001junk\u0001"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

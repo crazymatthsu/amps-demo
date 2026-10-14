@@ -10,6 +10,7 @@ import com.demo.amps.fix42.publish.PublishInstruction;
 import com.demo.amps.fix42.publish.PublishPlanner;
 import com.demo.amps.testharness.AmpsFlow;
 import com.demo.amps.testharness.AmpsTestServer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -17,7 +18,9 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 /**
  * Where publishing time actually goes. Off by default:
- * {@code -Dfix42.benchmark=true}.
+ * {@code -Dfix42.benchmark=true}. The variants end with the byte-level hot
+ * path, so the readable {@code send(FixMessage)} and the allocation-free
+ * {@code send(byte[])} can be compared on the same load.
  */
 @EnabledIfSystemProperty(named = "fix42.benchmark", matches = "true")
 class PublishThroughputBenchmark {
@@ -66,7 +69,45 @@ class PublishThroughputBenchmark {
                     messages, "INFO");
             viaPublisher("G. AmpsDeltaPublisher, logging at WARN", server, props,
                     messages, "WARN");
+
+            // The byte-level hot path: no FixMessage, no instruction list, no
+            // garbage after warm-up. The bytes are what a feed hands over.
+            byte[][] wire = new byte[messages.size()][];
+            for (int i = 0; i < wire.length; i++) {
+                wire[i] = messages.get(i).render().getBytes(StandardCharsets.ISO_8859_1);
+            }
+            viaHotPath("H. AmpsDeltaPublisher.send(byte[]), logging at WARN", server, props,
+                    wire);
         }
+    }
+
+    /** The same load as bytes through {@code send(byte[], int, int)}, logging off. */
+    private void viaHotPath(String label, AmpsTestServer server, Fix42Properties props,
+                            byte[][] wire) throws Exception {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger("com.demo.amps.fix42");
+        ch.qos.logback.classic.Level previous = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.WARN);
+
+        Client client = new Client("bench-" + label.charAt(0));
+        client.connect(props.amps().uri());
+        client.logon(props.amps().timeoutMs());
+        com.demo.amps.fix42.publish.AmpsDeltaPublisher publisher =
+                new com.demo.amps.fix42.publish.AmpsDeltaPublisher(
+                        client, new PublishPlanner(props), props);
+
+        long start = System.nanoTime();
+        for (byte[] message : wire) {
+            publisher.send(message, 0, message.length);
+        }
+        publisher.flush();
+        long ms = (System.nanoTime() - start) / 1_000_000;
+        long sent = publisher.fullPublishCount() + publisher.deltaPublishCount();
+        client.close();
+        logger.setLevel(previous);
+
+        System.out.printf("  %-46s %6d ms   %,9d msg/s%n",
+                label, ms, ms == 0 ? 0 : (sent * 1000L / ms));
     }
 
     /** The same load through the real publisher, at a given log level. */

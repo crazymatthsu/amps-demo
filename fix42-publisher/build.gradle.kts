@@ -126,9 +126,10 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
  * `./gradlew :fix42-publisher:publishBenchmark`.
  *
  * Starts its own AMPS container and times the same load several ways -- per
- * message flush, single flush, various setPublishBatching sizes, and through
- * the real publisher at two log levels. Numbers are hardware- and
- * network-specific, which is the point: run it where you actually publish.
+ * message flush, single flush, various setPublishBatching sizes, through the
+ * real publisher at two log levels, and through its byte-level hot path.
+ * Numbers are hardware- and network-specific, which is the point: run it
+ * where you actually publish.
  */
 tasks.register<Test>("publishBenchmark") {
     group = "verification"

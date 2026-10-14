@@ -102,9 +102,9 @@ log.info("... {}", instruction.payload().printable());
 ```
 
 renders the payload on every publish even at WARN, where the line is discarded.
-`printable()` is a `FIXBuilder` allocation plus a string copy. The call is now
-guarded by `log.isInfoEnabled()`, which is why G matches B exactly rather than
-trailing it.
+`printable()` builds a String of the payload. The call is guarded by
+`log.isInfoEnabled()`, which is why G matches B exactly rather than trailing
+it.
 
 For a production publisher, turn the per-message line off:
 
@@ -138,3 +138,24 @@ In rough order of return:
 
 Not on this list: the routing layer. At 1.6 µs per publish it would have to get
 about 100× worse before it mattered.
+
+---
+
+## 6. Garbage, which this benchmark does not show
+
+Throughput on loopback is wire-bound, so it hides what the publisher does to
+the collector. Measured separately with the JVM's per-thread allocation
+counter on this load, the original publisher created about 7.9 KB of garbage
+per message before the socket (11 KB with the INFO line on): the planner
+rebuilt its tag sets per message, rendering allocated a builder, an array per
+value and a String per publish, and the client re-encoded that String. At
+this benchmark's rate that is 40–60 MB/s from one thread, and a young
+collection every few seconds, each a 1–25 ms pause on whatever publish is in
+flight.
+
+The publisher now has a byte-level path -- `send(byte[], int, int)`, variant H
+above -- that allocates nothing once warm and plans and sends a message in
+about a microsecond; the readable `send(FixMessage)` path is down to about
+3.6 KB per message, most of it the instruction list it returns. The design is
+described in the module README under "The publish path allocates nothing",
+and `PublishPathAllocationTest` keeps it true.

@@ -1,6 +1,6 @@
 package com.demo.amps.fix42.fix;
 
-import com.crankuptheamps.client.FIXShredder;
+import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -12,12 +12,13 @@ import java.util.SequencedMap;
  *
  * <p>This is the readable representation: the mock flow builds messages with
  * the {@link Builder}, tests assert on {@link #printable()}, and the planner's
- * {@code plan(FixMessage)} reports what it would send. Encoding goes through
- * {@link FixWriter}, which writes each value's characters straight into a
- * reusable byte buffer, so rendering a message allocates only the returned
- * String; decoding goes through the AMPS client's {@code FIXShredder}. AMPS
- * parses these payloads natively, so the bytes on the wire are the server's
- * input format.
+ * {@code plan(FixMessage)} reports what it would send. The hot path never
+ * builds one -- it works on a {@link FixFrame} over the raw bytes and writes
+ * payloads with a {@link FixWriter} -- and this class encodes and decodes
+ * through those same two types, so there is one parser and one encoder.
+ * Rendering allocates only the String it returns; parsing allocates the map
+ * and its values. AMPS parses these payloads natively, so the bytes on the
+ * wire are the server's input format.
  *
  * <p>Only application-level tags are carried. BeginString (8), BodyLength (9),
  * CheckSum (10), MsgSeqNum (34) and the comp IDs belong to a FIX <i>session</i>
@@ -38,6 +39,9 @@ public final class FixMessage {
     private static final ThreadLocal<FixWriter> SCRATCH =
             ThreadLocal.withInitial(() -> new FixWriter(512));
 
+    /** One frame per thread for {@link #parse}; the frame itself is never exposed. */
+    private static final ThreadLocal<FixFrame> PARSER = ThreadLocal.withInitial(FixFrame::new);
+
     private final SequencedMap<Integer, String> tags;
 
     private FixMessage(SequencedMap<Integer, String> tags) {
@@ -49,12 +53,31 @@ public final class FixMessage {
         return new Builder().set(FixTags.MSG_TYPE, msgType);
     }
 
-    /** Parses a raw SOH-separated payload. */
+    /** Parses a raw SOH-separated payload; see {@link #parse(byte[], int, int)}. */
     public static FixMessage parse(String payload) {
-        SequencedMap<Integer, String> parsed = new LinkedHashMap<>();
-        new FIXShredder(SOH).toMap(payload)
-                .forEach((tag, value) -> parsed.put(tag, value.toString()));
-        return new FixMessage(parsed);
+        byte[] bytes = payload.getBytes(StandardCharsets.ISO_8859_1);
+        return parse(bytes, 0, bytes.length);
+    }
+
+    /**
+     * Parses {@code length} bytes of a raw SOH-separated payload from
+     * {@code offset}. Fields keep their wire order; a repeated tag keeps its
+     * first position and its last value.
+     *
+     * @throws IllegalArgumentException on a malformed field, as {@link FixFrame#wrap}
+     */
+    public static FixMessage parse(byte[] payload, int offset, int length) {
+        return of(PARSER.get().wrap(payload, offset, length));
+    }
+
+    /** The fields of {@code frame} as a message, in wire order. */
+    public static FixMessage of(FixFrame frame) {
+        int count = frame.count();
+        SequencedMap<Integer, String> fields = LinkedHashMap.newLinkedHashMap(count);
+        for (int i = 0; i < count; i++) {
+            fields.put(frame.tagAt(i), frame.valueAt(i));
+        }
+        return new FixMessage(fields);
     }
 
     /** The raw payload, SOH-separated, ready to publish. */
