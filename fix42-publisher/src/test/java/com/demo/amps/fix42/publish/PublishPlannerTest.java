@@ -160,6 +160,36 @@ class PublishPlannerTest {
     }
 
     @Test
+    @DisplayName("a whole-message route still reshapes what it projects onto the blotter")
+    void wholeMessageRouteProjectsOntoTheBlotter() {
+        // The shipped new-order rule: the audit topic gets the 35=D as sent,
+        // the blotter gets it plus the working id and the pending family.
+        Map<Integer, String> opening = new LinkedHashMap<>();
+        opening.put(FixTags.PENDING_ACTION, FixTags.PendingAction.NEW);
+        opening.put(FixTags.PENDING_ORDER_QTY, "0");
+        Fix42Properties.Route newOrder = new Fix42Properties.Route("new-order", List.of("D"),
+                List.of(), List.of(), PublishMode.FULL, List.of(), List.of(),
+                List.of("sow/fix42/orders_audit"), List.of("sow/fix42/orders"),
+                new Fix42Properties.Projection(List.of(),
+                        Map.of(FixTags.CL_ORD_ID, FixTags.WORKING_CL_ORD_ID), opening));
+        FixMessage order = FixMessage.ofType("D")
+                .set(FixTags.CL_ORD_ID, "C1")
+                .set(FixTags.SYMBOL, "AAPL")
+                .set(FixTags.ORDER_QTY, 1000)
+                .build();
+
+        List<PublishInstruction> plan = planner(newOrder).plan(order);
+
+        assertThat(plan).extracting(PublishInstruction::topic)
+                .containsExactly("sow/fix42/orders_audit", "sow/fix42/orders");
+        assertThat(plan).allSatisfy(instruction ->
+                assertThat(instruction.mode()).isEqualTo(PublishMode.FULL));
+        assertThat(plan.get(0).payload().printable()).isEqualTo(order.printable());
+        assertThat(plan.get(1).payload().printable())
+                .isEqualTo("35=D|11=C1|55=AAPL|38=1000|9014=C1|9013=NEW|9010=0|");
+    }
+
+    @Test
     @DisplayName("on the shipped topics a child slice goes where its parent does, tag 9000 and all")
     void childSliceSharesTheOrderTopics() {
         FixMessage childOrder = FixMessage.ofType("D")

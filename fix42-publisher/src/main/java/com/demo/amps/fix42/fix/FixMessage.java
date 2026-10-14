@@ -1,8 +1,5 @@
 package com.demo.amps.fix42.fix;
 
-import com.crankuptheamps.client.FIXBuilder;
-import com.crankuptheamps.client.FIXShredder;
-import com.crankuptheamps.client.exception.CommandException;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -13,11 +10,15 @@ import java.util.SequencedMap;
 /**
  * An immutable FIX 4.2 application message as an ordered tag-to-value map.
  *
- * <p>Encoding and decoding go through the AMPS client's own {@code FIXBuilder}
- * and {@code FIXShredder} rather than string splicing, the same choice
- * {@code common}'s {@code FixWire} makes: AMPS parses these payloads natively,
- * so the bytes on the wire are the server's input format and worth building
- * with the vendor's helper.
+ * <p>This is the readable representation: the mock flow builds messages with
+ * the {@link Builder}, tests assert on {@link #printable()}, and the planner's
+ * {@code plan(FixMessage)} reports what it would send. The hot path never
+ * builds one -- it works on a {@link FixFrame} over the raw bytes and writes
+ * payloads with a {@link FixWriter} -- and this class encodes and decodes
+ * through those same two types, so there is one parser and one encoder.
+ * Rendering allocates only the String it returns; parsing allocates the map
+ * and its values. AMPS parses these payloads natively, so the bytes on the
+ * wire are the server's input format.
  *
  * <p>Only application-level tags are carried. BeginString (8), BodyLength (9),
  * CheckSum (10), MsgSeqNum (34) and the comp IDs belong to a FIX <i>session</i>
@@ -31,6 +32,16 @@ public final class FixMessage {
     /** The standard FIX field separator. */
     public static final byte SOH = 0x01;
 
+    /**
+     * One writer per thread for {@link #render()} and {@link #printable()}.
+     * Both return a fresh String, but neither needs a fresh buffer to build it.
+     */
+    private static final ThreadLocal<FixWriter> SCRATCH =
+            ThreadLocal.withInitial(() -> new FixWriter(512));
+
+    /** One frame per thread for {@link #parse}; the frame itself is never exposed. */
+    private static final ThreadLocal<FixFrame> PARSER = ThreadLocal.withInitial(FixFrame::new);
+
     private final SequencedMap<Integer, String> tags;
 
     private FixMessage(SequencedMap<Integer, String> tags) {
@@ -42,30 +53,53 @@ public final class FixMessage {
         return new Builder().set(FixTags.MSG_TYPE, msgType);
     }
 
-    /** Parses a raw SOH-separated payload. */
+    /** Parses a raw SOH-separated payload; see {@link #parse(byte[], int, int)}. */
     public static FixMessage parse(String payload) {
-        SequencedMap<Integer, String> parsed = new LinkedHashMap<>();
-        new FIXShredder(SOH).toMap(payload)
-                .forEach((tag, value) -> parsed.put(tag, value.toString()));
-        return new FixMessage(parsed);
+        byte[] bytes = payload.getBytes(StandardCharsets.ISO_8859_1);
+        return parse(bytes, 0, bytes.length);
+    }
+
+    /**
+     * Parses {@code length} bytes of a raw SOH-separated payload from
+     * {@code offset}. Fields keep their wire order; a repeated tag keeps its
+     * first position and its last value.
+     *
+     * @throws IllegalArgumentException on a malformed field, as {@link FixFrame#wrap}
+     */
+    public static FixMessage parse(byte[] payload, int offset, int length) {
+        return of(PARSER.get().wrap(payload, offset, length));
+    }
+
+    /** The fields of {@code frame} as a message, in wire order. */
+    public static FixMessage of(FixFrame frame) {
+        int count = frame.count();
+        SequencedMap<Integer, String> fields = LinkedHashMap.newLinkedHashMap(count);
+        for (int i = 0; i < count; i++) {
+            fields.put(frame.tagAt(i), frame.valueAt(i));
+        }
+        return new FixMessage(fields);
     }
 
     /** The raw payload, SOH-separated, ready to publish. */
     public String render() {
-        try {
-            FIXBuilder builder = new FIXBuilder(512, SOH);
-            for (Map.Entry<Integer, String> field : tags.entrySet()) {
-                builder.append(field.getKey(), field.getValue());
-            }
-            return new String(builder.getBytes(), 0, builder.getSize(), StandardCharsets.UTF_8);
-        } catch (CommandException e) {
-            throw new IllegalStateException("cannot encode FIX message " + tags, e);
-        }
+        return writeTo(scratch()).asString();
     }
 
     /** The payload with separators rendered as {@code |}, for logs and assertions. */
     public String printable() {
-        return render().replace((char) SOH, '|');
+        return writeTo(scratch()).printable();
+    }
+
+    /**
+     * Appends every field to {@code writer}, in wire order, and returns the
+     * writer. The only allocation is the map iterator; the values are written
+     * char by char into the writer's buffer.
+     */
+    public FixWriter writeTo(FixWriter writer) {
+        for (Map.Entry<Integer, String> field : tags.entrySet()) {
+            writer.field(field.getKey(), field.getValue());
+        }
+        return writer;
     }
 
     public String msgType() {
@@ -126,6 +160,12 @@ public final class FixMessage {
         return printable();
     }
 
+    private static FixWriter scratch() {
+        FixWriter writer = SCRATCH.get();
+        writer.clear();
+        return writer;
+    }
+
     /** Mutable builder; values are rendered as text exactly as FIX requires. */
     public static final class Builder {
 
@@ -157,6 +197,15 @@ public final class FixMessage {
         /** Sets a tag only when the condition holds; keeps fixtures declarative. */
         public Builder setIf(boolean condition, int tag, String value) {
             return condition ? set(tag, value) : this;
+        }
+
+        /**
+         * Sets every field of {@code message}, in its order. A tag already set
+         * keeps its position and takes the new value, as {@link #set} does.
+         */
+        public Builder setAll(FixMessage message) {
+            tags.putAll(message.tags);
+            return this;
         }
 
         public FixMessage build() {

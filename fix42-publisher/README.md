@@ -290,6 +290,43 @@ accounting is [docs/fix42-view/](../docs/fix42-view/README.md), with the
 measurements behind this section in
 [04](../docs/fix42-view/04-pending-state-without-a-state-machine.md).
 
+## The publish path allocates nothing
+
+A publisher that runs all day at tens of thousands of messages a second is
+judged by its tail latency, and in a JVM the tail is set by garbage
+collection. So the path a feed takes through this module creates no objects
+once it is warm:
+
+- [`FixFrame`](src/main/java/com/demo/amps/fix42/fix/FixFrame.java) is a
+  reusable view over the raw bytes. One pass records each field's tag and
+  where its value lies; lookups scan that index. Nothing is copied, and no
+  `String` is made unless a log line asks for one.
+- [`FixWriter`](src/main/java/com/demo/amps/fix42/fix/FixWriter.java) is a
+  reusable output buffer. A delta payload is the selected fields copied from
+  the frame straight into it; a projected payload is the same with the
+  copy-tags renamed and the literals, encoded once per route at startup,
+  appended.
+- [`PublishPlan`](src/main/java/com/demo/amps/fix42/publish/PublishPlan.java)
+  holds the result -- topic, command and payload bytes per publish -- in
+  entries that are reset per message rather than created.
+- `AmpsDeltaPublisher.send(byte[], int, int)` hands each payload to the AMPS
+  client's byte-array overloads, which copy it into the transport's send
+  buffer before returning, so the plan's buffers are reused at once.
+
+`PublishPlanner.plan(FixMessage)` and `AmpsDeltaPublisher.send(FixMessage)`
+remain, and the mock flow, the fixtures and most tests use them. They run the
+same code on the rendered message and then materialize what was sent, so the
+readable path and the fast path cannot disagree.
+
+[`PublishPathAllocationTest`](src/test/java/com/demo/amps/fix42/publish/PublishPathAllocationTest.java)
+pins the property with the JVM's own per-thread allocation counter: the whole
+mock flow, planned and sent thousands of times over, allocates nothing. On
+the benchmark load the readable path went from about 7.9 KB of garbage per
+message to 3.6 KB (most of it the instructions it returns), the byte path to
+none, and `FixMessage.parse` to half of what it was; the per-publish INFO line
+is the one thing left that allocates, and `WARN` turns it off. The benchmark's
+variant H times the byte path against the others.
+
 ## Tests
 
 ```bash
