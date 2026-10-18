@@ -215,9 +215,9 @@ that have to be true for that to hold, including the one that is easy to miss
 -> [amps-ha-demo/README.md](amps-ha-demo/README.md)
 for the run guide, the test's four stages, the replication config explained
 element by element, and the client behaviours worth knowing; and
-[amps-ha-demo/docs/replication-and-the-transaction-log.md](amps-ha-demo/docs/replication-and-the-transaction-log.md)
-for why a replicated SOW topic must be journaled, and what that journal costs
-once it is.
+[amps-ha-demo/docs/](amps-ha-demo/docs/README.md) for the design notes: why a
+replicated SOW topic must be journaled and what that journal costs once it is,
+and what the value of a bookmark actually is.
 
 ## Operator tools
 
