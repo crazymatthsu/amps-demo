@@ -58,6 +58,14 @@
             <FileName>./sow/orders.sow</FileName>
             <Durability>persistent</Durability>
         </Topic>
+        <Topic>
+            <Name>/ADMIN/bookmark_store</Name>
+            <MessageType>json</MessageType>
+            <Key>/clientName</Key>
+            <Key>/subId</Key>
+            <FileName>./sow/bookmark_store.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
     </SOW>
 
     <TransactionLog>
@@ -66,6 +74,10 @@
         <MinJournalSize>10MB</MinJournalSize>
         <Topic>
             <Name>orders</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <Topic>
+            <Name>/ADMIN/bookmark_store</Name>
             <MessageType>json</MessageType>
         </Topic>
     </TransactionLog>
@@ -78,6 +90,10 @@
             <PassThrough>.*</PassThrough>
             <Topic>
                 <Name>orders</Name>
+                <MessageType>json</MessageType>
+            </Topic>
+            <Topic>
+                <Name>/ADMIN/bookmark_store</Name>
                 <MessageType>json</MessageType>
             </Topic>
             <Transport>

@@ -2,9 +2,11 @@
  * amps-ha-demo: a replicated AMPS pair (primary + secondary, synchronous
  * replication in both directions) and the two client shapes that survive
  * losing one of them -- a publisher on an HAClient with a publish store, a
- * consumer on an HAClient with a bookmark store -- plus the proof: an
- * integration test that kills an instance mid-stream and checks that every
- * message published arrived exactly once.
+ * consumer on an HAClient with a bookmark store whose position is also kept
+ * in a replicated SOW topic, so the consumer can move machines -- plus the
+ * proof: an integration test that kills an instance mid-stream, then the
+ * consumer's machine, and checks that every message published arrived
+ * exactly once.
  *
  *   ./amps-ha-demo/scripts/ha-compose.sh start        # both instances in podman
  *   ./gradlew :amps-ha-demo:run --args="both"         # publisher + consumer, one JVM
@@ -17,7 +19,8 @@
  *   integrationTest   the failover itself, on Testcontainers: two AMPS
  *                     containers on one network, the clients pointed at both,
  *                     the primary killed while the publisher is mid-stream,
- *                     then brought back and the secondary killed. Skipped
+ *                     then brought back and the secondary killed, then the
+ *                     consumer replaced by one with no local state. Skipped
  *                     when AMPS_IMAGE is unset or no Docker API is reachable.
  */
 plugins {

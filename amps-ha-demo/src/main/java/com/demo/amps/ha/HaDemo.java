@@ -2,6 +2,7 @@ package com.demo.amps.ha;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -19,12 +20,25 @@ import org.slf4j.LoggerFactory;
  *   ./amps-ha-demo/scripts/ha-compose.sh kill secondary
  * </pre>
  *
+ * <p>The consumer's bookmarks are replicated to a SOW topic on the pair as
+ * well as kept in its store, so the consumer itself can be moved:
+ *
+ * <pre>
+ *   ./gradlew :amps-ha-demo:run --args="consumer" -Dha.bookmark=recent   # machine A
+ *   ./gradlew :amps-ha-demo:run --args="publisher" -Dha.count=100000     # traffic to consume
+ *   Ctrl-C the consumer. Then, anywhere, with no state of its own:
+ *   ./gradlew :amps-ha-demo:run --args="consumer" -Dha.bookmark=recent   # machine B, resumes
+ *   ./gradlew :amps-ha-demo:run --args="bookmarks"                        # what each instance holds
+ * </pre>
+ *
  * <p>Settings come from {@code -Dha.*} or {@code HA_*}; see {@link HaSettings}.
  * The interesting ones: {@code ha.count} and {@code ha.intervalMs} decide how
  * long the run lasts (the default is a minute, enough to pull two plugs by
  * hand), {@code ha.stateDir} switches to file-backed stores so the demo itself
- * can be killed and restarted, and {@code ha.bookmark=epoch} replays the whole
- * journal into the consumer's per-run ledgers.
+ * can be killed and restarted, {@code ha.bookmark=epoch} replays the whole
+ * journal into the consumer's per-run ledgers, and
+ * {@code ha.recoveryPointTopic} names the SOW topic the bookmarks go to
+ * ({@code none} keeps them local).
  *
  * <p>The exit code is the verdict in {@code both} mode: {@code 0} when every
  * message the publisher sent reached the consumer exactly once and in order,
@@ -49,9 +63,11 @@ public final class HaDemo {
             case "publisher" -> runPublisher(settings);
             case "consumer" -> runConsumer(settings);
             case "both" -> runBoth(settings);
+            case "bookmarks" -> runBookmarks(settings);
             default -> {
-                System.err.println("usage: amps-ha-demo [publisher|consumer|both]   (settings: -Dha.uris, -Dha.topic, "
-                        + "-Dha.count, -Dha.intervalMs, -Dha.publisher, -Dha.consumer, -Dha.bookmark, -Dha.stateDir, -Dha.run)");
+                System.err.println("usage: amps-ha-demo [publisher|consumer|both|bookmarks]   (settings: -Dha.uris, "
+                        + "-Dha.topic, -Dha.count, -Dha.intervalMs, -Dha.publisher, -Dha.consumer, -Dha.bookmark, "
+                        + "-Dha.stateDir, -Dha.run, -Dha.recoveryPointTopic)");
                 yield 2;
             }
         };
@@ -60,8 +76,10 @@ public final class HaDemo {
 
     /** Publisher and consumer in one process; the verdict is the exit code. */
     static int runBoth(HaSettings settings) throws Exception {
-        try (HaClients.Connected consuming = HaClients.consumer(settings.consumerName(), settings.uris(), settings.stateDir());
-             HaClients.Connected publishing = HaClients.publisher(settings.publisherName(), settings.uris(), settings.stateDir())) {
+        try (HaClients.Connected consuming = HaClients.consumer(settings.consumerName(), settings.uris(),
+                     settings.stateDir(), settings.recoveryPointTopic());
+             HaClients.Connected publishing = HaClients.publisher(settings.publisherName(), settings.uris(),
+                     settings.stateDir())) {
             OrderConsumer consumer = new OrderConsumer(consuming.client(), settings.topic(), settings.consumerName());
             consumer.start(settings.bookmarkValue());
             OrderPublisher publisher = new OrderPublisher(publishing.client(), settings.topic(), settings.run());
@@ -85,6 +103,9 @@ public final class HaDemo {
 
             log.info("publisher connection journal:\n{}", publishing.journal().describe());
             log.info("consumer connection journal:\n{}", consuming.journal().describe());
+            if (consuming.replicatedBookmarks() != null) {
+                log.info("bookmark tracker connection journal:\n{}", consuming.replicatedBookmarks().journal().describe());
+            }
             return verdict(settings, publisher, publishing.journal(), consuming.journal(), ledger, flushed, drained);
         }
     }
@@ -114,14 +135,21 @@ public final class HaDemo {
 
     /**
      * Consumer only: subscribe and report until interrupted, or until a run
-     * reaches {@code ha.count} messages.
+     * reaches {@code ha.count} messages. A consumer that resumed from a
+     * recovery point reports the messages its predecessor consumed as
+     * missing: the ledger is this process's, the position is not.
      */
     static int runConsumer(HaSettings settings) throws Exception {
         AtomicBoolean stop = new AtomicBoolean();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> stop.set(true)));
-        try (HaClients.Connected consuming = HaClients.consumer(settings.consumerName(), settings.uris(), settings.stateDir())) {
+        try (HaClients.Connected consuming = HaClients.consumer(settings.consumerName(), settings.uris(),
+                settings.stateDir(), settings.recoveryPointTopic())) {
             OrderConsumer consumer = new OrderConsumer(consuming.client(), settings.topic(), settings.consumerName());
             consumer.start(settings.bookmarkValue());
+            if (settings.recoveryPointTopic() != null && !"recent".equals(settings.bookmark())) {
+                log.info("bookmarks replicate to '{}': a consumer started with -Dha.bookmark=recent, on any machine, "
+                        + "resumes from there", settings.recoveryPointTopic());
+            }
             log.info("consuming; a run is complete at {} messages. Ctrl-C to stop.", settings.count());
             while (!stop.get()) {
                 Thread.sleep(STATUS_EVERY.toMillis());
@@ -140,6 +168,35 @@ public final class HaDemo {
             }
             return 0;
         }
+    }
+
+    /**
+     * The recovery points each instance holds -- what a consumer started
+     * anywhere would resume from. Worth reading before and after moving one.
+     */
+    static int runBookmarks(HaSettings settings) {
+        if (settings.recoveryPointTopic() == null) {
+            log.info("ha.recoveryPointTopic is '{}': bookmarks stay in each consumer's local store, there is nothing "
+                    + "on the instances to show", HaSettings.NO_RECOVERY_POINT_TOPIC);
+            return 1;
+        }
+        int reachable = 0;
+        for (String uri : settings.uris()) {
+            try {
+                List<RecoveryPoints.Entry> entries = RecoveryPoints.read(uri, settings.recoveryPointTopic(), null);
+                reachable++;
+                if (entries.isEmpty()) {
+                    log.info("{}: '{}' holds no recovery points", uri, settings.recoveryPointTopic());
+                }
+                for (RecoveryPoints.Entry entry : entries) {
+                    log.info("{}: client '{}' subscription '{}' resumes from {}", uri, entry.clientName(),
+                            entry.subId(), entry.bookmark());
+                }
+            } catch (Exception e) {
+                log.warn("{}: not reachable ({})", uri, e.toString());
+            }
+        }
+        return reachable > 0 ? 0 : 1;
     }
 
     private static boolean awaitAll(SequenceLedger ledger, long expected, Duration timeout) throws InterruptedException {

@@ -22,7 +22,7 @@ amps-demo/
 ├── fix-pub-seqno/  FIX publisher sequence recovery: find the last tag 8888 AMPS holds, republish the gap
 ├── quickfixj-v2-demo/  QuickFIX/J 2.x drop-copy engine on Spring Boot + Spring Integration, sequence numbers replicated to AMPS for failover
 ├── amps-connectors/  source -> AMPS connector framework (TCP, Kafka, JDBC, Hazelcast, AMPS) with resources, rules, alerts and a control channel + the generic Spring Boot runner its config tree deploys
-├── amps-ha-demo/  a replicated AMPS pair (primary + secondary) with an HAClient publisher and consumer, and a Testcontainers failover test that kills an instance mid-stream and proves nothing was lost
+├── amps-ha-demo/  a replicated AMPS pair (primary + secondary) with an HAClient publisher and consumer, the consumer's bookmarks replicated to a SOW topic so it can move machines, and a Testcontainers failover test that kills an instance mid-stream and proves nothing was lost
 └── docs/      the written half, link-checked by the build
 ```
 
@@ -193,15 +193,18 @@ for the batch and nothing else.
 
 `amps-ha-demo` is **high availability**: two AMPS instances replicating to
 each other with synchronous acknowledgment, a publisher on an `HAClient` with a
-publish store, a consumer on an `HAClient` with a bookmark store, and the
-proof. Its integration test starts both instances as Testcontainers,
-SIGKILLs the primary while the publisher is mid-stream, brings it back, kills
-the secondary, and checks that every message reached the consumer exactly
-once and in order -- and that a brand-new consumer replays the whole run from
-the survivor. The write-up names the five things that have to be true for that
-to hold, including the one that is easy to miss (`fully_durable` on the
-subscription) and the price of synchronous replication (the scheduled link
-downgrade while a peer is down).
+publish store, a consumer on an `HAClient` with a bookmark store whose position
+is also kept in a replicated SOW topic through the client library's
+`SOWRecoveryPointAdapter`, and the proof. Its integration test starts both
+instances as Testcontainers, SIGKILLs the primary while the publisher is
+mid-stream, brings it back, kills the secondary, and checks that every message
+reached the consumer exactly once and in order -- that a brand-new consumer
+replays the whole run from the survivor -- and that a replacement consumer on
+another machine, with no files of its own and only the other instance to talk
+to, resumes from the bookmark the SOW holds. The write-up names the five things
+that have to be true for that to hold, including the one that is easy to miss
+(`fully_durable` on the subscription) and the price of synchronous replication
+(the scheduled link downgrade while a peer is down).
 
 ```bash
 ./amps-ha-demo/scripts/ha-compose.sh start          # both instances in podman

@@ -2,7 +2,9 @@
 
 Two AMPS instances replicating to each other, a publisher and a consumer that
 survive losing either one, and a test that proves it: kill an instance while
-messages are in flight and every message still arrives, once, in order.
+messages are in flight and every message still arrives, once, in order. The
+consumer's bookmarks are replicated to a SOW topic on the pair as well, so the
+consumer itself can be moved to another machine and resume where it stopped.
 
 ```
 amps-ha-demo/
@@ -10,7 +12,7 @@ amps-ha-demo/
 ├── config/secondary/amps-config.xml   instance "amps-ha-secondary" (same, mirrored)
 ├── compose.yml                        both instances on one network, in podman
 ├── scripts/ha-compose.sh              start / failover / revive / status / validate
-├── src/main/java/com/demo/amps/ha/    HAClient publisher + consumer, and the demo main
+├── src/main/java/com/demo/amps/ha/    HAClient publisher + consumer (bookmarks in a replicated SOW topic), the demo main
 └── src/integrationTest/java/          the failover on Testcontainers
 ```
 
@@ -63,14 +65,79 @@ and exits non-zero if the counts say otherwise. `publisher` and `consumer`
 run the halves in separate JVMs; settings are `-Dha.*` system properties or
 `HA_*` environment variables (`ha.uris`, `ha.topic`, `ha.count`,
 `ha.intervalMs`, `ha.publisher`, `ha.consumer`, `ha.bookmark`, `ha.stateDir`,
-`ha.run` -- see [`HaSettings`](src/main/java/com/demo/amps/ha/HaSettings.java)).
+`ha.run`, `ha.recoveryPointTopic` -- see
+[`HaSettings`](src/main/java/com/demo/amps/ha/HaSettings.java)).
 `-Dha.stateDir=data` switches to file-backed publish and bookmark stores, so
 the demo process itself can be killed and restarted and still lose nothing.
+The consumer's position also goes to a SOW topic on the pair, whatever the
+store -- see [Moving the consumer](#moving-the-consumer-to-another-machine).
 
 Host ports: primary `9007`/`9008`/`8085`, secondary `9107`/`9108`/`8185`
 (client / websocket / admin). The admin consoles at
 `http://127.0.0.1:8085/` and `http://127.0.0.1:8185/` show each instance's
 view of the replication link.
+
+## Moving the consumer to another machine
+
+A bookmark store answers "where was I?" after a reconnect, but only on the
+machine that holds it. The consumer here gets the same answer from the pair:
+its store is built over the AMPS client library's `SOWRecoveryPointAdapter`,
+which writes the subscription's resume position, every time it moves, to the
+SOW topic `/ADMIN/bookmark_store` -- one JSON record per client name and
+subscription id -- and reads it back when a store is created under that client
+name. The topic is journaled and replicated like `orders`, so the record is on
+both instances. A consumer started on a machine that has none of the previous
+one's files, against whichever instance survived, carries on from the next
+message:
+
+```bash
+# machine A
+./gradlew :amps-ha-demo:run --args="consumer" -Dha.bookmark=recent
+# somewhere: traffic to consume, a long run of it
+./gradlew :amps-ha-demo:run --args="publisher" -Dha.count=100000
+# Ctrl-C the consumer. What the pair remembers of it, from each instance:
+./gradlew :amps-ha-demo:run --args="bookmarks"
+#   tcp://127.0.0.1:9007/amps/json: client 'ha-demo-consumer' subscription 'ha-demo-consumer' resumes from 17434824616529380601|12345|
+#   tcp://127.0.0.1:9107/amps/json: client 'ha-demo-consumer' subscription 'ha-demo-consumer' resumes from 17434824616529380601|12345|
+# machine B: no files, no -Dha.stateDir, the same client name
+./gradlew :amps-ha-demo:run --args="consumer" -Dha.bookmark=recent
+#   [ha-demo-consumer] subscribed to orders as 'ha-demo-consumer' from bookmark '17434824616529380601|12345|' (asked for 'recent', fully_durable)
+```
+
+(`ha-compose.sh bookmarks` runs the third command against the stack's ports.)
+`ha.bookmark=recent` is what asks the store for its position; the default
+`now` ignores it, and `epoch` deletes it and starts over. The ledger the
+replacement reports is its own, so it shows the messages machine A consumed as
+missing; what it must show is that it started at the next one and lost nothing
+after it, which is what the test's fourth stage asserts.
+
+Three things about the adapter are worth knowing:
+
+- **It is a second client.** The adapter may not use the consumer's own client
+  (it publishes and queries while that client is subscribing; the library
+  refuses the same name), so a consumer with replicated bookmarks is two
+  `HAClient`s: `ha-demo-consumer` and `ha-demo-consumer-bookmarks`, both on
+  the same server chooser, both failing over. The tracker carries a publish
+  store for the reason the publisher does: a recovery point whose
+  acknowledgment died with an instance is replayed to the survivor.
+- **The position is conservative.** What the store writes is the bookmark of
+  the last *persisted acknowledgment* the server sent the subscription, or the
+  last message discarded if that is older -- never a message still being
+  processed. A replacement therefore starts at, or a moment before, where its
+  predecessor stopped, and may see a short tail of messages that one had
+  already processed: at-least-once, which is what a bookmark store promises
+  across a crash. (In the same process the store filters those itself; a store
+  built from the record only knows what the record says.)
+- **It costs a publish per message.** Every discard that moves the position
+  is a publish on the tracker, journaled and replicated like the orders --
+  nothing at this demo's rates. At high rates, wrap the adapter in the
+  library's `ConflatingRecoveryPointAdapter`, which batches updates on a
+  thread of its own and widens that tail accordingly.
+
+`ha.recoveryPointTopic` names the topic (default `/ADMIN/bookmark_store`, the
+library's own default); `none` keeps bookmarks in the local store only, which
+is how the demo behaved before -- and how a replacement elsewhere starts from
+scratch.
 
 ## The test
 
@@ -94,6 +161,7 @@ publisher numbers messages `1..N` and a consumer keeps a
 | 1 | publishing `1..600`; at `200` the **primary is SIGKILLed** | every number `1..600` received once, in order; both clients now logged on to the secondary; the secondary's SOW holds all 600 |
 | 2 | the primary is **started again on its own data** and catches up, and the secondary's link to it is **upgraded back to sync**; publishing `601..1000`; at `800` the **secondary is SIGKILLed** | every number `1..1000` received once, in order; both clients back on the primary; the primary's SOW holds all 1000, including what was published to the secondary while the primary was dead |
 | 3 | a **brand-new consumer** replays the topic from the epoch | exactly `1..1000`, once, from the survivor's journal |
+| 4 | the secondary is **revived** and catches up; the **consumer process is closed** and the **primary is SIGKILLed**; publishing `1001..1200` with no consumer running; then a **replacement consumer** with the same client name, no files and only the secondary to talk to starts from `recent` | the consumer's recovery point is in the SOW on **both** instances before the kill; the replacement subscribes from it, not from the epoch; it receives every message `1001..1200` once, in order, and at most a short tail of what its predecessor had already processed; the record then follows the replacement |
 
 SIGKILL rather than a stop, because a stop lets AMPS flush and say goodbye to
 its peer; a crash does not, and the crash is the case the clients' stores
@@ -133,13 +201,19 @@ it) is dropped by the server as a duplicate of the same **client name** and
 client name is therefore the identity everything hangs off: stable across runs,
 unique among connected clients.
 
-**3. A bookmark store on the consumer.** `HAClient` with a
-`LoggedBookmarkStore` (file) or `MemoryBookmarkStore`, and a bookmark
-subscription. After a reconnect the client re-issues the subscription from the
-store's most recent position, and the store filters redelivery of anything it
-has already logged. Bookmarks survive replication unchanged -- a message keeps
-the bookmark of the instance that first accepted it -- so the position held on
-the dead instance means the same thing on the survivor.
+**3. A bookmark store on the consumer, with its position in a SOW topic.**
+`HAClient` with a `MemoryBookmarkStore` or, with `ha.stateDir`, a
+`LoggedBookmarkStore` (file), and a bookmark subscription. After a reconnect
+the client re-issues the subscription from the store's most recent position,
+and the store filters redelivery of anything it has already logged. Bookmarks
+survive replication unchanged -- a message keeps the bookmark of the instance
+that first accepted it -- so the position held on the dead instance means the
+same thing on the survivor. The store is built over the client library's
+`SOWRecoveryPointAdapter`, which writes that position to the
+`/ADMIN/bookmark_store` SOW topic (keyed on client name and subscription id,
+journaled and replicated like the orders) and reads it back when a store is
+created, so the position outlives the consumer's machine as well as the
+instance -- see [Moving the consumer](#moving-the-consumer-to-another-machine).
 
 **4. `fully_durable` on the subscription.** This is the one that is easy to
 miss. By default AMPS delivers a message to a subscriber as soon as the local
@@ -193,6 +267,7 @@ The interesting elements:
 | `<Transport><Type>amps-replication</Type><InetAddr>9010</InetAddr>` | the incoming replication transport; one per instance, replication only |
 | `<Replication><Destination>` | the outgoing link: `Topic` (name is a regex), `Group`, `SyncType`, `PassThrough`, `Transport` |
 | `<TransactionLog><Topic>` | replicated topics must be journaled |
+| `<SOW><Topic>` `/ADMIN/bookmark_store` | the consumers' recovery points: JSON, keyed on `/clientName` and `/subId` (the client library's defaults); journaled and in the Destination like `orders`, so each instance holds every consumer's position |
 | `<Actions>` | the scheduled downgrade/upgrade described above |
 
 `scripts/ha-compose.sh validate` runs the server's own `--verify-config` on
