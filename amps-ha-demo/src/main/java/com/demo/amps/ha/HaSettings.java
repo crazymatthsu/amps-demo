@@ -13,25 +13,46 @@ import java.util.function.Function;
  * Where the pair is and what to publish, from {@code -Dha.*} system
  * properties, then {@code HA_*} environment variables, then defaults.
  *
- * @param uris          both instances' client URIs, in the order the HA client
- *                      tries them. The defaults are the compose stack's host ports.
- * @param topic         the replicated SOW topic
- * @param count         how many messages the publisher sends
- * @param interval      pause between publishes, so a human has time to pull a plug
- * @param publisherName the publisher's client name -- the identity AMPS
- *                      de-duplicates a replay under, so it must be stable
- * @param consumerName  the consumer's client name
- * @param bookmark      where the consumer starts: {@code now}, {@code epoch} or {@code recent}
- * @param stateDir      where file-backed publish and bookmark stores live, or
- *                      {@code null} for in-memory stores
- * @param run           a tag for this publisher run, part of every record's SOW key
+ * @param uris               both instances' client URIs, in the order the HA client
+ *                           tries them. The defaults are the compose stack's host ports.
+ * @param topic              the replicated SOW topic
+ * @param count              how many messages the publisher sends
+ * @param interval           pause between publishes, so a human has time to pull a plug
+ * @param publisherName      the publisher's client name -- the identity AMPS
+ *                           de-duplicates a replay under, so it must be stable
+ * @param consumerName       the consumer's client name -- also what its recovery
+ *                           point is filed under in {@code recoveryPointTopic}, so
+ *                           a replacement consumer must use the same one
+ * @param bookmark           where the consumer starts: {@code now}, {@code epoch} or
+ *                           {@code recent}. {@code recent} resumes where the bookmark
+ *                           store says, which after a restart is what the recovery
+ *                           point topic holds; {@code epoch} starts over, and deletes
+ *                           that recovery point first
+ * @param stateDir           where file-backed publish and bookmark stores live, or
+ *                           {@code null} for in-memory stores
+ * @param run                a tag for this publisher run, part of every record's SOW key
+ * @param recoveryPointTopic the SOW topic the consumer's bookmarks are replicated to,
+ *                           through the AMPS client's {@code SOWRecoveryPointAdapter},
+ *                           so that a consumer restarted on another machine resumes
+ *                           from it; {@code null} ({@code ha.recoveryPointTopic=none})
+ *                           keeps bookmarks in the local store only
  */
 public record HaSettings(List<String> uris, String topic, long count, Duration interval,
                          String publisherName, String consumerName, String bookmark,
-                         Path stateDir, String run) {
+                         Path stateDir, String run, String recoveryPointTopic) {
 
     public static final String DEFAULT_URIS =
             "tcp://127.0.0.1:9007/amps/json,tcp://127.0.0.1:9107/amps/json";
+
+    /**
+     * The AMPS Java client's default topic for a {@code SOWRecoveryPointAdapter}.
+     * Both instance configs define it: a JSON SOW topic keyed on
+     * {@code /clientName} and {@code /subId}, journaled and replicated.
+     */
+    public static final String DEFAULT_RECOVERY_POINT_TOPIC = "/ADMIN/bookmark_store";
+
+    /** The {@code ha.recoveryPointTopic} value that keeps bookmarks local. */
+    public static final String NO_RECOVERY_POINT_TOPIC = "none";
 
     /** From the JVM's system properties and environment. */
     public static HaSettings fromEnvironment() {
@@ -59,6 +80,10 @@ public record HaSettings(List<String> uris, String topic, long count, Duration i
         if (!List.of("now", "epoch", "recent").contains(bookmark)) {
             throw new IllegalArgumentException("ha.bookmark must be now, epoch or recent, not '" + bookmark + "'");
         }
+        String recoveryPointTopic = or(lookup.apply("recoveryPointTopic"), DEFAULT_RECOVERY_POINT_TOPIC);
+        if (NO_RECOVERY_POINT_TOPIC.equalsIgnoreCase(recoveryPointTopic)) {
+            recoveryPointTopic = null;
+        }
         return new HaSettings(
                 Arrays.stream(uris.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList(),
                 or(lookup.apply("topic"), "orders"),
@@ -68,7 +93,8 @@ public record HaSettings(List<String> uris, String topic, long count, Duration i
                 or(lookup.apply("consumer"), "ha-demo-consumer"),
                 bookmark,
                 stateDir == null ? null : Path.of(stateDir),
-                or(lookup.apply("run"), LocalDateTime.now().format(DateTimeFormatter.ofPattern("HHmmss"))));
+                or(lookup.apply("run"), LocalDateTime.now().format(DateTimeFormatter.ofPattern("HHmmss"))),
+                recoveryPointTopic);
     }
 
     /** The AMPS bookmark string for {@link #bookmark()}. */

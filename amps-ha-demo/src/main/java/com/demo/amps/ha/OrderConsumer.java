@@ -1,9 +1,12 @@
 package com.demo.amps.ha;
 
+import com.crankuptheamps.client.BookmarkStore;
+import com.crankuptheamps.client.Client;
 import com.crankuptheamps.client.Command;
 import com.crankuptheamps.client.HAClient;
 import com.crankuptheamps.client.Message;
 import com.crankuptheamps.client.exception.AMPSException;
+import com.crankuptheamps.client.fields.Field;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -33,7 +36,10 @@ import org.slf4j.LoggerFactory;
  * between the two redelivers a message the ledger then counts as a duplicate;
  * a crash before recording redelivers one it has never seen. That is
  * at-least-once, and the ledger is what shows whether it ever became
- * more-than-once in practice.
+ * more-than-once in practice. The discard is also what moves the recovery
+ * point the store's adapter replicates (see {@link HaClients}): a replacement
+ * consumer resumes at or before the last message discarded here, never after
+ * one still being processed.
  */
 public final class OrderConsumer implements AutoCloseable {
 
@@ -45,12 +51,15 @@ public final class OrderConsumer implements AutoCloseable {
     private final ConcurrentMap<String, SequenceLedger> ledgers = new ConcurrentHashMap<>();
     private final AtomicLong received = new AtomicLong();
     private final AtomicLong unrecognised = new AtomicLong();
+    private volatile String startedFrom;
+    private volatile String lastBookmark;
 
     /**
      * @param client a connected HA client with a bookmark store
      * @param topic  the replicated SOW topic
-     * @param subId  the subscription id -- what the bookmark store files its
-     *               position under, so it must be stable across runs
+     * @param subId  the subscription id -- what the bookmark store, and the
+     *               recovery point topic, file its position under, so it must
+     *               be stable across runs
      */
     public OrderConsumer(HAClient client, String topic, String subId) {
         this.client = client;
@@ -61,17 +70,33 @@ public final class OrderConsumer implements AutoCloseable {
     /**
      * Starts the subscription from {@code bookmark} -- {@code EPOCH} for
      * everything the journal holds, {@code NOW} for new messages only, or
-     * {@code MOST_RECENT} to resume where the bookmark store says.
+     * {@code MOST_RECENT} to resume where the bookmark store says, which after
+     * a restart is what the store recovered from its recovery point adapter.
+     *
+     * <p>{@code EPOCH} first purges the subscription's state from the store
+     * and, through the adapter, from the recovery point topic. A store that
+     * remembered the previous position would otherwise filter the first part
+     * of the replay as already seen, and "epoch" would quietly mean "since the
+     * recovery point". Starting over means starting over.
      */
     public void start(String bookmark) throws AMPSException {
+        BookmarkStore store = client.getBookmarkStore();
+        Field subIdField = new Field(subId);
+        if (Client.Bookmarks.EPOCH.equals(bookmark)) {
+            store.purge(subIdField);
+        }
+        String from = Client.Bookmarks.MOST_RECENT.equals(bookmark)
+                ? store.getMostRecent(subIdField).toString()
+                : bookmark;
+        startedFrom = from;
         Command subscribe = new Command("subscribe")
                 .setTopic(topic)
                 .setSubId(subId)
                 .setBookmark(bookmark)
                 .setOptions(Message.Options.FullyDurable);
         client.executeAsync(subscribe, this::onMessage);
-        log.info("[{}] subscribed to {} from bookmark '{}' (fully_durable) as '{}'",
-                client.getName(), topic, bookmark, subId);
+        log.info("[{}] subscribed to {} as '{}' from {} (asked for '{}', fully_durable)", client.getName(), topic,
+                subId, describe(from), bookmark);
     }
 
     private void onMessage(Message message) {
@@ -79,6 +104,7 @@ public final class OrderConsumer implements AutoCloseable {
             return;
         }
         received.incrementAndGet();
+        lastBookmark = message.getBookmark();
         OrderRecord.RunAndSeq record;
         try {
             record = OrderRecord.runAndSeqOf(message.getData());
@@ -101,6 +127,32 @@ public final class OrderConsumer implements AutoCloseable {
         } catch (AMPSException e) {
             log.warn("[{}] could not discard bookmark {}: {}", client.getName(), message.getBookmark(), e.toString());
         }
+    }
+
+    /**
+     * The bookmark the subscription was issued with: the literal for
+     * {@code EPOCH} and {@code NOW}, the store's position for
+     * {@code MOST_RECENT} -- which is {@code EPOCH} when it had none.
+     * {@code null} before {@link #start}.
+     */
+    public String startedFrom() {
+        return startedFrom;
+    }
+
+    /** The bookmark of the last message handed to the handler, or {@code null} before the first. */
+    public String lastBookmark() {
+        return lastBookmark;
+    }
+
+    /** A bookmark in words: the two well-known values by name, any other as it is. */
+    public static String describe(String bookmark) {
+        if (Client.Bookmarks.EPOCH.equals(bookmark)) {
+            return "EPOCH (the start of the journal)";
+        }
+        if (Client.Bookmarks.NOW.equals(bookmark)) {
+            return "NOW (new messages only)";
+        }
+        return "bookmark '" + bookmark + "'";
     }
 
     /** The ledger for {@code run}, created on first sight. */

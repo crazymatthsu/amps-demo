@@ -19,7 +19,10 @@
     - A bookmark subscriber resumes from its bookmark store. Bookmarks are
       preserved by replication (a message keeps the bookmark of the instance
       that first accepted it), so the position it held on the dead instance
-      means the same thing on the survivor.
+      means the same thing on the survivor. The store is also backed by the
+      /ADMIN/bookmark_store SOW topic below, so the position survives the
+      consumer's own machine as well: a consumer restarted elsewhere under
+      the same client name reads it back from either instance.
 
   Naming: the in-container hostnames are amps-primary and amps-secondary,
   both in compose.yml (service names) and in the integration test (network
@@ -93,6 +96,25 @@
             <FileName>./sow/orders.sow</FileName>
             <Durability>persistent</Durability>
         </Topic>
+        <!--
+          The consumers' bookmark recovery points. The Java client's
+          SOWRecoveryPointAdapter writes one JSON record per (client name,
+          subscription id), the two key fields, carrying the bookmark the
+          subscription resumes from, and reads it back when a bookmark store
+          is created under that client name. Replicated like the orders (in
+          the transaction log below, and in the Destination), so a consumer
+          restarted on another machine, against either instance, finds its
+          position here instead of in a local file. The name and the field
+          names are the adapter's defaults.
+        -->
+        <Topic>
+            <Name>/ADMIN/bookmark_store</Name>
+            <MessageType>json</MessageType>
+            <Key>/clientName</Key>
+            <Key>/subId</Key>
+            <FileName>./sow/bookmark_store.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
     </SOW>
 
     <!--
@@ -106,6 +128,11 @@
         <MinJournalSize>10MB</MinJournalSize>
         <Topic>
             <Name>orders</Name>
+            <MessageType>json</MessageType>
+        </Topic>
+        <!-- Replicated, so journaled too: replication replays the journal. -->
+        <Topic>
+            <Name>/ADMIN/bookmark_store</Name>
             <MessageType>json</MessageType>
         </Topic>
     </TransactionLog>
@@ -126,6 +153,10 @@
             <PassThrough>.*</PassThrough>
             <Topic>
                 <Name>orders</Name>
+                <MessageType>json</MessageType>
+            </Topic>
+            <Topic>
+                <Name>/ADMIN/bookmark_store</Name>
                 <MessageType>json</MessageType>
             </Topic>
             <Transport>

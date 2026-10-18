@@ -21,6 +21,9 @@
 #                                           wait until it has recovered and rejoined replication
 #   scripts/ha-compose.sh demo              run the Java demo (publisher + consumer, one JVM)
 #                                           against the stack; kill an instance while it runs
+#   scripts/ha-compose.sh bookmarks         the consumers' recovery points, as each instance
+#                                           holds them: where a consumer started on any
+#                                           machine would resume
 #   scripts/ha-compose.sh validate          the server's own --verify-config on both configs
 #   scripts/ha-compose.sh reset             down, then DELETE deploy/: both instances' SOW,
 #                                           journal and stats
@@ -258,7 +261,8 @@ cmd_kill() {
     echo "${inst} is gone. HAClient publishers and consumers connected to it will:"
     echo "  - notice within a heartbeat or two, redial the other instance and log on"
     echo "  - publisher: replay every message not yet acknowledged as persisted"
-    echo "  - consumer:  resubscribe from its bookmark store's most recent position"
+    echo "  - consumer:  resubscribe from its bookmark store's most recent position (the same"
+    echo "               position is in the /ADMIN/bookmark_store SOW on the survivor: $0 bookmarks)"
     echo "The survivor will not acknowledge publishes for a few seconds (its replication"
     echo "link to ${inst} is synchronous) until its scheduled action downgrades the link."
     echo
@@ -288,6 +292,14 @@ cmd_demo() {
     echo "running the Java demo against ${HA_PRIMARY_PORT} and ${HA_SECONDARY_PORT}; kill an instance while it runs:"
     echo "  $0 failover"
     (cd "${REPO_ROOT}" && ./gradlew :amps-ha-demo:run --args="${1:-both}" -q \
+        "-Dha.uris=tcp://127.0.0.1:${HA_PRIMARY_PORT}/amps/json,tcp://127.0.0.1:${HA_SECONDARY_PORT}/amps/json")
+}
+
+# The recovery points the consumers' bookmark stores replicate to the pair,
+# read from each instance in turn: what a consumer started on any machine,
+# with -Dha.bookmark=recent, would resume from.
+cmd_bookmarks() {
+    (cd "${REPO_ROOT}" && ./gradlew :amps-ha-demo:run --args="bookmarks" -q \
         "-Dha.uris=tcp://127.0.0.1:${HA_PRIMARY_PORT}/amps/json,tcp://127.0.0.1:${HA_SECONDARY_PORT}/amps/json")
 }
 
@@ -346,6 +358,7 @@ case "${1:-}" in
     kill)      shift; cmd_kill "$@" ;;
     revive)    shift; cmd_revive "$@" ;;
     demo)      shift; cmd_demo "$@" ;;
+    bookmarks) shift; cmd_bookmarks "$@" ;;
     validate)  shift; cmd_validate "$@" ;;
     reset)     shift; cmd_reset "$@" ;;
     printenv)  shift; cmd_printenv "$@" ;;
