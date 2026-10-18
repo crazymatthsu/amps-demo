@@ -12,6 +12,7 @@ amps-ha-demo/
 ├── config/secondary/amps-config.xml   instance "amps-ha-secondary" (same, mirrored)
 ├── compose.yml                        both instances on one network, in podman
 ├── scripts/ha-compose.sh              start / failover / revive / status / validate
+├── docs/                              why every replicated topic is journaled, and what the journal costs
 ├── src/main/java/com/demo/amps/ha/    HAClient publisher + consumer (bookmarks in a replicated SOW topic), the demo main
 └── src/integrationTest/java/          the failover on Testcontainers
 ```
@@ -274,6 +275,11 @@ The interesting elements:
 both. The build parses them as XML on every run (`checkConfigXml`): AMPS
 rejects a double hyphen inside an XML comment, and these files carry long
 comments.
+
+Why both SOW topics appear under `<TransactionLog>` as well, what the journal
+then costs on disk, and why it is never compacted but only aged out in whole
+files -- with replication as a veto on the ageing, not a trigger for it -- is
+in [docs/replication-and-the-transaction-log.md](docs/replication-and-the-transaction-log.md).
 
 ## What the instances log
 
