@@ -12,7 +12,7 @@ amps-ha-demo/
 ├── config/secondary/amps-config.xml   instance "amps-ha-secondary" (same, mirrored)
 ├── compose.yml                        both instances on one network, in podman
 ├── scripts/ha-compose.sh              start / failover / revive / status / validate
-├── docs/                              why every replicated topic is journaled, and what the journal costs
+├── docs/                              design notes: the transaction log and replication, and what a bookmark is
 ├── src/main/java/com/demo/amps/ha/    HAClient publisher + consumer (bookmarks in a replicated SOW topic), the demo main
 └── src/integrationTest/java/          the failover on Testcontainers
 ```
@@ -105,7 +105,10 @@ message:
 #   [ha-demo-consumer] subscribed to orders as 'ha-demo-consumer' from bookmark '17434824616529380601|12345|' (asked for 'recent', fully_durable)
 ```
 
-(`ha-compose.sh bookmarks` runs the third command against the stack's ports.)
+(`ha-compose.sh bookmarks` runs the third command against the stack's ports,
+and [docs/what-a-bookmark-is.md](docs/what-a-bookmark-is.md) explains the value
+it prints: an instance identity and a sequence number in that instance's
+transaction log, not a file offset.)
 `ha.bookmark=recent` is what asks the store for its position; the default
 `now` ignores it, and `epoch` deletes it and starts over. The ledger the
 replacement reports is its own, so it shows the messages machine A consumed as
