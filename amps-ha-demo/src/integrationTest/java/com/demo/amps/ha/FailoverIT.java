@@ -11,6 +11,11 @@ import com.crankuptheamps.client.ConnectionStateListener;
 import com.crankuptheamps.client.Message;
 import com.crankuptheamps.client.MessageStream;
 import com.demo.amps.ha.AmpsHaCluster.Instance;
+import com.demo.amps.ha.api.BookmarkStart;
+import com.demo.amps.ha.api.ConnectionJournal;
+import com.demo.amps.ha.api.HaBookmarkSubscriber;
+import com.demo.amps.ha.api.HaPublisher;
+import com.demo.amps.ha.api.RecoveryPointTopic;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -107,8 +112,8 @@ class FailoverIT {
     static final Duration RESYNC_TIMEOUT = Duration.ofSeconds(180);
 
     private AmpsHaCluster cluster;
-    private HaClients.Connected publishing;
-    private HaClients.Connected consuming;
+    private HaPublisher publishing;
+    private HaBookmarkSubscriber consuming;
     private OrderPublisher publisher;
     private OrderConsumer consumer;
     private SequenceLedger ledger;
@@ -135,16 +140,20 @@ class FailoverIT {
 
         Path stateDir = Path.of(System.getProperty("ha.workDir", "build/ha-it")).resolve("run-" + System.currentTimeMillis());
         Files.createDirectories(stateDir);
-        consuming = HaClients.consumer(CONSUMER, cluster.uris(), stateDir, RECOVERY_TOPIC);
-        consumer = new OrderConsumer(consuming.client(), TOPIC, CONSUMER);
-        consumer.start(Client.Bookmarks.EPOCH);
-        publishing = HaClients.publisher("it-publisher", cluster.uris(), stateDir);
-        publisher = new OrderPublisher(publishing.client(), TOPIC, RUN);
+        consuming = HaBookmarkSubscriber.builder(CONSUMER)
+                .uris(cluster.uris())
+                .stateDir(stateDir)
+                .recoveryPointTopic(RecoveryPointTopic.of(RECOVERY_TOPIC))
+                .connect();
+        consumer = new OrderConsumer(consuming, TOPIC, CONSUMER);
+        consumer.start(BookmarkStart.EPOCH);
+        publishing = HaPublisher.builder("it-publisher").uris(cluster.uris()).stateDir(stateDir).connect();
+        publisher = new OrderPublisher(publishing, TOPIC, RUN);
         ledger = consumer.ledger(RUN);
 
-        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(publishing), "publisher should start on the primary");
-        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(consuming), "consumer should start on the primary");
-        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(consuming.replicatedBookmarks().journal()),
+        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(publishing.journal()), "publisher should start on the primary");
+        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(consuming.journal()), "consumer should start on the primary");
+        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(consuming.trackerJournal()),
                 "the consumer's bookmark tracker should start on the primary");
     }
 
@@ -169,15 +178,15 @@ class FailoverIT {
 
         assertTrue(publishing.journal().count(ConnectionStateListener.Disconnected) >= 1, "publisher never disconnected");
         assertTrue(consuming.journal().count(ConnectionStateListener.Disconnected) >= 1, "consumer never disconnected");
-        assertEquals(cluster.hostAndPort(Instance.SECONDARY), lastLogon(publishing), "publisher should now be on the secondary");
-        assertEquals(cluster.hostAndPort(Instance.SECONDARY), lastLogon(consuming), "consumer should now be on the secondary");
-        assertEquals(cluster.hostAndPort(Instance.SECONDARY), lastLogon(consuming.replicatedBookmarks().journal()),
+        assertEquals(cluster.hostAndPort(Instance.SECONDARY), lastLogon(publishing.journal()), "publisher should now be on the secondary");
+        assertEquals(cluster.hostAndPort(Instance.SECONDARY), lastLogon(consuming.journal()), "consumer should now be on the secondary");
+        assertEquals(cluster.hostAndPort(Instance.SECONDARY), lastLogon(consuming.trackerJournal()),
                 "the consumer's bookmark tracker should now be on the secondary");
 
         assertEquals(STAGE_ONE_END, sowCount(cluster.uri(Instance.SECONDARY)), "the secondary's SOW is missing records");
         log.info("stage one: {}\npublisher journal:\n{}consumer journal:\n{}tracker journal:\n{}", ledger.report(STAGE_ONE_END),
                 publishing.journal().describe(), consuming.journal().describe(),
-                consuming.replicatedBookmarks().journal().describe());
+                consuming.trackerJournal().describe());
     }
 
     @Test
@@ -218,14 +227,14 @@ class FailoverIT {
         assertEquals(0, ledger.duplicates(), "duplicates reached the consumer: " + ledger.report(STAGE_TWO_END));
         assertEquals(0, ledger.outOfOrder(), "order not preserved: " + ledger.report(STAGE_TWO_END));
 
-        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(publishing), "publisher should be back on the primary");
-        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(consuming), "consumer should be back on the primary");
-        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(consuming.replicatedBookmarks().journal()),
+        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(publishing.journal()), "publisher should be back on the primary");
+        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(consuming.journal()), "consumer should be back on the primary");
+        assertEquals(cluster.hostAndPort(Instance.PRIMARY), lastLogon(consuming.trackerJournal()),
                 "the consumer's bookmark tracker should be back on the primary");
         assertEquals(STAGE_TWO_END, sowCount(cluster.uri(Instance.PRIMARY)), "the primary's SOW is missing records");
         log.info("stage two: {}\npublisher journal:\n{}consumer journal:\n{}tracker journal:\n{}", ledger.report(STAGE_TWO_END),
                 publishing.journal().describe(), consuming.journal().describe(),
-                consuming.replicatedBookmarks().journal().describe());
+                consuming.trackerJournal().describe());
     }
 
     @Test
@@ -233,9 +242,12 @@ class FailoverIT {
     void aFreshConsumerReplaysTheWholeRunFromTheSurvivor() throws Exception {
         assumeTrue(ledger.hasAll(STAGE_TWO_END), "stage two did not complete");
 
-        try (HaClients.Connected fresh = HaClients.consumer("it-fresh-consumer", cluster.uris(), null, RECOVERY_TOPIC)) {
-            OrderConsumer replay = new OrderConsumer(fresh.client(), TOPIC, "it-fresh-consumer");
-            replay.start(Client.Bookmarks.EPOCH);
+        try (HaBookmarkSubscriber fresh = HaBookmarkSubscriber.builder("it-fresh-consumer")
+                .uris(cluster.uris())
+                .recoveryPointTopic(RecoveryPointTopic.of(RECOVERY_TOPIC))
+                .connect()) {
+            OrderConsumer replay = new OrderConsumer(fresh, TOPIC, "it-fresh-consumer");
+            replay.start(BookmarkStart.EPOCH);
             SequenceLedger replayed = replay.ledger(RUN);
             awaitAll(replayed, STAGE_TWO_END);
             assertEquals(List.of(), replayed.gaps(STAGE_TWO_END), "the survivor's journal is missing messages");
@@ -283,10 +295,13 @@ class FailoverIT {
 
         // Machine B: the same client name, nothing on disk, nothing in memory,
         // and only the secondary to talk to.
-        try (HaClients.Connected replacement = HaClients.consumer(CONSUMER, cluster.uris(), null, RECOVERY_TOPIC)) {
-            OrderConsumer resumed = new OrderConsumer(replacement.client(), TOPIC, CONSUMER);
-            resumed.start(Client.Bookmarks.MOST_RECENT);
-            assertEquals(cluster.hostAndPort(Instance.SECONDARY), lastLogon(replacement),
+        try (HaBookmarkSubscriber replacement = HaBookmarkSubscriber.builder(CONSUMER)
+                .uris(cluster.uris())
+                .recoveryPointTopic(RecoveryPointTopic.of(RECOVERY_TOPIC))
+                .connect()) {
+            OrderConsumer resumed = new OrderConsumer(replacement, TOPIC, CONSUMER);
+            resumed.start(BookmarkStart.MOST_RECENT);
+            assertEquals(cluster.hostAndPort(Instance.SECONDARY), lastLogon(replacement.journal()),
                     "the replacement should be on the secondary");
             assertTrue(onSecondary.bookmarks().stream().anyMatch(resumed.startedFrom()::contains),
                     () -> "the replacement subscribed from " + resumed.startedFrom() + ", not from the recovery point "
@@ -314,7 +329,7 @@ class FailoverIT {
             log.info("stage four: replacement resumed from {}, received {} of machine A's messages again, {}; "
                             + "recovery point now {}\nreplacement journal:\n{}tracker journal:\n{}",
                     resumed.startedFrom(), redelivered, resumedLedger.report(STAGE_FOUR_END), moved.bookmark(),
-                    replacement.journal().describe(), replacement.replicatedBookmarks().journal().describe());
+                    replacement.journal().describe(), replacement.trackerJournal().describe());
         }
     }
 
@@ -329,10 +344,6 @@ class FailoverIT {
         if (cluster != null) {
             cluster.close();
         }
-    }
-
-    private static String lastLogon(HaClients.Connected connected) {
-        return lastLogon(connected.journal());
     }
 
     private static String lastLogon(ConnectionJournal journal) {

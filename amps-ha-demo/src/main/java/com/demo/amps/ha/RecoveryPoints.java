@@ -4,6 +4,7 @@ import com.crankuptheamps.client.Client;
 import com.crankuptheamps.client.Message;
 import com.crankuptheamps.client.MessageStream;
 import com.crankuptheamps.client.exception.AMPSException;
+import com.demo.amps.ha.api.RecoveryPointTopic;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
@@ -29,9 +30,9 @@ import java.util.List;
  */
 public final class RecoveryPoints {
 
-    public static final String CLIENT_NAME_FIELD = "clientName";
-    public static final String SUB_ID_FIELD = "subId";
-    public static final String BOOKMARK_FIELD = "bookmark";
+    public static final String CLIENT_NAME_FIELD = RecoveryPointTopic.DEFAULT_CLIENT_NAME_FIELD;
+    public static final String SUB_ID_FIELD = RecoveryPointTopic.DEFAULT_SUB_ID_FIELD;
+    public static final String BOOKMARK_FIELD = RecoveryPointTopic.DEFAULT_BOOKMARK_FIELD;
 
     private static final int LOGON_TIMEOUT_MS = 10_000;
 

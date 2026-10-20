@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 /**
  * What the record in the recovery point topic means, shown on the AMPS
  * client's own {@link MemoryBookmarkStore} with the SOW replaced by a map.
- * This is the contract {@link HaClients#consumer} builds on, and the part of
+ * This is the contract {@link com.demo.amps.ha.api.HaBookmarkSubscriber} builds on, and the part of
  * the failover test that needs no server: the store is the library's, only the
  * adapter is a stand-in.
  *

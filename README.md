@@ -195,7 +195,9 @@ for the batch and nothing else.
 each other with synchronous acknowledgment, a publisher on an `HAClient` with a
 publish store, a consumer on an `HAClient` with a bookmark store whose position
 is also kept in a replicated SOW topic through the client library's
-`SOWRecoveryPointAdapter`, and the proof. Its integration test starts both
+`SOWRecoveryPointAdapter`, and the proof. The two clients are a self-contained
+package, `com.demo.amps.ha.api`, meant to be copied into other projects as it
+is. Its integration test starts both
 instances as Testcontainers, SIGKILLs the primary while the publisher is
 mid-stream, brings it back, kills the secondary, and checks that every message
 reached the consumer exactly once and in order -- that a brand-new consumer

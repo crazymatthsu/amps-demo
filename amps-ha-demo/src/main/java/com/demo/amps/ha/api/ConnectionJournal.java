@@ -1,4 +1,4 @@
-package com.demo.amps.ha;
+package com.demo.amps.ha.api;
 
 import com.crankuptheamps.client.ConnectionStateListener;
 import java.net.URI;

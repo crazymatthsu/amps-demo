@@ -1,5 +1,8 @@
 package com.demo.amps.ha;
 
+import com.demo.amps.ha.api.ConnectionJournal;
+import com.demo.amps.ha.api.HaBookmarkSubscriber;
+import com.demo.amps.ha.api.HaPublisher;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -40,6 +43,10 @@ import org.slf4j.LoggerFactory;
  * {@code ha.recoveryPointTopic} names the SOW topic the bookmarks go to
  * ({@code none} keeps them local).
  *
+ * <p>The clients themselves are the reusable {@link HaPublisher} and
+ * {@link HaBookmarkSubscriber} from {@code com.demo.amps.ha.api}; this class
+ * only wires settings into their builders.
+ *
  * <p>The exit code is the verdict in {@code both} mode: {@code 0} when every
  * message the publisher sent reached the consumer exactly once and in order,
  * {@code 1} otherwise.
@@ -74,15 +81,30 @@ public final class HaDemo {
         System.exit(exit);
     }
 
+    /** The consumer's client, from the settings. */
+    static HaBookmarkSubscriber subscriber(HaSettings settings) throws Exception {
+        return HaBookmarkSubscriber.builder(settings.consumerName())
+                .uris(settings.uris())
+                .stateDir(settings.stateDir())
+                .recoveryPointTopic(settings.recoveryPoint())
+                .connect();
+    }
+
+    /** The publisher's client, from the settings. */
+    static HaPublisher publisher(HaSettings settings) throws Exception {
+        return HaPublisher.builder(settings.publisherName())
+                .uris(settings.uris())
+                .stateDir(settings.stateDir())
+                .connect();
+    }
+
     /** Publisher and consumer in one process; the verdict is the exit code. */
     static int runBoth(HaSettings settings) throws Exception {
-        try (HaClients.Connected consuming = HaClients.consumer(settings.consumerName(), settings.uris(),
-                     settings.stateDir(), settings.recoveryPointTopic());
-             HaClients.Connected publishing = HaClients.publisher(settings.publisherName(), settings.uris(),
-                     settings.stateDir())) {
-            OrderConsumer consumer = new OrderConsumer(consuming.client(), settings.topic(), settings.consumerName());
-            consumer.start(settings.bookmarkValue());
-            OrderPublisher publisher = new OrderPublisher(publishing.client(), settings.topic(), settings.run());
+        try (HaBookmarkSubscriber consuming = subscriber(settings);
+             HaPublisher publishing = publisher(settings)) {
+            OrderConsumer consumer = new OrderConsumer(consuming, settings.topic(), settings.consumerName());
+            consumer.start(settings.bookmarkStart());
+            OrderPublisher publisher = new OrderPublisher(publishing, settings.topic(), settings.run());
             SequenceLedger ledger = consumer.ledger(settings.run());
 
             log.info("publishing {} messages every {} ms -- now is the time to run 'ha-compose.sh failover'",
@@ -103,8 +125,8 @@ public final class HaDemo {
 
             log.info("publisher connection journal:\n{}", publishing.journal().describe());
             log.info("consumer connection journal:\n{}", consuming.journal().describe());
-            if (consuming.replicatedBookmarks() != null) {
-                log.info("bookmark tracker connection journal:\n{}", consuming.replicatedBookmarks().journal().describe());
+            if (consuming.trackerJournal() != null) {
+                log.info("bookmark tracker connection journal:\n{}", consuming.trackerJournal().describe());
             }
             return verdict(settings, publisher, publishing.journal(), consuming.journal(), ledger, flushed, drained);
         }
@@ -112,8 +134,8 @@ public final class HaDemo {
 
     /** Publisher only: publish, flush, report what the server acknowledged. */
     static int runPublisher(HaSettings settings) throws Exception {
-        try (HaClients.Connected publishing = HaClients.publisher(settings.publisherName(), settings.uris(), settings.stateDir())) {
-            OrderPublisher publisher = new OrderPublisher(publishing.client(), settings.topic(), settings.run());
+        try (HaPublisher publishing = publisher(settings)) {
+            OrderPublisher publisher = new OrderPublisher(publishing, settings.topic(), settings.run());
             log.info("publishing {} messages every {} ms as run '{}'", settings.count(), settings.interval().toMillis(),
                     settings.run());
             Instant[] lastStatus = {Instant.now()};
@@ -142,11 +164,10 @@ public final class HaDemo {
     static int runConsumer(HaSettings settings) throws Exception {
         AtomicBoolean stop = new AtomicBoolean();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> stop.set(true)));
-        try (HaClients.Connected consuming = HaClients.consumer(settings.consumerName(), settings.uris(),
-                settings.stateDir(), settings.recoveryPointTopic())) {
-            OrderConsumer consumer = new OrderConsumer(consuming.client(), settings.topic(), settings.consumerName());
-            consumer.start(settings.bookmarkValue());
-            if (settings.recoveryPointTopic() != null && !"recent".equals(settings.bookmark())) {
+        try (HaBookmarkSubscriber consuming = subscriber(settings)) {
+            OrderConsumer consumer = new OrderConsumer(consuming, settings.topic(), settings.consumerName());
+            consumer.start(settings.bookmarkStart());
+            if (settings.recoveryPointTopic() != null && !settings.bookmarkStart().isMostRecent()) {
                 log.info("bookmarks replicate to '{}': a consumer started with -Dha.bookmark=recent, on any machine, "
                         + "resumes from there", settings.recoveryPointTopic());
             }

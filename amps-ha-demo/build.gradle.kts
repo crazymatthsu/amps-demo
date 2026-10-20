@@ -117,6 +117,49 @@ tasks.named("check") {
 }
 
 /**
+ * The api package must stay copyable: nothing in it may refer to the rest of
+ * this module, and it may depend on nothing but the JDK, the AMPS client and
+ * SLF4J. Its tests may add JUnit. Checked on every build, by reading imports.
+ */
+val checkApiSelfContained = tasks.register("checkApiSelfContained") {
+    group = "verification"
+    description = "Verify com.demo.amps.ha.api imports only the JDK, the AMPS client and SLF4J."
+
+    val mainDir = layout.projectDirectory.dir("src/main/java/com/demo/amps/ha/api").asFile
+    val testDir = layout.projectDirectory.dir("src/test/java/com/demo/amps/ha/api").asFile
+    inputs.dir(mainDir)
+    inputs.dir(testDir)
+    outputs.upToDateWhen { false }
+
+    doLast {
+        val allowedInMain = listOf("java.", "com.crankuptheamps.", "org.slf4j.")
+        val allowedInTest = allowedInMain + listOf("org.junit.", "com.demo.amps.ha.api.")
+        val importLine = Regex("""^\s*import\s+(?:static\s+)?([\w.]+)""")
+        val problems = mutableListOf<String>()
+        fun scan(dir: File, allowed: List<String>) {
+            val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".java") }?.sortedBy { it.name } ?: emptyList()
+            if (files.isEmpty()) {
+                problems += "no sources under ${dir.relativeTo(projectDir)}"
+            }
+            files.forEach { file ->
+                file.readLines().forEachIndexed { index, line ->
+                    val imported = importLine.find(line)?.groupValues?.get(1) ?: return@forEachIndexed
+                    if (allowed.none { imported.startsWith(it) }) {
+                        problems += "${file.relativeTo(projectDir)}:${index + 1}: imports $imported"
+                    }
+                }
+            }
+        }
+        scan(mainDir, allowedInMain)
+        scan(testDir, allowedInTest)
+        if (problems.isNotEmpty()) {
+            throw GradleException("com.demo.amps.ha.api is not self-contained:\n  " + problems.joinToString("\n  "))
+        }
+        logger.lifecycle("amps-ha-demo: com.demo.amps.ha.api depends only on the JDK, the AMPS client and SLF4J")
+    }
+}
+
+/**
  * Parse both instance configs as XML on every build.
  *
  * The same check the server module runs on its flows: an XML comment may not
@@ -182,5 +225,5 @@ val checkModuleDocs = tasks.register("checkModuleDocs") {
 }
 
 tasks.named("check") {
-    dependsOn(checkConfigXml, checkModuleDocs)
+    dependsOn(checkConfigXml, checkModuleDocs, checkApiSelfContained)
 }
