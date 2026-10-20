@@ -476,9 +476,17 @@ class HazelcastMapRecordSourceTest {
             source.start(received::add);
             awaitConnected(source);
             awaitRecords(received, 1);
+            // One mutation at a time, each waited for. Entry events are ordered per key and
+            // not across keys -- the driver documents its feed as "unordered across
+            // partitions" -- so three keys touched back to back can reach the listener in
+            // any order, and the assertions below go by position. CI has seen both the two
+            // ADDED events swapped and the REMOVED arriving before the second ADDED. The wait
+            // after each mutation is what makes the position mean something.
             Trades.Trade late = new Trades.Trade("MSFT", 25);
             map.put("ACC-2", late);
+            awaitRecords(received, 2);
             map.put("ACC-3", "{\"quantity\":3}");
+            awaitRecords(received, 3);
             map.remove("ACC-1");
             awaitRecords(received, 4);
 
