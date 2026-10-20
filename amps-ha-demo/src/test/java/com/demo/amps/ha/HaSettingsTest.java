@@ -4,7 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import com.crankuptheamps.client.Client;
+import com.demo.amps.ha.api.BookmarkStart;
+import com.demo.amps.ha.api.RecoveryPointTopic;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -23,11 +24,12 @@ class HaSettingsTest {
         assertEquals("ha-demo-publisher", settings.publisherName());
         assertEquals("ha-demo-consumer", settings.consumerName());
         assertEquals("now", settings.bookmark());
-        assertEquals(Client.Bookmarks.NOW, settings.bookmarkValue());
+        assertEquals(BookmarkStart.NOW, settings.bookmarkStart());
         assertNull(settings.stateDir());
         // The AMPS client library's own default, and what both instance configs define.
         assertEquals("/ADMIN/bookmark_store", settings.recoveryPointTopic());
         assertEquals(HaSettings.DEFAULT_RECOVERY_POINT_TOPIC, settings.recoveryPointTopic());
+        assertEquals(RecoveryPointTopic.defaults(), settings.recoveryPoint());
     }
 
     @Test
@@ -43,9 +45,10 @@ class HaSettingsTest {
         assertEquals(Duration.ofMillis(5), settings.interval());
         assertEquals(Path.of("state"), settings.stateDir());
         assertEquals("epoch", settings.bookmark());
-        assertEquals(Client.Bookmarks.EPOCH, settings.bookmarkValue());
+        assertEquals(BookmarkStart.EPOCH, settings.bookmarkStart());
         assertEquals("r7", settings.run());
         assertEquals("/ops/bookmarks", settings.recoveryPointTopic());
+        assertEquals(RecoveryPointTopic.of("/ops/bookmarks"), settings.recoveryPoint());
     }
 
     @Test
@@ -59,7 +62,7 @@ class HaSettingsTest {
     @Test
     void recentMeansTheBookmarkStoresPosition() {
         HaSettings settings = HaSettings.from(Map.of("ha.bookmark", "recent")::get, key -> null);
-        assertEquals(Client.Bookmarks.MOST_RECENT, settings.bookmarkValue());
+        assertEquals(BookmarkStart.MOST_RECENT, settings.bookmarkStart());
     }
 
     @Test
@@ -70,7 +73,9 @@ class HaSettingsTest {
 
     @Test
     void noneKeepsBookmarksLocal() {
-        assertNull(HaSettings.from(Map.of("ha.recoveryPointTopic", "none")::get, key -> null).recoveryPointTopic());
+        HaSettings local = HaSettings.from(Map.of("ha.recoveryPointTopic", "none")::get, key -> null);
+        assertNull(local.recoveryPointTopic());
+        assertNull(local.recoveryPoint());
         assertNull(HaSettings.from(key -> null, Map.of("HA_RECOVERY_POINT_TOPIC", "NONE")::get).recoveryPointTopic());
     }
 }

@@ -1,5 +1,7 @@
 package com.demo.amps.ha;
 
+import com.demo.amps.ha.api.BookmarkStart;
+import com.demo.amps.ha.api.RecoveryPointTopic;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -49,7 +51,7 @@ public record HaSettings(List<String> uris, String topic, long count, Duration i
      * Both instance configs define it: a JSON SOW topic keyed on
      * {@code /clientName} and {@code /subId}, journaled and replicated.
      */
-    public static final String DEFAULT_RECOVERY_POINT_TOPIC = "/ADMIN/bookmark_store";
+    public static final String DEFAULT_RECOVERY_POINT_TOPIC = RecoveryPointTopic.DEFAULT_TOPIC;
 
     /** The {@code ha.recoveryPointTopic} value that keeps bookmarks local. */
     public static final String NO_RECOVERY_POINT_TOPIC = "none";
@@ -97,13 +99,17 @@ public record HaSettings(List<String> uris, String topic, long count, Duration i
                 recoveryPointTopic);
     }
 
-    /** The AMPS bookmark string for {@link #bookmark()}. */
-    public String bookmarkValue() {
-        return switch (bookmark) {
-            case "epoch" -> com.crankuptheamps.client.Client.Bookmarks.EPOCH;
-            case "recent" -> com.crankuptheamps.client.Client.Bookmarks.MOST_RECENT;
-            default -> com.crankuptheamps.client.Client.Bookmarks.NOW;
-        };
+    /** Where the consumer starts, for {@link #bookmark()}. */
+    public BookmarkStart bookmarkStart() {
+        return BookmarkStart.parse(bookmark);
+    }
+
+    /**
+     * {@link #recoveryPointTopic()} as the subscriber's builder takes it, with
+     * the adapter's default field names; {@code null} keeps bookmarks local.
+     */
+    public RecoveryPointTopic recoveryPoint() {
+        return recoveryPointTopic == null ? null : RecoveryPointTopic.of(recoveryPointTopic);
     }
 
     /** {@code intervalMs} is {@code HA_INTERVAL_MS}: camel case becomes upper snake case. */

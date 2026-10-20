@@ -13,7 +13,8 @@ amps-ha-demo/
 ├── compose.yml                        both instances on one network, in podman
 ├── scripts/ha-compose.sh              start / failover / revive / status / validate
 ├── docs/                              design notes: the transaction log and replication, and what a bookmark is
-├── src/main/java/com/demo/amps/ha/    HAClient publisher + consumer (bookmarks in a replicated SOW topic), the demo main
+├── src/main/java/com/demo/amps/ha/api/  the reusable clients: HaPublisher, HaBookmarkSubscriber -- copy this package
+├── src/main/java/com/demo/amps/ha/      the demo over them: numbered orders, a ledger, settings, the demo main
 └── src/integrationTest/java/          the failover on Testcontainers
 ```
 
@@ -143,6 +144,58 @@ library's own default); `none` keeps bookmarks in the local store only, which
 is how the demo behaved before -- and how a replacement elsewhere starts from
 scratch.
 
+## Reusing the clients: the `api` package
+
+Everything that makes the two clients survive a failover lives in
+[`src/main/java/com/demo/amps/ha/api/`](src/main/java/com/demo/amps/ha/api/),
+and nothing in that package refers to the rest of this module -- the build
+fails if it ever does (`checkApiSelfContained`). Copy the directory into
+another project, add `com.crankuptheamps:amps-client` (written against
+5.3.5.3) and `org.slf4j:slf4j-api`, and it compiles there as it does here
+(Java 17 or later; the package name is not load-bearing, rename it if you
+like). The unit tests under
+[`src/test/java/com/demo/amps/ha/api/`](src/test/java/com/demo/amps/ha/api/)
+are self-contained too and can travel with it.
+
+| class | what it is |
+| --- | --- |
+| [`HaPublisher`](src/main/java/com/demo/amps/ha/api/HaPublisher.java) | an `HAClient` over every instance, with a publish store (file-backed under a state directory, or in memory). `publish` returns normally on a disconnect because the store will replay the message, `flush` waits for every message to be acknowledged as persisted, and a Duplicate after a replay is logged as the expected answer it is |
+| [`HaBookmarkSubscriber`](src/main/java/com/demo/amps/ha/api/HaBookmarkSubscriber.java) | an `HAClient` over every instance, with a bookmark store re-subscribed from its position after a reconnect. Given a `RecoveryPointTopic`, the position is also written to a SOW topic on the pair by a second **tracker** client named after the subscriber, so a subscriber restarted anywhere under the same client name resumes from it. `subscribe(topic, subId, start, processor)` asks for `fully_durable` and discards each message's bookmark only after the processor returns |
+| [`MessageProcessor`](src/main/java/com/demo/amps/ha/api/MessageProcessor.java) | what a subscription does with a message: return normally and the bookmark moves past it, throw and it is kept for the next restart |
+| [`BookmarkStart`](src/main/java/com/demo/amps/ha/api/BookmarkStart.java) | `EPOCH` (which purges the remembered position first, so starting over means starting over), `NOW`, `MOST_RECENT`, or a literal bookmark |
+| [`RecoveryPointTopic`](src/main/java/com/demo/amps/ha/api/RecoveryPointTopic.java) | the SOW topic and its field names, defaulting to the client library's own `/ADMIN/bookmark_store`; its javadoc carries the server-side config the topic needs on every instance |
+| [`HaConnectionSettings`](src/main/java/com/demo/amps/ha/api/HaConnectionSettings.java) | logon timeout, reconnect delay, first-connect budget, heartbeat, in-memory store size |
+| [`ConnectionJournal`](src/main/java/com/demo/amps/ha/api/ConnectionJournal.java) | every connection state change a client announced, with the server it concerned -- a failover as a list a test can assert on rather than an impression |
+
+```java
+try (HaPublisher publisher = HaPublisher.builder("orders-publisher")
+        .uris("tcp://primary:9007/amps/json", "tcp://secondary:9007/amps/json")
+        .stateDir(Path.of("state"))                        // omit for an in-memory store
+        .connect()) {
+    publisher.publish("orders", "{\"id\":1}");
+    publisher.flush(Duration.ofSeconds(30));               // every message acknowledged as persisted
+}
+
+try (HaBookmarkSubscriber subscriber = HaBookmarkSubscriber.builder("orders-consumer")
+        .uris("tcp://primary:9007/amps/json", "tcp://secondary:9007/amps/json")
+        .stateDir(Path.of("state"))                        // omit for an in-memory store
+        .recoveryPointTopic(RecoveryPointTopic.defaults()) // omit to keep bookmarks local
+        .connect()) {
+    subscriber.subscribe("orders", "orders-consumer", BookmarkStart.MOST_RECENT,
+            message -> handle(message.getData()));         // returning normally = processed
+    waitUntilDone();
+}
+```
+
+The demo classes in `com.demo.amps.ha` are what a user of the package looks
+like: [`OrderPublisher`](src/main/java/com/demo/amps/ha/OrderPublisher.java)
+numbers records through an `HaPublisher`,
+[`OrderConsumer`](src/main/java/com/demo/amps/ha/OrderConsumer.java) is a
+processor that keeps a ledger, and
+[`HaDemo`](src/main/java/com/demo/amps/ha/HaDemo.java) wires settings into
+the two builders. The integration test below exercises the package itself,
+not a copy of its logic: when it is green, the package is.
+
 ## The test
 
 ```bash
@@ -252,7 +305,7 @@ returns.
   a `DisconnectedException` does escape, the message is already in the store
   and must **not** be republished -- a second publish would store it again
   under a new sequence number, which the server cannot recognise as a
-  duplicate. [`OrderPublisher`](src/main/java/com/demo/amps/ha/OrderPublisher.java)
+  duplicate. [`HaPublisher`](src/main/java/com/demo/amps/ha/api/HaPublisher.java)
   logs and moves on.
 - **`publishFlush`, not `flush`.** `Client.flush(long)` is deprecated in this
   client version and its body does nothing; `publishFlush` waits for the
