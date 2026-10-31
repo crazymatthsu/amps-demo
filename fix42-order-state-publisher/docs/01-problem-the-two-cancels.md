@@ -136,9 +136,10 @@ it:
   ([10](../../docs/fix42-view/10-expired-rejected-restated-reports.md)).
 - **The audit topics record the message as received**, journalled, and are the
   system of record. The blotter is derived and rebuildable. This module makes
-  the audit copies *whole* messages rather than route-selected subsets, which
-  turns the journal into a replay source for the machine
-  ([04](04-recovery-and-operations.md)).
+  the audit copies *whole* messages rather than route-selected subsets, filed
+  under the key the machine gave them (tag 9020 appended as a trailer), which
+  turns the journal into a replay source for the machine and the audit topics
+  into a per-order history ([04](04-recovery-and-operations.md)).
 - **The venue's cumulative fields are adopted, never computed.** 14/151/6/39
   come from the report. A bust or correct restates them as absolutes and the
   machine copies them, which is why no per-fill arithmetic exists anywhere in
@@ -151,6 +152,13 @@ it:
   after warm-up. A cache keyed by strings cannot promise that, and does not;
   phase 5 of the [plan](05-implementation-plan.md) measures what it costs and
   bounds it.
+
+One thing the stateless design did **not** get right is kept out: it
+published through a plain AMPS client that reports no failure and replays
+nothing after a disconnect, which is tolerable for a publisher whose record is
+rebuilt from the next message and not for one whose record is the truth. This
+module publishes through a client with a publish store
+([04 §6](04-recovery-and-operations.md#6-the-publish-path)).
 
 ## 6. What this module is not
 

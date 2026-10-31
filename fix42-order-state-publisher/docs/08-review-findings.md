@@ -9,9 +9,8 @@ ambiguous, and to challenge the verdicts in [06](06-case-coverage.md) rather
 than take them as given.
 
 This document is the register of what it found, condensed but complete, with a
-disposition against each finding. Nothing in docs 01–07 has been changed yet
-for these findings; the revision is the next step, and §6 lists the decisions
-it needs first.
+disposition against each finding. Docs 01–07 **have been revised** for every
+finding, under the six decisions in §6; §8 says where each finding landed.
 
 Dispositions: **accept, rule** — a rule in [03](03-state-machine.md) changes
 and [06](06-case-coverage.md) gets rows; **accept, design** — an architecture,
@@ -566,16 +565,16 @@ and the `exec-type` histogram 04 §7 relies on.
 
 ## 6. Decisions
 
-Six were put to the design owner after the review. Three are decided, three
-are elaborated in §7 and still open.
+Six were put to the design owner after the review; all six are decided. §7
+keeps the elaborations that preceded decisions 3, 4 and 5.
 
 | # | decision | options | recommended | **decided** |
 | --- | --- | --- | --- | --- |
 | 1 | TransactTime (60) as the tiebreak between a venue-asserted reopen and an out-of-order late report (R2), and as the staleness guard for equal-CumQty status reports (E31) | trust 60 within a venue / treat every such report as a reopen / treat every such report as late | trust 60 | **yes: trust 60.** Equal timestamps count as not-earlier; `non-fill-after-terminal` keeps the other two behaviours available |
 | 2 | key format (R12) | raw id / kind-prefixed `C:`/`O:` / raw id plus `9019 KeyKind` | kind-prefixed | **no: keep the drop copy's own ids as the key.** R12's disposition changes to collision *detection*: when a `MIDSTREAM` chain would be keyed by an OrderID that is already another chain's key (a root ClOrdID of the same text) and that chain's own OrderID is different or unknown, the next candidate id is used instead (41, then 11), `keyCollisions` counts it, and the record carries `9019 KeyKind` (`C` or `O`) as metadata only. If every candidate collides the message is `IGNORED(keyConflict)` and logged with both keys |
-| 3 | tag 9020 on the pass-through audit publishes (R19) | message as received / message plus 9020 / CorrelationId header / side-index topic | plus 9020 | **open** — §7.1 |
-| 4 | AMPS client (R5) | plain `Client` with apply-then-publish / `HAClient` with a publish store, `FailedWriteHandler`, two-phase machine | the latter | **open** — §7.2 |
-| 5 | unrouted message types (R13) | raise / catch-all route | a mode | **open** — §7.3 |
+| 3 | tag 9020 on the pass-through audit publishes (R19) | message as received / message plus 9020 / CorrelationId header / side-index topic | plus 9020 | **yes: plus 9020**, appended as a trailer — §7.1 |
+| 4 | AMPS client (R5) | plain `Client` with apply-then-publish / `HAClient` with a publish store, `FailedWriteHandler`, two-phase machine | the latter | **yes: `HAClient` with a store**, `FILE` in production, `MEMORY` for demo and tests; the blotter topic journalled — §7.2 |
+| 5 | unrouted message types (R13) | raise / catch-all route | a mode | **yes: a mode**, `strict` for tests, `lenient` for production — §7.3 |
 | 6 | 32/31 after a bust of the last fill (R15) | leave as the stateless blotter does / write `32=0 31=0` plus `9028` | write zeros plus 9028 | **yes** |
 
 ## 7. Elaborations for the open decisions
@@ -758,3 +757,35 @@ it is built.
 for the test profile and `lenient` for the production profile; `150=I` added
 to 03 §1's vocabulary as a status restatement; `35=j`/`35=3` request rejects
 as a named follow-up.
+
+## 8. Where each finding landed
+
+The revision of docs 01–07 that followed the decisions, finding by finding.
+
+| finding | landed in |
+| --- | --- |
+| R1 answering on fills | [03 §1](03-state-machine.md#1-vocabulary) *answering report*; [03 §6.4](03-state-machine.md#64-358-executionreport) pending-set rows; `fill-under-pending-id`; [03 §7.14](03-state-machine.md#714-a-fill-while-a-cancel-is-pending-under-the-cancels-id); 06 E8, E15, E32, N14 |
+| R2 detail-only row | [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) after-terminal table (fills only; venue-asserted reopen with the TransactTime tiebreak); `non-fill-after-terminal`; [03 §7.16](03-state-machine.md#716-a-replace-reported-as-cancel-then-new); 06 E21, E35–E37 |
+| R3 `150=8` adopting proposals | [03 §6.4](03-state-machine.md#64-358-executionreport) 38/44 row and `150=8` row; [03 §7.15](03-state-machine.md#715-an-amend-rejected-by-an-execution-report); 06 E16 |
+| R4 second records | [04 §2–4](04-recovery-and-operations.md#2-restart): `MissResolver`, the D keyed check, tombstones from every record, `recovery: NONE` refused; [03 §6.1](03-state-machine.md#61-35d-newordersingle); 06 E48, E53–E56 |
+| R5 publish failures | [04 §6](04-recovery-and-operations.md#6-the-publish-path); [03 §2](03-state-machine.md#2-outcomes) plan/commit; [02 §7](02-architecture.md#7-threading-and-ordering); 06 E70–E73; the blotter topic journalled |
+| R6 a 9's terminal 39 | [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) policy table and the 151 rule; [03 §7.19](03-state-machine.md#719-a-cancel-reject-that-carries-a-terminal-status); 06 N4, N5, E18 |
+| R7 MIDSTREAM from a request | [03 §3.2](03-state-machine.md#32-creation); [03 §6.1](03-state-machine.md#61-35d-newordersingle) late-D row; [02 §5](02-architecture.md#5-publish-modes) |
+| R8 `150=5` echoing the original id | [03 §6.4](03-state-machine.md#64-358-executionreport) `150=5` row; [03 §7.17](03-state-machine.md#717-a-replace-confirm-that-echoes-the-original-id); 06 E10 |
+| R9 pending ack overtaking | inferred pending entries, [03 §1](03-state-machine.md#1-vocabulary), §6.2, §6.4; [03 §7.18](03-state-machine.md#718-a-pending-acknowledgement-that-overtakes-its-request); 06 E17 |
+| R10 binding conflicts, D with 41 | [03 §3.1](03-state-machine.md#31-resolution), §3.3; 9027; 06 E58 |
+| R11 delimiters in ids | [02 §4.1](02-architecture.md#41-several-requests-in-flight-tag-9015) encoding; `UNRECOVERED`; 06 E59 |
+| R12 key namespace | decision 2: collision detection at mint time, 9019 — [03 §3.2](03-state-machine.md#32-creation); 06 E57 |
+| R13 unrouted messages | decision 5: [03 §9](03-state-machine.md#9-unrouted-and-unparseable-messages); `mode`; `fix42/unrouted`, `fix42/malformed`; 06 E50, E76 |
+| R14 term drift | `order-term-tags`, `44=0` — [03 §6.4](03-state-machine.md#64-358-executionreport); 06 N19 |
+| R15 stale 32/31, 60 | decision 6: `32=0 31=0` with 9028; 9029 LastReportTime — [02 §4](02-architecture.md#4-the-record), [03 §7.13](03-state-machine.md#713-bust-and-correct-after-the-order-is-closed-out) |
+| R16 stale bookkeeping | [03 §2](03-state-machine.md#2-outcomes), §6.6; [02 §5](02-architecture.md#5-publish-modes) last row; 9026 in [02 §3.1](02-architecture.md#31-one-entry-per-order) and [04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-checkpoint) |
+| R17 schema version | 9024 — [02 §4](02-architecture.md#4-the-record); [04 §2.1](04-recovery-and-operations.md#21-rebuild-from-the-sow-recovery-sow-the-default); 06 E62 |
+| R18 `20=3`, absent 17, extra 39 values | [03 §1](03-state-machine.md#1-vocabulary) *status restatement* and *terminal*; §5 steps 1–2; 06 E33, N18 |
+| R19 9021 growth | `chain-ids-published`, 9030; decision 3 — [02 §4](02-architecture.md#4-the-record), [02 §5](02-architecture.md#5-publish-modes); 06 E61 |
+| R20 hooks | [07 §2](07-extension-points.md#2-tier-two-hooks): fail-fast, `IndexView`, original frame to audit, the view copies budgeted; `strip-tags` in [03 §6.1](03-state-machine.md#61-35d-newordersingle); 06 E60, E74 |
+| R21 `37=NONE`, rotated 37, absent 17 | [03 §6.4](03-state-machine.md#64-358-executionreport) 37 row; the `key-guard`; tombstones of every 37 — [04 §4](04-recovery-and-operations.md#4-eviction); 06 E44 |
+| R22 daily reset | [04 §9](04-recovery-and-operations.md#9-the-daily-reset); 06 E77 |
+| §3 disputed verdicts | every row revised in [06](06-case-coverage.md), marked **(revised)** |
+| §4 ambiguities | 1: [03 §3.1](03-state-machine.md#31-resolution); 2: [03 §6.1](03-state-machine.md#61-35d-newordersingle); 3: 9010/9011 in [02 §4](02-architecture.md#4-the-record); 4: 9014 in [03 §6.4](03-state-machine.md#64-358-executionreport); 5: row order in [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision); 6–7: [02 §3.1](02-architecture.md#31-one-entry-per-order), `RecordWriter`; 8: [02 §9](02-architecture.md#9-what-changes-for-a-consumer-of-the-old-blotter); 9: [03 §3.2](03-state-machine.md#32-creation); 10–11: [03 §5](03-state-machine.md#5-arbitration-on-execution-reports), §6.4; 12–13: [04 §5](04-recovery-and-operations.md#5-one-writer); 14: 06 E5; 15: [02 §6](02-architecture.md#6-configuration); 16: [03 §6.6](03-state-machine.md#66-every-message) |
+| §5 plan gaps | [05](05-implementation-plan.md), marked *(added)* and *(changed)* |

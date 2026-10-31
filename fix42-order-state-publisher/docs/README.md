@@ -22,13 +22,14 @@ the phases.
 | [05](05-implementation-plan.md) | The implementation plan | six phases with deliverables, tests and exit criteria; the class layout; the decisions still open, each with a recommendation |
 | [06](06-case-coverage.md) | Case coverage | fifty-odd lifecycle and edge cases — normal flows, requests racing their answers, reports racing each other, mid-stream and identity — each with the rule that handles it and a verdict; and the three rules the matrix tightened |
 | [07](07-extension-points.md) | Extension points | per-venue policy bundles, the `OrderStateHook` SPI (what a hook may and must not do), replaceable components, and what is deliberately not extensible |
-| [08](08-review-findings.md) | Review findings, round 1 | an independent adversarial review of 01–07: twenty-two findings with the message sequence, what the docs say, what goes wrong and a disposition; the matrix verdicts it disputes; the ambiguities; the plan gaps; and the six decisions the revision needs first. **Docs 01–07 have not yet been revised for it** |
+| [08](08-review-findings.md) | Review findings, round 1 | an independent adversarial review of the first version of 01–07: twenty-two findings with the message sequence, what the docs said, what went wrong and a disposition; the six decisions taken on them; and where each finding landed in the revised documents |
 
 ## The design in one paragraph
 
 Every message resolves to an **OrderKey** (the root ClOrdID of a chain that
-opened with a `35=D`, otherwise the venue's OrderID) through a publisher-owned
-index of every ClOrdID and OrderID ever seen. The key is stamped on the record
+opened with a `35=D`, otherwise the venue's OrderID — always one of the drop
+copy's own ids) through a publisher-owned index of every ClOrdID and OrderID
+ever seen. The key is stamped on the record
 as tag 9020 and is the plain SOW key of `sow/fix42/order_state`, so the server
 needs no module. A cache entry per order holds the ids (11, 41, 37, the
 working id, the chain), the acked terms (38, 44), the venue's last status and
@@ -36,13 +37,15 @@ cumulative snapshot (39, 14, 151, 6), the last ExecID, and a *set* of
 in-flight requests — each with its own ClOrdID, action and proposed terms.
 `35=D` creates the entry and is published whole; every other message is
 applied to the entry under the rules in [03](03-state-machine.md) and the
-**difference** is delta-published. Because the venue's status is written only
-by the venue's own reports, and a `35=9` only removes its request from the
-set, a cancel confirmed by one report and a second cancel rejected afterwards
-end as `39=4`, `9013=NONE`: canceled, with nothing pending. The record carries
+**difference** is delta-published, through an AMPS client with a publish
+store so that nothing is lost or left unreported between the feed and the
+blotter. Because the venue's status is written only by the venue's own
+reports, and a `35=9` only removes its request from the set, a cancel
+confirmed by one report and a second cancel rejected afterwards end as
+`39=4`, `9013=NONE`: canceled, with nothing pending. The record carries
 everything the cache knows, so a restart rebuilds the cache from one `sow`
-query, and a cache miss degrades to exactly the stateless publisher's
-behaviour for that one order rather than to an error.
+query; a cache miss is resolved through the audit topics, which carry the key
+too, before it ever creates a second record.
 
 ## What is and is not verified
 
