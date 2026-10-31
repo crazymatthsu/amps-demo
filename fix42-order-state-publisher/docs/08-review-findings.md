@@ -564,13 +564,197 @@ and flush coupling with its loss bound; alert thresholds for
 `idConflicts`, `publishFailures`, `reopenedByVenue`, `terminalFromReject`,
 and the `exec-type` histogram 04 §7 relies on.
 
-## 6. Decisions needed before docs 01–07 are revised
+## 6. Decisions
 
-| decision | options | recommendation |
+Six were put to the design owner after the review. Three are decided, three
+are elaborated in §7 and still open.
+
+| # | decision | options | recommended | **decided** |
+| --- | --- | --- | --- | --- |
+| 1 | TransactTime (60) as the tiebreak between a venue-asserted reopen and an out-of-order late report (R2), and as the staleness guard for equal-CumQty status reports (E31) | trust 60 within a venue / treat every such report as a reopen / treat every such report as late | trust 60 | **yes: trust 60.** Equal timestamps count as not-earlier; `non-fill-after-terminal` keeps the other two behaviours available |
+| 2 | key format (R12) | raw id / kind-prefixed `C:`/`O:` / raw id plus `9019 KeyKind` | kind-prefixed | **no: keep the drop copy's own ids as the key.** R12's disposition changes to collision *detection*: when a `MIDSTREAM` chain would be keyed by an OrderID that is already another chain's key (a root ClOrdID of the same text) and that chain's own OrderID is different or unknown, the next candidate id is used instead (41, then 11), `keyCollisions` counts it, and the record carries `9019 KeyKind` (`C` or `O`) as metadata only. If every candidate collides the message is `IGNORED(keyConflict)` and logged with both keys |
+| 3 | tag 9020 on the pass-through audit publishes (R19) | message as received / message plus 9020 / CorrelationId header / side-index topic | plus 9020 | **open** — §7.1 |
+| 4 | AMPS client (R5) | plain `Client` with apply-then-publish / `HAClient` with a publish store, `FailedWriteHandler`, two-phase machine | the latter | **open** — §7.2 |
+| 5 | unrouted message types (R13) | raise / catch-all route | a mode | **open** — §7.3 |
+| 6 | 32/31 after a bust of the last fill (R15) | leave as the stateless blotter does / write `32=0 31=0` plus `9028` | write zeros plus 9028 | **yes** |
+
+## 7. Elaborations for the open decisions
+
+### 7.1 Tag 9020 on the audit publishes
+
+**What it is.** Every message is published whole to its pass-through topic
+(`orders_audit` keyed /11, `execs_audit` keyed /17, `rejects` keyed /11).
+The proposal appends one field, `9020=<OrderKey>`, to each of those payloads
+before it is published — the key the machine filed the message under, in a
+tag the machine owns. Nothing else about the payload changes; the blotter
+publish is unaffected.
+
+**What it buys.**
+
+1. *Chain history in one query.* `sow` on each audit topic with filter
+   `/9020 = 'X-1'` returns every message of the order — D, every G and F,
+   every report, every reject — without walking 41 links or trusting 9021,
+   and so lets 9021 be capped at the last N ids (R19) without losing the
+   history.
+2. *Cache-miss lookup through primary keys only.* On a miss, almost every
+   message names a prior request id: a G or F carries 41, a report carries
+   11 and usually 41, a 9 carries 11 and 41, and every order has a D whose
+   11 is on `orders_audit`. A keyed `sow` on `orders_audit` by that id (its
+   SOW key, O(1), no secondary index) returns the audit record and its 9020:
+   the OrderKey. R4's remedy then needs no hash index on /37 and no
+   "verify on build"; the /37 lookup becomes the fallback for the one case
+   where 11 and 41 are both unknown.
+3. *An index rebuild without running the machine.* A bookmark replay of
+   `orders_audit` yields `11 → 9020` pairs directly, which is a cheaper
+   `recovery: JOURNAL` for the id index than re-deriving it.
+4. *Consumers of the audit topics group by order* without knowing the
+   chaining rules — the same reason the stateless design wanted the chaining
+   module's key visible to subscribers
+   ([docs/fix42-view/05](../../docs/fix42-view/05-the-generated-sow-key.md)).
+
+**What it costs.**
+
+- About 30 bytes per audit publish. No extra publish, no extra topic.
+- *Fidelity.* The audit record is no longer byte-identical to the wire
+  message. If the drop copy carries framing (8, 9, 10), appending a field
+  before 10 would invalidate BodyLength and CheckSum; appending it **after**
+  10, as a trailer, leaves both valid for the bytes they cover. AMPS's fix
+  parser does not care about field order (verify on build); a
+  FIX-dictionary validator fed the record would flag the trailer, which it
+  would flag anyway for any stored copy that is not a session message.
+- *A venue that uses tag 9020 itself.* The stamp is skipped and
+  `auditKeyTagConflict` counts it; the tag number is configurable.
+- The principle "the audit topics hold the message as received" is one this
+  design introduced (the stateless publisher stores route-selected subsets),
+  so changing it to "as received, plus the key it was filed under" is a
+  refinement of a new rule, not a break with practice. The repository's
+  QuickFIX/J drop-copy demo already enriches its stored copies with four
+  tags (5001–5004) for the same kind of reason.
+
+**Alternatives.**
+
+| option | fidelity | filterable by order | cost |
+| --- | --- | --- | --- |
+| A. stamp 9020 in the payload (trailer) | changed by one field | yes | ~30 B per publish |
+| B. carry the key in the AMPS `CorrelationId` header | untouched | no — content filters evaluate the body (verify on build); a reader sees the key on each record but cannot select by it | nil |
+| C. a side topic `sow/fix42/order_index` keyed /11 holding `11, 41, 37, 9020` | untouched | yes, via the side topic | one extra ~60 B publish per D/G/F/9 (not per report) |
+| D. nothing: uncapped 9021 plus a hash-indexed /37 lookup | untouched | partly | 9021 grows with every amend; the index is verify-on-build |
+
+**Recommendation.** A, with the trailer placement, unless a compliance rule
+requires the stored copy to be byte-identical to the wire, in which case C.
+B solves only half the problem; D is what R19 showed to be unbounded.
+
+### 7.2 The AMPS client: publish store, speed and disk
+
+**What a publish store does.** With a store set, `publish` writes the
+message into the store *before* sending it and returns at once; the server
+acknowledges each message as persisted; the ack discards it from the store;
+after a reconnect the client replays whatever is still there and the server
+drops any it already has as duplicates. A `FailedWriteHandler` receives every
+rejection with its reason. Without a store, none of that exists: no sequence
+numbers, no replay, no rejection report, and a disconnect loses what was in
+flight — read from the client source in
+[fix-pub-seqno/docs/02](../../fix-pub-seqno/docs/02-what-amps-already-does.md).
+
+**Does it slow the publisher?** Not in the way that matters. `publish` stays
+asynchronous — it returns after the store write, not after the server's
+acknowledgement — so the 5.3× collapse measured in
+[docs/fix42-view/06](../../docs/fix42-view/06-publish-throughput.md) for a
+flush per message does not apply. The per-publish cost is a copy into the
+store: for `MemoryPublishStore` a heap buffer; for the file-backed
+`PublishStore` a write into a memory-mapped file, not a forced disk sync per
+message. The connectors module describes the file store as "a synchronous
+write per publish" and still ships it as an option behind a `MEMORY`
+default. Neither has been measured in this repository against the 14,000
+msg/s baseline; phase 5 measures both. Expectation: single-digit
+microseconds per publish, within the noise of the INFO log line the baseline
+already pays for.
+
+**Does it need a lot of disk?** No. The store holds only messages the
+server has *not yet acknowledged*: with AMPS up, the in-flight window —
+milliseconds of flow, kilobytes. It grows only while AMPS is unreachable, at
+the rate of the flow: a 100 msg/s feed at ~300 bytes for ten minutes is
+about 18 MB. The file is preallocated at a configurable initial size (verify
+the 5.3.5.3 default) and grows beyond it only if an outage outlasts it.
+
+**The constraint that matters more than either.** The server sends
+persisted acknowledgements only for topics in the transaction log
+([fix-pub-seqno/docs/02](../../fix-pub-seqno/docs/02-what-amps-already-does.md),
+[amps-ha-demo/docs](../../amps-ha-demo/docs/replication-and-the-transaction-log.md)).
+A message published with a store to a topic that is *not* journalled is
+never acknowledged and never discarded, and the store fills. The design has
+`sow/fix42/order_state` deliberately **not** journalled (02 §1, "derivable").
+With a publish store on this client, that must change: **the blotter topic
+joins the transaction log.** Cost: the deltas themselves, roughly 150–300
+bytes each — about 200 MB for a million-message day, beside the audit
+topics' ~300 MB the design already journals, and bounded by the same journal
+ageing policy ([docs/src/transaction-log-sizing.md](../../docs/src/transaction-log-sizing.md),
+the `bounded-retention` flow). It also gives the blotter bookmark-replayable
+history for free. The alternative — a second, plain client for the blotter
+topic — would leave exactly the publishes the module exists for without
+failure reporting, so it is not an alternative.
+
+**Memory or file.** The two cover different failures:
+
+| | `MemoryPublishStore` | file `PublishStore` |
 | --- | --- | --- |
-| TransactTime (60) as the tiebreak between a venue-asserted reopen and an out-of-order late report (R2), and as the staleness guard for equal-CumQty status reports (E31) | trust 60 within a venue / ignore 60 and treat every such report as a reopen / treat every such report as late | **trust 60**: one venue, one clock, millisecond resolution; equal timestamps count as not-earlier; the knob `non-fill-after-terminal` keeps the other two behaviours available |
-| key format (R12) | raw id / kind-prefixed `C:`/`O:` / raw id plus `9019 KeyKind` | **kind-prefixed**: collisions between numeric ClOrdIDs and OrderIDs are silent data corruption; the prefix costs consumers one character in a filter |
-| tag 9020 on the pass-through audit publishes (R19) | message as received / message plus 9020 | **plus 9020**: one tag buys a chain-history query, a cheap `miss-lookup`, and an index rebuild from the journal; the audit record is still the message as received, plus the key it was filed under |
-| AMPS client (R5) | plain `Client` with apply-then-publish / `HAClient` with a publish store, `FailedWriteHandler`, and a two-phase machine | **the latter**: it is the repository's own precedent (`fix-pub-seqno`, `amps-connectors`), and without it the failure matrix in 04 is not true |
-| unrouted message types (R13) | raise, as the stateless publisher does / catch-all route | **a mode**: lenient in production, strict in tests |
-| 32/31 after a bust of the last fill (R15) | leave as the stateless blotter does / write `32=0 31=0` plus `9028` | **write zeros plus 9028**: a record that names a busted trade as its last fill is wrong, not merely stale |
+| AMPS restart or network drop, process alive | replayed, nothing lost | same |
+| server-side rejection (bad payload, missing key) | reported through `FailedWriteHandler` | same |
+| publisher process crash | the un-acknowledged window is lost (the socket buffer: milliseconds of flow), **and the FIX engine has already acknowledged those messages**, so the feed does not resend them | replayed from the file on restart; nothing lost if the file survives |
+| disk | none | small; bounded by the longest outage |
+| per publish | a heap copy | a memory-mapped write |
+
+`fix-pub-seqno`'s docs/04 recommends the file store *plus* application-level
+recovery for production, and the connectors module defaults to memory.
+
+**Recommendation.** `HAClient` with the store type configurable
+(`publish-store: MEMORY | FILE | NONE`), **`FILE` in production, `MEMORY` for
+the demo and tests**; `FailedWriteHandler` wired to `publishFailures` and a
+dirty-all republish; the two-phase `plan/commit` so a rejected `publish`
+leaves the cache unchanged; and `sow/fix42/order_state` added to the
+transaction log. `NONE` stays available for a deployment that accepts the
+stateless publisher's at-most-once semantics, with the failure matrix in 04
+§7 saying so.
+
+### 7.3 Unrouted message types
+
+**What a drop copy carries beyond D/G/F/8/9**, and what each means here:
+
+| 35 | message | on an order drop copy | effect on the design if unhandled |
+| --- | --- | --- | --- |
+| `Q` | DontKnowTrade | the client disowns a fill; references 37 and 17 | in the contract (rule 6); out of scope for v1; **no order-level change** is needed, so nothing on the blotter is wrong without it |
+| `H` | OrderStatusRequest | a client request for a status snapshot; the answer is a `35=8` with `150=I` | the H itself changes nothing; the `150=I` *is* routed as an 8 and must be treated as a status restatement — adopt the venue's absolutes if not stale, never touch the pending set or 9014 (joins R18's list) |
+| `j` | BusinessMessageReject | the venue could not process an application message; `45 RefSeqNum`, `372 RefMsgType`, `58` | **a G or F rejected this way instead of by a `35=9` leaves its request pending forever.** Handling it needs a map from the request's MsgSeqNum (34) to its ClOrdID — a small ring, since the reject follows within seconds — which is a follow-up |
+| `3` | session Reject | as `j`, at the session level | same |
+| `E`, `N`, `L` | list orders and their status | out of scope by the contract | nothing |
+| `AB`, `AC`, `AE`, `AD` | multileg, trade capture (FIX 4.4) | not 4.2; a 4.4 venue leaking | nothing |
+| `0`, `1`, `2`, `4`, `5`, `A` | heartbeat, test request, resend, sequence reset, logout, logon | consumed by the FIX engine (`fromAdmin`); seen only by a raw tap | nothing |
+| `R`, `S`, `b`, `6`, `7`, `BE`… | quotes, IOIs, user requests | irrelevant to orders | nothing |
+
+And the shapes *within* the five known types that still cannot be routed: a
+`35=8` with a 150 value no rule names (`I`, or FIX 4.4's `F`/`G`/`H` from a
+leaking venue); a message with no tag 35; a message missing the topic's key
+(a G without 11, an 8 without 17 — AMPS rejects the audit publish, R21); and
+bytes that do not parse as FIX at all.
+
+**Two modes.**
+
+| | `strict` | `lenient` |
+| --- | --- | --- |
+| unrouted type | the machine raises; the publisher stops. The stateless publisher's stance ("a silent drop looks like an AMPS bug from the far side") | published whole to `fix42/unrouted`, a **journalled, non-SOW topic** (no key needed; every message kept in arrival order; replayable by bookmark); `IGNORED(unrouted)`; a counter per 35 value; a rate-limited WARN |
+| unparseable bytes | raise | wrapped as a fix message (`9032=<base64 of the bytes>`, `9033=<reason>`) on `fix42/malformed`, same topic shape; counter |
+| a known type the rules cannot place (`150` unknown, key tag missing) | raise | audit as far as the key allows; `IGNORED(unrouted)` for the blotter; counter |
+| default | tests and development: a missing rule fails the first run that hits it | production: the feed never stops because of a message type, and nothing received is lost |
+
+What lenient mode guarantees is the property the strict mode was protecting:
+**every byte received lands somewhere journalled**, so the day can be
+replayed into a later version that handles `35=Q` or `35=j`, and the
+counters make the gap visible rather than silent. What it does not do is
+make the blotter right for a request rejected by `35=j`; that needs the
+MsgSeqNum ring above, listed as a follow-up with a hook recipe in 07 until
+it is built.
+
+**Recommendation.** Both modes, `strict` the default in `application.yml`
+for the test profile and `lenient` for the production profile; `150=I` added
+to 03 §1's vocabulary as a status restatement; `35=j`/`35=3` request rejects
+as a named follow-up.
