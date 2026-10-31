@@ -24,14 +24,31 @@ venue-dialect knobs:
 | `transact-time-guard` | `true` (default), `false` | drop a non-reopening report with equal CumQty and an older TransactTime |
 | `exec-id-history` | integer, default 8 | depth of the per-order ExecID ring |
 | `order-term-tags` | a tag list | which order terms a `150=0/5/D` report refreshes |
+| `strip-tags` | a tag list | the session header and trailer tags removed from every payload the machine builds; 9010–9099 are always removed |
+| `chain-ids-published` | integer, default 50 | how many ClOrdIDs 9021 carries |
 | `terminal-retention` | duration, default never | when a terminal order leaves the cache |
-| `recovery`, `miss-lookup`, `publish-store`, `mode` | see [02 §6](02-architecture.md#6-configuration) | operations rather than dialect |
+
+The remaining knobs are operations rather than dialect, all in
+[02 §6](02-architecture.md#6-configuration): `mode`, `publish-store`,
+`publish-store-dir`, `recovery`, `load-open-orders-only`,
+`allow-incomplete-cache`, `miss-lookup`, `miss-lookup-by-order-id`,
+`publish-unchanged`, `schema-version`, `dialect`, `audit.key-tag`.
 
 A `VenueDialect` is a named bundle of the dialect knobs (`default`, plus
 whatever a deployment adds in yml under `dialects:`), selected per publisher.
 It costs nothing in the machine — it is a different set of constructor
 arguments — and it makes "we are connecting to venue Z" a one-line change
-rather than eight.
+rather than ten.
+
+**One precondition every dialect shares.** The TransactTime rules
+([03 §4–5](03-state-machine.md#4-status-venue-truth-and-one-policy-decision))
+assume the reports of one order come from **one clock**: one matching engine,
+or engines whose clocks agree to within the resolution of tag 60. A broker tap
+that merges several venues' reports for one order, or a venue whose `60` is
+not monotonic within a session, does not meet it; such a deployment runs
+`transact-time-guard: false` and `non-fill-after-terminal: IGNORE`, and
+accepts that an old status report redelivered out of order is caught only by
+its CumQty.
 
 ## 2. Tier two: hooks
 

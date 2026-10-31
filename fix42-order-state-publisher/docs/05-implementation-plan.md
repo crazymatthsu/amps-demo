@@ -62,17 +62,26 @@ has to be able to speak more than one.
 - **venue-dialect switches** on `OrderChain` *(added)*: `fillsEchoPendingId`
   (on by default — it is what the chain already does, and what the FIX
   matrices prescribe), `confirmsEchoOriginalId` (`150=4`/`150=5` carry the
-  original ClOrdID), `replaceAsCancelThenNew`, `rejectReplaceWithExecReport`
+  original ClOrdID), `pendingAcksEchoWorkingId` (`150=6`/`E` carry the
+  working id), `replaceAsCancelThenNew`, `rejectReplaceWithExecReport`
   (`150=8` with `39=8` or `39=1`), `rejectStatusAtRequestTime` (a 9 carries
-  `39=6`), `statusReportsWithoutExecId` (`20=3` with `17=0`);
+  `39=6`, or a given 39), `statusReportsWithoutExecId` (`20=3` with `17=0` or
+  none), `rejectWithoutOrderId` (`150=8` with `37=NONE`),
+  `transactTimeInSeconds` (`60` without milliseconds), `orderIdEqualsClOrdId`;
+  and the guards the chain has today become switches: `bustAfterCloseOut`
+  (a bust or correct after a cancel), `restateWhilePending`, so the
+  walkthroughs of [03 §7](03-state-machine.md#7-walkthroughs) are all
+  expressible (round-2 sweep item 14);
 - new venue behaviours: `resendLastReport()` (PossDup duplicate),
   `redeliver(reportOrdinal)` (stale), `redeliverStatus(reportOrdinal)` (an
   old ack or `20=3` with equal CumQty), `lateFill(shares, px)` after a
   close-out, `cancelRequest()` after close-out, `withoutNewOrder()`,
   `lateNewOrder()`, `pendingAckBeforeRequest()`, `newOrderLinkedTo(id)` (a D
-  carrying 41), `amendToMarket()` (`40=1`, no 44, `110=0`), ids containing
-  `:`, `;`, `,` and `%`, a D carrying tags in 9010–9099 and FIX header tags,
-  `thousandAmends()`;
+  carrying 41), `amendNamingAnotherOrder(id)` (a G whose 37 and 41 disagree),
+  `amendToMarket()` (`40=1`, no 44, `110=0`), `redeliverBust(ordinal)`, ids
+  containing `:`, `;`, `,` and `%`, a D carrying tags in 9010–9099 and FIX
+  header tags, `thousandAmends()`, and a second chain whose OrderID equals the
+  first chain's root ClOrdID;
 - `EdgeCaseFlow` in the new module: one chain per walkthrough in
   [03 §7](03-state-machine.md#7-walkthroughs) and one per row of
   [06](06-case-coverage.md) that a mock venue can express, plus the ten
@@ -87,12 +96,14 @@ scripted-flow pin still passes.
 
 **Deliverables** (package `com.demo.amps.fix42.state`)
 
-- `OrderKeyIndex` — the maps, the per-type resolution order of
-  [03 §3](03-state-machine.md#3-identity), no-rebind with `idConflicts`,
-  answered ids, tombstones (every 37), key-collision detection at mint time
-  (decision 2);
+- `OrderKeyIndex` — **two maps** (ClOrdID → key, OrderID → key), the per-type
+  resolution order of [03 §3](03-state-machine.md#3-identity) consulting the
+  right map at each step, no-rebind with `idConflicts`, answered ids,
+  tombstones (every 37), key-collision detection at mint time against the set
+  of keys (decision 2, S1);
 - `OrderState` — the entry of [02 §3.1](02-architecture.md#31-one-entry-per-order),
-  quantities as numbers, a dirty bitmask per record field, `dirtyAll`;
+  quantities as numbers, a dirty bitmask per record field, `dirtyAll`, the
+  busted set (9031), the kept creation payload;
 - `PendingRequest` and the small set that holds them, with the
   requested/inferred flag;
 - `OrderStateMachine.plan(FixFrame) → Outcome` and `commit()` *(two-phase,
@@ -103,8 +114,11 @@ scripted-flow pin still passes.
   `chain-ids-published` as constructor options (tier one of
   [07](07-extension-points.md));
 - `RecordWriter` — `OrderState` → FIX bytes, whole or dirty-only, into a
-  `FixWriter`; never an empty value; the 9015 and 9021 encodings with
-  `%`-escaping and their parsers (needed again by the rebuild in phase 4).
+  `FixWriter`; never an empty tag value; the 9015, 9021 and 9031 encodings
+  with `%`-escaping and empty sub-fields for "no proposal", and their parsers
+  (needed again by the rebuild in phase 4);
+- the repair queue: a single-consumer queue of keys the `FailedWriteHandler`
+  fills and the publishing thread drains (S2).
 
 **Tests**
 
@@ -120,6 +134,10 @@ scripted-flow pin still passes.
 - numeric comparison of text quantities (`300` vs `300.0` vs `0300`);
 - `plan` leaves the entry untouched until `commit`; a second `plan` on the
   same message without a `commit` returns the same outcome;
+- a repair after a rejected delta is a delta of every cached field and never
+  a `publish`; a repair after a rejected creation re-sends the kept payload
+  (S2); the typed index resolves `8 … 37=123456` to nothing when `123456` is
+  another order's root ClOrdID (S1);
 - the `publish-unchanged` payload shape (9025, and 9021/9030 when an id was
   bound; never 9023 or 60);
 - a property-style test over `EdgeCaseFlow`: for every chain under every
@@ -134,20 +152,24 @@ dependency in the package.
 **Deliverables**
 
 - `server/config/flows/fix42-order-state/amps-config.xml`: the topics and
-  views of [02 §1](02-architecture.md#1-topology); no `<Modules>`;
-  `sow/fix42/order_state`, the three audit topics and the two catch-all
-  topics journalled *(changed: the blotter topic joins the transaction log,
-  decision 4)*; `./server/scripts/amps.sh validate` passes and
-  `:server:checkConfigXml` is green;
+  views of [02 §1](02-architecture.md#1-topology); no `<Modules>`; **every
+  topic the publisher writes** journalled — `sow/fix42/order_state`,
+  `sow/fix42/execs`, the three audit topics and the two catch-all topics
+  *(changed: decision 4, and S3 for `execs`)*; `./server/scripts/amps.sh
+  validate` passes and `:server:checkConfigXml` is green;
 - `AmpsFlow.FIX42_ORDER_STATE` in `amps-test-harness`;
 - `AmpsClientConfiguration`: an `HAClient` with `publish-store: FILE | MEMORY
-  | NONE`, a `FailedWriteHandler` wired to `publishFailures` and dirty-all,
-  `NameInUse` retry *(added, decision 4)*;
+  | NONE`, a `FailedWriteHandler` that counts `publishFailures` and enqueues
+  repairs, `NameInUse` retry *(added, decision 4; the repair shape from S2)*;
 - `OrderStateProperties` (+ `validate()`, including `apply-state`, the
-  `mode`, and the refusal of `recovery: NONE` against a non-empty blotter),
-  `AuditRouter` (whole message plus 9020 as a trailer, the per-payload key
-  check, the `key-guard`, the lenient-mode catch-all) *(changed, decisions 3
-  and 5)*, `OrderStatePublisher` (plan → publish → commit),
+  `mode`, `audit.key-tag = order-state.key-tag`, and the refusal of
+  `recovery: NONE` against a non-empty blotter), `AuditRouter` (whole message
+  plus 9020 as a trailer when resolved, the **per-topic** key check that
+  skips one topic rather than the message, the `key-guard` lists, the
+  lenient-mode catch-all) *(changed, decisions 3 and 5, S10)*,
+  `OrderStatePublisher` (plan → blotter publish → audit publishes → commit;
+  the repair queue drained before each message, on an idle timer and at
+  shutdown),
   `FeedAdapter` with `MockFlowRunner` implementing it,
   `Fix42OrderStatePublisherApplication`; `application.yml` as in
   [02 §6](02-architecture.md#6-configuration);
@@ -174,13 +196,20 @@ dependency in the package.
 - `ExposureViewIT` counterpart: the four views over the new topic agree with
   the old suite's expected numbers for the scripted flow, go to zero on the
   terminal reports, and include a `MIDSTREAM` record's contribution;
-- `PublishPathIT` *(added)*: a report deliberately lacking 17 is refused by
-  AMPS on `execs_audit` and the `FailedWriteHandler` fires; AMPS is restarted
-  mid-flow and the end state is unchanged; a second client with the same name
-  gets `NameInUse`; a record without tag 35 is stored; an empty value in a
-  delta is rejected or ignored (whichever the build does, pinned);
-  `delta_publish` to a key with no record is stored as a publish, or the
-  fallback engages.
+- `PublishPathIT` *(added)*: a payload lacking its key, published through the
+  **raw client** (the router would divert it), is refused by AMPS and the
+  `FailedWriteHandler` fires, and the repair that follows is a delta of every
+  cached field that leaves the D's terms intact (S2); a 17-less `20=3` goes
+  through the router to the blotter and to `fix42/unrouted`, not to
+  `execs_audit` (S10); `publishStoreDepth` returns to zero after a quiet flush
+  with every route live, which is the test that every published topic is
+  journalled (S3); AMPS is restarted mid-flow and the end state is unchanged;
+  a second client with the same name gets `NameInUse`; a record without tag
+  35 is stored; an empty value in a delta is rejected or ignored (whichever
+  the build does, pinned); `delta_publish` to a key with no record is stored
+  as a publish, or the fallback engages; `sow_delete` by filter removes
+  records durably and a deleted SOW file of a journalled topic does or does
+  not come back at restart (pinned, S13).
 
 **Exit criteria.** `AMPS_IMAGE=… ./gradlew :fix42-order-state-publisher:integrationTest`
 green with zero skipped; `bootRun` against the flow shows the two-cancels
@@ -194,8 +223,9 @@ order as canceled in the admin console.
   tombstones for every record, 9024 handling, `UNRECOVERED`;
 - `MissResolver`: the lookups of [04 §3](04-recovery-and-operations.md#3-cache-misses),
   default on; the D keyed check when the cache is incomplete *(added, R4)*;
-- `terminal-retention` with tombstones holding every 37
-  ([04 §4](04-recovery-and-operations.md#4-eviction));
+- `terminal-retention` with tombstones holding every 37, and recreation of
+  an evicted entry through the `MissResolver` path, never from the report
+  ([04 §4](04-recovery-and-operations.md#4-eviction), S9);
 - a QuickFIX/J `FeedAdapter` *(added)*: `fromApp` → `send` → `commit` → return,
   so the engine's sequence-number persistence follows the publish store
   write; the loss bound of [04 §6](04-recovery-and-operations.md#6-the-publish-path)
@@ -217,8 +247,12 @@ order as canceled in the admin console.
 - `PartialLoadIT` *(added)*: `load-open-orders-only`, then a late bust for a
   terminal order lands on its record via the tombstone;
 - `EvictionIT`: `terminal-retention` of a second; a bust after eviction lands
-  on the original record; a late request under a new ClOrdID resolves through
-  the audit lookup;
+  on the original record **and leaves 9021/9023 intact** (the entry came back
+  from the record, not from the bust); a late request under a new ClOrdID
+  resolves through the audit lookup;
+- `ResetIT` *(added)*: the §9 reset keeps `/9017 = 'N'` records; a next-day
+  bust for a removed order becomes a `MIDSTREAM` record under its old key and
+  counts `missLookupOrphans` (S8);
 - `SchemaIT` *(added)*: records missing 9026, records with an unknown 9024;
 - `StoreCrashIT` *(added)*: kill the publisher between the store write and the
   acknowledgement with `FILE`; restart; nothing missing. With `MEMORY`, the
@@ -301,11 +335,11 @@ review are marked (decision n); the rest were settled in the documents.
 | audit topics receive | **the whole message plus 9020** as a trailer (decision 3) | an audit trail filed under its key: one query per order's history, cheap cache-miss lookups, a cap on 9021 — [02 §5](02-architecture.md#5-publish-modes) |
 | `35=9`'s tag 39 | **`WHEN_NOT_TERMINAL`**, excluding `8` and stale pending statuses; a terminal value zeroes 151 | [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) |
 | a fill after a terminal report | **`APPLY_ECONOMICS`** | a trade is money; the status is the venue's to reopen — [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) |
-| a non-fill report after a terminal report | **`ADOPT_VENUE_IF_LATER`**, TransactTime as the tiebreak (decision 1) | a venue saying the order is working is believed when its statement is newer — [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) |
+| a non-fill report after a terminal report | **`ADOPT_VENUE_IF_LATER`**, TransactTime as the tiebreak (decision 1): newer by a whole second when either timestamp lacks milliseconds, or answering a pending request; never an IOC/FOK that answers nothing | a venue saying the order is working is believed when its statement is newer or answers this side's request — [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision), S4 |
 | a fill carrying a pending amend's id | **`IGNORE`**: not an answer | the FIX matrices' shape; `ANSWERS_REPLACE_IF_TERMS_MATCH` for a venue that never sends `150=5` — [03 §6.4](03-state-machine.md#64-358-executionreport) |
 | which report answers which request | **by ExecType**, matched on tag 11; a NEW by any non-pending-ack report | [03 §1](03-state-machine.md#1-vocabulary), R1 |
 | duplicate detection | ring, depth 8, plus the CumQty stale guard and the TransactTime late guard | the cache stays small; status-only resends are caught by time — [03 §5](03-state-machine.md#5-arbitration-on-execution-reports) |
-| key tag and format | **9020, one of the drop copy's own ids, unprefixed** (decision 2); collisions detected at mint time; 9019 says the kind | [03 §3.2](03-state-machine.md#32-creation) |
+| key tag and format | **9020, one of the drop copy's own ids, unprefixed** (decision 2); a **typed index** (ClOrdIDs and OrderIDs in separate maps) so an OrderID equal to another order's ClOrdID cannot resolve to it; collisions detected at mint time; 9019 says the kind | [03 §3.1–3.2](03-state-machine.md#31-resolution), S1 |
 | AMPS client | **`HAClient` with a publish store** (decision 4), `FILE` in production, `MEMORY` for demo and tests; `FailedWriteHandler`; two-phase plan/commit; the blotter topic journalled | [04 §6](04-recovery-and-operations.md#6-the-publish-path) |
 | unrouted and unparseable messages | **a mode** (decision 5): `strict` for tests, `lenient` for production with `fix42/unrouted` and `fix42/malformed` | [03 §9](03-state-machine.md#9-unrouted-and-unparseable-messages) |
 | 32/31 after a bust of the last fill | **zeroed**, with 9028 naming the fill (decision 6) | [03 §6.4](03-state-machine.md#64-358-executionreport) |
@@ -329,7 +363,8 @@ building after phase 4's measurements.
 | a bookmark subscription across three topics does not preserve journal order | `recovery: JOURNAL` is optional and last; the SOW rebuild does not need it |
 | the publish store's per-publish cost moves the tail latency | phase 5 measures each store type against the 14k msg/s baseline; `MEMORY` is a configuration change |
 | the cache's allocations move the tail latency the old publisher was tuned for | phase 5 measures; ids can be canonicalised through the index before anything else is tried |
-| TransactTime is unreliable on some venue (coarse, or not monotonic within a session) | `transact-time-guard: false` and `non-fill-after-terminal: ADOPT_VENUE` or `IGNORE` restore the time-free behaviour per dialect |
+| TransactTime is unreliable on some venue (coarse, or not monotonic within a session) | second-resolution `60` is handled by the whole-second rule and the answers-a-request rule; a tap that merges clocks runs `non-fill-after-terminal: IGNORE` and `transact-time-guard: false` ([07 §1](07-extension-points.md#1-tier-one-policies) states the one-clock precondition) |
+| AMPS acknowledges unjournalled publishes on this build after all | the `publishStoreDepth` assertion in `PublishPathIT` tells either way; the journal entries stay useful for replay, and the rule in 04 §6 becomes a recommendation |
 | the mock venue's dialect switches disturb the scripted flow | the pin test from phase 0; the default dialect is the one the chain already spoke |
 | the two copies of the FIX layer and the mock venue drift apart | by design they are allowed to; the pin test guards the scripted flow; a fix found in one `FixFrame` is ported by hand |
 | a venue dialect matches none of the policies | the policy enums are behind one switch each, and a `beforeApply` hook can normalise the message; 9025/9016/counters make the symptom visible first |

@@ -36,10 +36,10 @@ produces; the changes are marked where they land and summarised in
 | **reopening report** | a report that may legitimately move a terminal order: a bust (`20=1`), a correct (`20=2`), or a restatement (`150=D`) |
 | **pending acknowledgement** | a report with `150 ∈ {A, 6, E}`: the venue has received a request and not yet decided |
 | **status restatement** | a report with `20=3`, or `150=I` (the answer to a `35=H`): the venue restating current state. It is applied like any report, never touches the pending set or 9014, and is exempt from duplicate detection when its 17 is absent, `0` or `NONE` |
-| **fill** | a report with `150 ∈ {1, 2}` and `20 ∈ {0, absent}` |
-| **answering report** | a report that resolves a pending request, by ExecType (§6.4): `150=5` a REPLACE, `150=4` a CANCEL, `150=0`/`8` a NEW — and a NEW is also answered by *any* report for the order that is not a pending acknowledgement, because the venue reporting on the order means it has accepted or rejected it. **A fill never answers a CANCEL and, by default, never answers a REPLACE**: fills reported while a request is pending carry the *request's* ClOrdID, which is not an answer (R1) |
+| **fill** | a report with `150 ∈ {1, 2}` and `20 ∈ {0, absent}`; also a report with a 150 value the rules do not name when it carries 32 — an unknown 150 is classified as *other* or *fill* and applied, never treated as unrouted (S11, §9) |
+| **answering report** | a report that resolves a pending request, by ExecType (§6.4): `150=5` a REPLACE, `150=4` a CANCEL, `150=0`/`8` a NEW — and a NEW is also answered by *any* report for the order that is not a pending acknowledgement, because the venue reporting on the order means it has accepted or rejected it. **A fill never answers a CANCEL and, by default, never answers a REPLACE**: fills reported while a request is pending carry the *request's* ClOrdID, which is not an answer (R1). The NEW rule takes precedence over every "never touches the set" rule in §6.4: a `150=C` for a FOK that never worked answers its NEW (S12) |
 | **late execution** | a fill on a terminal order whose CumQty is **higher** than the record's: a trade the venue reports after it closed the order out |
-| **venue-asserted reopen** | a non-fill, non-pending-acknowledgement report with a non-terminal 39 on a terminal order, whose TransactTime is not earlier than the last applied report's: the venue saying the order is working after all (R2) |
+| **venue-asserted reopen** | a non-fill, non-pending-acknowledgement report with a non-terminal 39 on a terminal order that either **answers a pending request** (a `150=0` naming a pending REPLACE — the cancel-then-new dialect) or is **newer** than the last applied venue message: later than 9029, and strictly later by a whole second when either timestamp lacks milliseconds (S4). Never on an order with `59 ∈ {3, 4}` (IOC, FOK) unless it answers a request: those cannot come back, and their overtaken ack is the common false positive (R2, S4) |
 
 ## 2. Outcomes
 
@@ -76,6 +76,13 @@ different orders in three sections):
 
 `unknown` when none of the candidates is indexed.
 
+**Two maps, not one (S1).** `OrderKeyIndex` keeps ClOrdIDs and OrderIDs in
+separate maps. The "37 →" step consults only the OrderID map; the "11 →" and
+"41 →" steps only the ClOrdID map. Numeric ids are common on both sides, and
+with a single map order B's first report `8 … 37=123456` would resolve to order
+A's chain `D 11=123456` at step 1, before any collision check could run; with
+two maps it misses, and creation (§3.2) sees that `123456` is already a key.
+
 ### 3.2 Creation
 
 | first message of the chain | OrderKey | `9019` | `9018` | initial state |
@@ -86,11 +93,15 @@ different orders in three sections):
 | a `35=9` | — | — | — | **never creates a chain.** It goes to `sow/fix42/rejects` whole, counts `unmatchedRejects`, and is `IGNORED(unmatched)` (08 §4 item 9) |
 
 **Collisions (decision 2).** The key is always one of the drop copy's own
-ids, unprefixed. A candidate that is already another chain's key — a numeric
-OrderID equal to some other order's root ClOrdID — is skipped for the next
-candidate, `keyCollisions` counts it, and 9019 says which kind of id the key
-is. If every candidate collides the message is `IGNORED(keyConflict)` and
-logged with both keys (R12).
+ids, unprefixed. A candidate that is already **another chain's key** — the set
+of keys spans both kinds of id — is skipped for the next candidate,
+`keyCollisions` counts it, and 9019 says which kind of id the key is. If every
+candidate collides the message is `IGNORED(keyConflict)` and logged with both
+keys (R12). The typed maps of §3.1 are what make this reachable: resolution
+cannot land on the wrong chain first. A venue that sets OrderID equal to the
+order's own ClOrdID is not a collision — the report resolves through 11 before
+37 is bound, and 37 then goes into the OrderID map harmlessly
+([7.21](#721-an-orderid-that-equals-another-orders-clordid)).
 
 A D's own ClOrdID is the key because it exists before the venue has said
 anything. For a mid-stream chain the OrderID is the most stable id available;
@@ -98,8 +109,9 @@ anything. For a mid-stream chain the OrderID is the most stable id available;
 
 ### 3.3 Binding
 
-After every message, whatever the outcome: 11 → key, 41 → key, 37 → key
-(unless `NONE`), **never rebinding an id already bound to a different key**
+After every message, whatever the outcome: 11 and 41 → key in the ClOrdID
+map, 37 (unless `NONE`) → key in the OrderID map, **never rebinding an id
+already bound to a different key**
 — the existing binding stands, `idConflicts` counts it, and both keys are
 logged (R10). A new 11 is appended to the chain list (9021, the last
 `chain-ids-published` of them on the record; 9030 the full count). The index
@@ -152,8 +164,9 @@ handled by what it is, in this order (R2):
 | a **fill**, 14 **equal**, 17 new | the report of a fill the terminal report already counted, arriving late: 17, 150, 32, 31, 30 and 9028 are adopted, nothing else moves. This row is for fills **only**; the first version applied it to every non-fill report too, and a venue re-acking a working order was swallowed by it |
 | a fill, 14 **lower** | `IGNORED(stale)` — §5 |
 | any report, 17 already seen | `IGNORED(duplicate)` — §5 |
-| a **non-fill** report with a non-terminal 39 (a `150=0`, a `150=5`, a status restatement), 60 **not earlier** than 9029 | a **venue-asserted reopen**. Per `non-fill-after-terminal`: **`ADOPT_VENUE_IF_LATER`** (default) applies it in full — 39, 151, 38/44, terms, 9017 recomputed, and whatever request it answers — and counts `reopenedByVenue`; `ADOPT_VENUE` does the same without the time test; `IGNORE` drops it |
-| the same, 60 **earlier** than 9029 | an ack or status that was overtaken by the terminal report: `IGNORED(late)` |
+| a **non-fill** report with a non-terminal 39 (a `150=0`, a `150=5`, a status restatement) that **answers a pending request**, or is **newer** than 9029 — strictly, by a whole second, when either timestamp lacks milliseconds — and the order is not IOC/FOK unless it answers a request | a **venue-asserted reopen**. Per `non-fill-after-terminal`: **`ADOPT_VENUE_IF_LATER`** (default) applies it in full — 39, 151, 38/44, terms, 9017 recomputed, and whatever request it answers — and counts `reopenedByVenue`; `ADOPT_VENUE` applies it without the time test (IOC/FOK still excluded); `IGNORE` drops it |
+| the same, not newer than 9029, or an IOC/FOK answering nothing | an ack or status that was overtaken by the terminal report: `IGNORED(late)`; `lateIocAck` counts the IOC/FOK case |
+| the same, with no 60 and no 52 to judge by | indistinguishable from an overtaken ack: `IGNORED(late)`, `reopenUndecidable` counts — the conservative side, because a wrong reopen is live exposure the views never stop counting |
 
 A request on a terminal order joins the pending set (the venue will reject
 it, and the record should show it is unanswered) and changes nothing else.
@@ -163,9 +176,17 @@ reports a trade has not reopened it, so the late execution's economics land
 and the status stays. The venue that closed an order and then *says it is
 working* — the cancel-then-new replace dialect of [7.16](#716-a-replace-reported-as-cancel-then-new),
 or a correction of an erroneous terminal report — is believed, provided its
-statement is newer than the report it contradicts. TransactTime is the
-tiebreak because within one venue it is one clock at millisecond resolution
-(decision 1); equal timestamps count as not-earlier.
+statement answers a request this side made or is newer than the report it
+contradicts. TransactTime is the tiebreak because within one venue it is one
+clock (decision 1). FIX 4.2 allows `60` without milliseconds, and a venue
+that sends seconds makes an overtaken ack and a genuine re-ack
+indistinguishable within one second — so without milliseconds a reopen needs
+a *later second*, and a report that answers a pending request needs no time
+at all. A broker tap that merges several matching engines has several clocks;
+`non-fill-after-terminal: IGNORE` is for that deployment, and
+[07 §1](07-extension-points.md#1-tier-one-policies) states the one-clock
+precondition. The "its own 39 terminal" row is reached only after §5: a
+`150=3` with equal CumQty and an older TransactTime is `IGNORED(late)` first.
 
 ## 5. Arbitration on execution reports
 
@@ -173,25 +194,34 @@ Applied in this order, before any field is touched:
 
 1. **Classify.** Reopening, pending acknowledgement, status restatement, fill,
    or other, per §1. `20=3` is a status restatement and is **never** treated
-   as a fill, whatever its 150 (R18).
+   as a fill, whatever its 150 (R18). A 150 value the rules do not name
+   (`F`, `G`, `H` from a FIX 4.4 venue, say) is *fill* when 32 is present and
+   *other* when not; it is applied like any report, touches no pending entry,
+   and its value goes into the per-150 histogram (S11).
 2. **Duplicate.** Tag 17 is present, not `0`, not `NONE`, and equals the last
    applied ExecID or is in the per-order ring of the last `exec-id-history`
    ExecIDs → `IGNORED(duplicate)`. A report without a usable 17 is not
-   deduplicated (status restatements often carry none). Bounded on purpose: a
-   PossDup resend repeats the tail of the stream, and the next two guards
-   catch anything older.
+   deduplicated (status restatements often carry none). A bust or correct
+   whose 19 is already in the order's busted set (9031) is a duplicate too,
+   however old (S5). Bounded on purpose: a PossDup resend repeats the tail of
+   the stream, and the next two guards catch anything older.
 3. **Stale.** `stale-guard: true`, the report is not reopening, it carries 14,
    and 14 is lower than the cached CumQty → `IGNORED(stale)`. CumQty is
    monotonic per chain except across a bust or correct, which restate it
    explicitly and are exempt. Comparison is **numeric**, never textual
    (`300`, `300.0` and `0300` are equal).
-4. **Late.** `transact-time-guard: true` (decision 1), the report is not
-   reopening, its 14 is equal to the cached CumQty or absent, and its 60 is
-   **earlier** than 9029 (the latest TransactTime of any applied report) →
-   `IGNORED(late)`. This is what stops a resent old ack (`150=0 39=0 14=0`)
-   from taking a working order's status back from `6` to `0` (08's E31): CumQty
-   alone cannot tell two status-bearing reports apart, their timestamps can.
-   A fill with a higher 14 never reaches this step.
+4. **Late.** `transact-time-guard: true` (decision 1). A non-reopening report
+   whose 14 is equal to the cached CumQty or absent, and whose 60 is
+   **earlier** than 9029 (the latest TransactTime of any applied venue
+   message — reports and rejects alike) → `IGNORED(late)`. A **reopening**
+   report whose 60 is earlier than 9029 → `IGNORED(late)` too, whatever its 14
+   (S5): a bust or restatement the venue issued is newer than every report
+   before it, so an older one is a redelivery. A report with no 60 is judged
+   by 52; with neither, this step is skipped. This is what stops a resent old
+   ack (`150=0 39=0 14=0`) from taking a working order's status back from `6`
+   to `0` (08's E31): CumQty alone cannot tell two status-bearing reports
+   apart, their timestamps can. A fill with a higher 14 never reaches this
+   step.
 5. **After a terminal status.** The order is terminal and the report is not
    reopening → the table in §4 decides.
 
@@ -207,16 +237,18 @@ late guards treat an absent 14 as equal.
 
 | situation | effect |
 | --- | --- |
-| 11 unknown, cache complete | **create** (§3.2). `CREATED` → FULL publish: the D's fields less the **stripped tags**, plus every state tag with its initial value (`39=A`, `9013=NEW`, `9012=`11, `9010=0`, `9011=0`, `9014=`11, `9015=`NEW:R:0:0:11, `9016=1`, `9017=N`, `9018=D`, `9019=C`, `9020`, `9021`, `9022=D`, `9023=1`, `9024=1`, `9025=0`, `9026=0`, `9030=1`, `14=0`, `151=`38, `6=0`; `9027=`41 if the D carried one; `9000` if it carried one) |
+| 11 unknown, cache complete | **create** (§3.2). `CREATED` → FULL publish: the D's fields less the **stripped tags**, plus every state tag with its initial value (`39=A`, `9013=NEW`, `9012=`11, `9010=0`, `9011=0`, `9014=`11, `9015=`NEW:R:::11, `9016=1`, `9017=N`, `9018=D`, `9019=C`, `9020`, `9021`, `9022=D`, `9023=1`, `9024=1`, `9025=0`, `9026=0`, `9030=1`, `14=0`, `151=`38, `6=0`; `9027=`41 if the D carried one; `9000` if it carried one) |
 | 11 unknown, cache **incomplete** (`recovery: NONE` or a partial load, [04 §3](04-recovery-and-operations.md#3-cache-misses)) | a keyed `sow` on `sow/fix42/order_state` by `9020 =` 11 first. A record found → the entry is rebuilt from it and the D is handled as the next row says; none → create as above. Never a FULL publish over a record the cache merely did not know about (R4c) |
-| 11 bound, origin `MIDSTREAM` (a late D) | the D's **descriptive** terms are applied — its message less the stripped tags, less 38/44; 38/44 too only when the record has neither and no report has been seen. `9018=D_LATE`. **Never adds a NEW** to the pending set: the venue has evidently seen the order. Bookkeeping as for every applied message (§6.6). `CHANGED` |
+| 11 bound, origin `MIDSTREAM` (a late D) | the D's **descriptive** terms are applied — its message less the stripped tags, less 38/44; 38/44 too only when the record has neither and no report has been seen. `9018=D_LATE`. **Never adds a NEW** to the pending set: the venue has evidently seen the order; an **inferred** NEW already in the set (from a `150=A`) becomes requested (S7). Bookkeeping as for every applied message (§6.6). `CHANGED` |
 | 11 bound, origin `D` or `D_LATE` (a resent D) | `IGNORED(duplicate request)` — a FULL publish here would erase every delta since the original |
 
-**Stripped tags.** The FULL publish omits the FIX session header and trailer
-(`strip-tags`, default 8, 9, 10, 34, 43, 49, 50, 52, 56, 57, 97, 115, 116,
-122, 128, 129) and **every tag in 9010–9099** the message carries, because
-that range is the machine's own and a venue or OMS custom tag there would
-overwrite state at creation (R20e). 9000 is kept. `strippedTags` counts.
+**Stripped tags.** Every payload the machine builds from a message — the
+FULL publish, the late-D delta, a `MIDSTREAM` creation from a report — omits
+the FIX session header and trailer (`strip-tags`, default 8, 9, 10, 34, 43,
+49, 50, 52, 56, 57, 97, 115, 116, 122, 128, 129) and **every tag in
+9010–9099** the message carries, because that range is the machine's own and
+a venue or OMS custom tag there would overwrite state (R20e, S18). 9000 is
+kept. The audit publishes strip nothing. `strippedTags` counts.
 
 ### 6.2 `35=G` OrderCancelReplaceRequest
 
@@ -225,6 +257,7 @@ overwrite state at creation (R20e). 9000 is kept. `strippedTags` counts.
 | resolve (41 → 37 → 11); unknown → create `MIDSTREAM` from the request (§3.2) | |
 | 11 is in the pending set as **inferred** (the venue's `150=E` overtook this G on a tap that merges two sessions) | the entry becomes **requested** and takes the G's proposed 38/44 (R9). `CHANGED` |
 | 11 is in the pending set as **requested** | `IGNORED(duplicate request)` |
+| 41 is in the pending set as an **inferred** entry of the same action — the venue's acknowledgement named the *working* id rather than the request's, a common 4.2 shape | the entry is re-keyed to this 11, becomes **requested**, and takes the G's proposed terms (S7). `CHANGED` |
 | 11 is bound but not pending — an **answered id** (its `150=5` or `35=9` overtook it) | `IGNORED(late request)`. Adding it would leave pending a request the venue has already answered |
 | otherwise | add `{11: REPLACE, requested, qty=38, px=44}`; bind 11. `CHANGED`: 11, 41, 60, 9021, 9030, 9010 (=38), 9011 (=44), 9012 (=11), 9013=`REPLACE`, 9015, 9016, 9022, 9023 |
 | 38/44 on the record | **untouched** — they are the acked terms |
@@ -247,20 +280,21 @@ After §5's arbitration:
 | 14, 151, 6 | adopted when present; **151 forced to `0`** when the report's 39 is terminal, whether or not the venue sent 151 and whatever it sent |
 | 38, 44 | adopted when present from every report **except** pending acknowledgements (`A`, `6`, `E` — they may echo proposed terms) and `150=8` (a reject echoes the *rejected* request's terms, R3) |
 | order terms (`order-term-tags`, default 18, 40, 44, 59, 99, 100, 110, 111, 126) | adopted when present on `150 ∈ {0, 5, D}`. A `40=1` arriving with no 44 writes `44=0`: a market order has no price, and a merge cannot remove the limit it replaced (R14) |
-| 32, 31, 30, 9028 | adopted on fills and corrects (`20=2`), 9028 = the report's 17. On a bust whose 19 equals 9028 — the last fill is the one busted — `32=0`, `31=0` (decision 6); otherwise a bust leaves them, as it reports no trade |
+| 32, 31, 30, 9028 | adopted on fills and corrects (`20=2`); 9028 = the fill's 17, and a correct's own 17 is remembered beside it. On a bust whose 19 names the last fill — its original ExecID or its latest correction's, a dialect question, so both are compared — `32=0`, `31=0` (decision 6), and 9028 **keeps** the busted ExecID so a reader can see why they are zero (S22); otherwise a bust leaves them, as it reports no trade |
+| 9031 (busted set) | a bust or correct adds its 19, and a correct its own 17 (a later bust may name either); small, escaped like 9021; a bust or correct whose 19 is already there is a duplicate (S5) |
 | 37 | adopted when present and not `NONE` (the record shows the latest real OrderID); bound; a changed 37 is bound to the same key (R21) |
-| 9029 | `max(9029, 60)` |
+| 9029 | `max(9029, 60)`; a `35=9` updates it too (§6.5) — a reject is the venue's clock as well (S19) |
 | 9017 | `Y` if the new 39 is terminal, else `N` — a bust can take it back to `N` |
 | **pending set** | by the report's ExecType, matched on the report's own tag 11 (R1): |
 | — `150=5` | removes the REPLACE named by 11; 9014 = 11. **No match**: when exactly one REPLACE is pending it is removed, 9014 = *that request's* id, `inferredReplaceAnswers` counts (the venue echoes the original id, R8); otherwise nothing is removed and `unmatchedConfirms` counts |
 | — `150=4` | removes the CANCEL named by 11. **No match**: removes **every** pending CANCEL (the order is canceled; a venue need not answer each cancel separately, and some echo the original id) |
-| — `150=0` | removes the NEW named by 11, 9014 = 11; or the REPLACE named by 11 — the cancel-then-new dialect's new-leg ack, [7.16](#716-a-replace-reported-as-cancel-then-new) — adopting its terms and 9014 |
-| — `150=8` | names a pending NEW → the order was rejected (39 as sent, terminal). Names a pending REPLACE or CANCEL → a **request** reject reported as an execution report: the request is removed, 38/44 are **not** adopted, 39 is handled as a `35=9`'s would be under `cancel-reject-status`, `requestRejectsAsReports` counts (R3). No match → removes a pending NEW if there is one |
-| — any report that is not a pending acknowledgement | removes a pending **NEW** whatever its 11 (a venue reporting on the order has accepted or rejected it — an IOC filled on its first report, N14); 9014 = the root when that happens |
+| — `150=0` | removes the NEW named by 11 and sets 9014 = 11; or the REPLACE named by 11 — the cancel-then-new dialect's new-leg ack, [7.16](#716-a-replace-reported-as-cancel-then-new) — adopting the **report's** 38/44 (never the proposal's) and setting 9014 = 11. **No match**: 9014 is untouched — a venue that re-acks after a replace must not drag 9014 back to the old id (S15). At `MIDSTREAM` creation from a `150=0` or `150=5`, 9014 = 11 |
+| — `150=8` | an **order** reject only when it names a pending NEW, or when the chain has never been acked (venue status `A` or absent): 39 as sent, terminal. Otherwise — it names a pending REPLACE or CANCEL, or nothing at all because the tap missed the request (S6) — a **request** reject reported as an execution report: the named request is removed if any, 38/44 are **not** adopted, 39 is handled as a `35=9`'s would be under `cancel-reject-status` (so `8` is not adopted), `requestRejectsAsReports` counts, and `unmatchedRejects` when nothing matched (R3, S6) |
+| — any report that is not a pending acknowledgement | removes a pending **NEW** whatever its 11 (a venue reporting on the order has accepted or rejected it — an IOC filled on its first report, N14); 9014 = the root when that happens. This row takes precedence over the "never touch the set" row below (S12) |
 | — a **fill** naming a pending REPLACE | by `fill-under-pending-id`: **`IGNORE`** (default) leaves the set alone — the fill was reported under the pending request's id, as the FIX state matrices say it should be; `ANSWERS_REPLACE_IF_TERMS_MATCH` removes the REPLACE when the fill's 38/44 equal the *proposed* terms, which is evidence the amend took effect and its `150=5` was missed (08's E8) |
 | — a fill naming a pending CANCEL | nothing. A fill never answers a cancel |
-| — pending acknowledgements | never remove. A `150=6`/`E`/`A` whose 11 is **not** pending and not an answered id adds an **inferred** entry (`6` → CANCEL, `E` → REPLACE, `A` → NEW), so a request whose acknowledgement overtook it is not lost (R9) |
-| — status restatements, `150=3`, `150=C`, `150=D`, busts, corrects | never touch the set or 9014 |
+| — pending acknowledgements | never remove. A `150=6`/`E`/`A` whose 11 is **not** pending and not an answered id adds an **inferred** entry (`6` → CANCEL, `E` → REPLACE, `A` → NEW), so a request whose acknowledgement overtook it is not lost (R9). The entry's id is the acknowledgement's 11, which some venues set to the *working* id rather than the request's; §6.2 re-keys it when the request arrives naming it in 41 (S7). On a D-opened chain a `150=A` for the root finds the NEW already pending and adds nothing |
+| — status restatements, `150=3`, `150=C`, `150=D`, busts, corrects, reports with an unknown 150 | never touch REPLACE or CANCEL entries or 9014; a pending NEW is answered by any of them (above) |
 | 9010–9013, 9015, 9016 | recomputed from the set when it changed |
 
 Matching by the report's **own** tag 11 is what distinguishes the two cancels:
@@ -278,9 +312,10 @@ carries a pending request's id ([7.14](#714-a-fill-while-a-cancel-is-pending-und
 | 39 | per `cancel-reject-status` (§4); a terminal value adopted forces `151=0`, `9017=Y` |
 | 38, 44 | **untouched** — nothing to revert, because a G never wrote them |
 | 102, 58 | not on the record; the reject goes whole to `sow/fix42/rejects` |
+| 9029 | `max(9029, 60)`: the reject is the venue's statement, and a re-ack older than it must not reopen an order the venue said was canceled (S19) |
 
-`CHANGED`: 11, 41, 60, 9022, 9023, the pending family, and 39/151/9017 if the
-policy moved them.
+`CHANGED`: 11, 41, 60, 9022, 9023, 9029, the pending family, and 39/151/9017
+if the policy moved them.
 
 ### 6.6 Every message
 
@@ -306,11 +341,11 @@ Order `X`, 1000 @ 50.00, partially filled 300.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `D 11=X-1` | {X-1:NEW} | A | 1000 | N | NEW | X-1 | 1 | **publish**, whole record |
 | `8 150=0 39=0 11=X-1 37=ORD` | {} | 0 | 1000 | N | NONE | NONE | 0 | 37 17 150 39 38 44 14 151 6 9014=X-1 9010–9016 9029 |
-| `8 150=1 39=1 11=X-1 14=300 151=700` | {} | 1 | 700 | N | NONE | NONE | 0 | 17 150 39 38 14 151 6 32 31 30 9028 9029 |
-| `F 11=X-2 41=X-1` | {X-2:CANCEL} | 1 | 700 | N | CANCEL | X-2 | 1 | 9021 9030 9012 9013 9015=`CANCEL:R:0:0:X-2` 9016 |
-| `F 11=X-3 41=X-1` | {X-2, X-3} | 1 | 700 | N | CANCEL | X-3 | 2 | 9021 9030 9012 9015=`CANCEL:R:0:0:X-2;CANCEL:R:0:0:X-3` 9016 |
-| `8 150=4 39=4 11=X-2 41=X-1` | {X-3} | **4** | **0** | **Y** | CANCEL | X-3 | 1 | 17 150 39 14 151=0 6 9017 9012 9015=`CANCEL:R:0:0:X-3` 9016 9029 |
-| `9 11=X-3 41=X-1 434=1 39=6` | {} | **4** | 0 | Y | **NONE** | NONE | 0 | 9010–9016 (39 untouched: terminal) |
+| `8 150=1 39=1 11=X-1 14=300 151=700` | {} | 1 | 700 | N | NONE | NONE | 0 | 17 150 39 38 44 14 151 6 32 31 30 9028 9029 |
+| `F 11=X-2 41=X-1` | {X-2:CANCEL} | 1 | 700 | N | CANCEL | X-2 | 1 | 9021 9030 9012 9013 9015=`CANCEL:R:::X-2` 9016 |
+| `F 11=X-3 41=X-1` | {X-2, X-3} | 1 | 700 | N | CANCEL | X-3 | 2 | 9021 9030 9012 9013 9015=`CANCEL:R:::X-2;CANCEL:R:::X-3` 9016 |
+| `8 150=4 39=4 11=X-2 41=X-1` | {X-3} | **4** | **0** | **Y** | CANCEL | X-3 | 1 | 17 150 39 38 44 14 151=0 6 9017 9012 9013 9015=`CANCEL:R:::X-3` 9016 9029 |
+| `9 11=X-3 41=X-1 434=1 39=6` | {} | **4** | 0 | Y | **NONE** | NONE | 0 | 9010–9016 9029 (39 untouched: terminal) |
 
 Final: `39=4 150=4 151=0 9017=Y 9013=NONE 9016=0 9022=9`. Canceled, nothing
 pending, and the record says the last thing that happened was a reject —
@@ -495,7 +530,11 @@ such a venue suppresses even that with a `beforeApply` hook that recognises
 the cancel leg — a `150=4` whose 11 is the working id while a REPLACE is
 pending — and turns it into a no-op ([07 §2](07-extension-points.md#2-tier-two-hooks)).
 The first version's detail-only row swallowed the `150=0` and left a live
-order permanently canceled.
+order permanently canceled. Two edges of this dialect: the `150=0` reopens
+because it **answers the pending REPLACE**, so a venue sending `60` in whole
+seconds with T5 = T6 still gets it right (S4); and had a CANCEL also been
+pending, the cancel leg's no-match rule would have removed it — transient,
+and the reason `unmatchedRejects` is not zero on such a venue (S16).
 
 ### 7.17 A replace confirm that echoes the original id
 
@@ -536,6 +575,29 @@ pending cancel unrepresented.
 An IOC that misses — `8 150=4 39=4 11=I-1 151=0` as the first report — ends
 the same way with `39=4`.
 
+### 7.21 An OrderID that equals another order's ClOrdID
+
+| message | resolves to | key | note |
+| --- | --- | --- | --- |
+| `D 11=123456 38=100` | — | **123456** (9019=C) | order A opens |
+| `8 150=0 39=0 11=B-1 37=123456 14=0 151=500` (order B, first seen mid-stream) | nothing: `123456` is in the ClOrdID map, not the OrderID map | candidate 37 = `123456` is already A's key → skipped; **B-1** (9019=C) | `keyCollisions=1`; B's reports never touch A (S1) |
+| `8 150=0 39=0 11=X-1 37=X-1` (a venue whose OrderID equals the ClOrdID) | X-1's chain, via 11 | unchanged | 37 bound into the OrderID map; not a collision |
+
+### 7.22 A `150=8` for a request the tap never saw
+
+| message | pending | 39 | 38 | 9017 | note |
+| --- | --- | --- | --- | --- | --- |
+| D 10000 @ 185.5, ack, partial 2000 | {} | 1 | 10000 | N | the G `11=A-2` goes out on a session this tap does not see |
+| `8 150=8 39=8 11=A-2 41=A-1 37=ORD 38=12000 44=185.75 14=2000 151=8000` | {} | **1** | **10000** | **N** | no NEW is pending and the chain is acked, so this is a request reject whatever it names: 38/44 not adopted, `39=8` not adopted, `requestRejectsAsReports=1 unmatchedRejects=1` (S6) |
+
+### 7.23 A pending acknowledgement that names the working id
+
+| message | pending | note |
+| --- | --- | --- |
+| `8 150=E 39=E 11=M-1 37=ORD` (first message seen; the venue acknowledges a replace under the *working* id) | {M-1:REPLACE~} | an inferred REPLACE under the working id |
+| `G 11=M-2 41=M-1 38=12000` | {M-2:REPLACE} | 41 names the inferred entry: re-keyed to M-2, requested, terms filled in (S7) — not a second entry |
+| `8 150=5 39=0 11=M-2 38=12000` | {} | answered by match; 9014 = M-2 |
+
 ## 8. What the machine does not do
 
 - It does not compute a quantity. Every 14/151/6/38/44 on the record is a
@@ -556,15 +618,17 @@ the same way with `39=4`.
 ## 9. Unrouted and unparseable messages
 
 Decision 5. A message no route claims — `35=Q`, `H`, `j`, `3`, list and
-multileg types, a report with a 150 value no rule names, a message missing
-its topic's key tag — or bytes that do not parse as FIX, are handled by
-`mode`:
+multileg types — a message missing a topic's key tag, or bytes that do not
+parse as FIX, are handled by `mode`. The 9020 trailer on a catch-all publish
+is present when the message resolved to a chain and omitted when it did not
+(S20):
 
 | | `strict` | `lenient` |
 | --- | --- | --- |
 | unrouted type | the machine raises; the publisher stops (the stateless publisher's stance, right for tests: a missing rule fails the first run that hits it) | published whole, with 9020 when it resolves, to `fix42/unrouted` — a journalled, non-SOW topic (no key needed, every message kept in arrival order, replayable by bookmark); `IGNORED(unrouted)`; a counter per 35 value; a rate-limited WARN |
 | unparseable bytes | raise | wrapped as a fix message (`9032=<base64 of the bytes>`, `9033=<reason>`) on `fix42/malformed`, same topic shape; `malformed` counts |
-| a known type the rules cannot place | raise | audited as far as the key allows; `IGNORED(unrouted)` for the blotter |
+| a known type missing a topic's key tag (a `20=3` with no 17; a G with no 11) | raise | **routing only**: the topic whose key is missing is skipped and the message goes whole to `fix42/unrouted` instead; the machine applies it regardless, so a 17-less status restatement still reaches the blotter (S10) |
+| a report with a 150 value no rule names | applied as *other* or *fill* (§5 step 1); the value counted in the per-150 histogram — **not** unrouted (S11) | the same |
 | default | the test profile | the production profile |
 
 Lenient mode keeps the property strict mode was protecting: every byte

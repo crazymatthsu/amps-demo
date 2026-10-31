@@ -21,15 +21,17 @@ machine already publishes:
 | cache field | record tag |
 | --- | --- |
 | `orderKey`, `keyKind` | 9020, 9019 |
-| `clOrdIds` (→ the index entries for this order) | 9021 holds the last `chain-ids-published`; 9030 the count; older ids are on `orders_audit` under this 9020 |
+| `clOrdIds` (→ the ClOrdID map) | 9021 holds the last `chain-ids-published`; 9030 the count; older ids are on `orders_audit` under this 9020 |
 | `workingClOrdId` | 9014 |
-| `orderIds` (→ index entries; the tombstone) | 37 holds the latest; earlier ones are on `execs_audit` under this 9020 |
+| `orderIds` (→ the OrderID map; the tombstone) | 37 holds the latest; earlier ones are on `execs_audit` under this 9020 |
 | `parentOrderId`, `linkedClOrdId` | 9000, 9027 |
 | `ackedQty`, `ackedPx` | 38, 44 |
 | `venueStatus`, `lastExecType` | 39, 150 |
 | `cumQty`, `leavesQty`, `avgPx` | 14, 151, 6 |
 | `lastExecId` | 17 (the ring behind it is **not** on the record — see §2) |
-| `lastFillExecId`, `lastReportTime` | 9028, 9029 |
+| `lastFillExecId`, `lastFillCorrectionExecId`, `bustedExecIds` | 9028; the correction's 17 and every bust's 19 are in 9031 |
+| `lastReportTime` | 9029 |
+| `createdPayload` | not on the record and not needed after the creation's persisted acknowledgement; if lost before it, rebuilt from the D on `orders_audit` by `/9020` |
 | `pending`, with each entry's requested-or-inferred flag | 9015 |
 | `msgCount`, `ignoredCount`, `lateFills` | 9023, 9025, 9026 |
 | `origin` | 9018 |
@@ -63,11 +65,13 @@ On start, before the first feed message is accepted:
    previous session is reaped (§5); the `HAClient` replays whatever its
    publish store still holds (§6) and `publishFlush` waits for it;
 2. `sow` on `sow/fix42/order_state`, **every** record;
-3. for each record, check 9024; rebuild the cache entry from the tags in §1
-   and the index from 9021 and 37; with `load-open-orders-only: true` keep
-   the body only for `9017 = 'N'` records and a **tombstone** (every 37 →
-   9020) for the rest; a record whose 9015 or 9021 does not parse is loaded
-   with an empty set, `9018=UNRECOVERED`, and counted;
+3. for each record, check 9024; rebuild the cache entry from the tags in §1,
+   the ClOrdID map from 9021 and the OrderID map from 37 (two maps, never
+   one — [03 §3.1](03-state-machine.md#31-resolution)); with
+   `load-open-orders-only: true` keep the body only for `9017 = 'N'` records
+   and a **tombstone** (every 37 → 9020) for the rest; a record whose 9015,
+   9021 or 9031 does not parse is loaded with an empty set,
+   `9018=UNRECOVERED`, and counted;
 4. mark the cache **complete** (every record the blotter holds is known);
 5. start consuming the feed.
 
@@ -138,10 +142,27 @@ single keyed read:
 | `sow/fix42/order_state` by SOW key = the message's 11 (a D) | the record itself | the check that keeps a resent D from erasing a record (R4c) |
 | `sow/fix42/order_state` filtered `/37 = '<OrderID>'` | the record, when the message carries 37 and none of its ClOrdIDs is known | needs a hash index on /37 on the server to be a lookup rather than a scan — **verify on build** the element name; optional, `miss-lookup-by-order-id` |
 
-A hit rebuilds the entry from the `order_state` record (one more keyed read by
-9020) and the message is applied to it; the delta lands on the right record.
-Only when every lookup misses is a `MIDSTREAM` entry created. After a complete
-load a miss is rare, so none of this is in the hot path for a known order.
+What a hit does depends on what the cache already holds (S9):
+
+- the key **is cached** (only the id was unknown — an id past the 9021 cap, a
+  request answered long ago): the id is bound to the cached entry and nothing
+  is rebuilt. An id found on `orders_audit` that is not in the record's 9015
+  is marked **answered**, so a PossDup resend of an old request is not
+  re-added as pending (S21);
+- the key is **not cached**: `publishFlush` first, so the SOW cannot lag a
+  delta still in the publish store, then one keyed read of `order_state` by
+  9020 rebuilds the entry, and the message is applied to it;
+- the key is not cached and **the record is gone** (the audit topics outlive
+  a reset of the blotter, [§9](#9-the-daily-reset)): a `MIDSTREAM` entry is
+  created **under the found key**, with 9019 from the audit record, and
+  `missLookupOrphans` counts (S8).
+
+Only when every lookup misses is a `MIDSTREAM` entry created under a freshly
+minted key. After a complete load a miss is rare, so none of this is in the
+hot path for a known order. After a `recovery: NONE` start with
+`allow-incomplete-cache`, **every** message for an existing order is a miss
+until its chain has been looked up once — one or two keyed reads per order,
+once; acknowledged here because it is the cost of that mode, not a fault.
 
 Then three cases for what is already in the SOW:
 
@@ -168,10 +189,12 @@ it does not keep, so "not loaded" and "evicted" behave alike (R4b).
 The tombstone is what makes eviction safe. The messages that legitimately
 arrive for a terminal order late are venue messages — a bust, a correct, a
 restatement — and every one carries 37. They resolve through the tombstone to
-the right key, the entry is recreated from the report (which, being a
-restatement, carries exactly the absolutes the entry needs), and the delta
-lands on the right record. A late *request* under a new ClOrdID carries no
-37, and its 41 resolves through the `orders_audit` lookup of §3 instead.
+the right key, and the entry is recreated **by the §3 path** — a flush and one
+keyed read of the `order_state` record — never from the report alone, which
+would rebuild a chain list, counters and pending set from nothing and then
+overwrite the record's with them (S9). A late *request* under a new ClOrdID
+carries no 37, and its 41 resolves through the `orders_audit` lookup of §3
+instead.
 
 An order with requests still unanswered when it goes terminal (the venue
 never sent the 9) is evicted like any other; its record keeps `9016 > 0`,
@@ -235,26 +258,56 @@ publish as persisted only once it is in the transaction log
 ([fix-pub-seqno/docs/02](../../fix-pub-seqno/docs/02-what-amps-already-does.md),
 [amps-ha-demo/docs](../../amps-ha-demo/docs/replication-and-the-transaction-log.md));
 a message to an unjournalled topic is never acknowledged and the store fills.
-So `sow/fix42/order_state` joins the transaction log beside the audit topics
-and the two catch-all topics ([02 §1](02-architecture.md#1-topology)).
+So `sow/fix42/order_state` **and `sow/fix42/execs`** join the transaction log
+beside the audit topics and the two catch-all topics
+([02 §1](02-architecture.md#1-topology)) — the first version of this document
+stated the rule and left `execs` out (S3). `PublishPathIT` asserts that
+`publishStoreDepth` returns to zero after a quiet flush, which is the test of
+the rule; and if this build turns out to acknowledge unjournalled publishes
+after all (the premise is the repository's reading of the documentation,
+**verify on build**), the journal entries stay for bookmark replay and the
+rule becomes a recommendation.
 
 **A `FailedWriteHandler`.** Every rejection the server reports — a payload it
 cannot parse, a missing key, a duplicate after a replay — reaches the handler
-with its reason. A duplicate is logged as the expected answer it is. Anything
-else counts `publishFailures`, logs the payload, and marks the order's entry
-**dirty-all**, so the next outcome for that order republishes the whole
-record with `publish`, which repairs whatever the rejected delta failed to
-apply. Assumption to verify on build: the Java client reports server-side
-rejections only through this handler, which requires a store.
+with its reason, on the client's receive thread. A duplicate is logged as the
+expected answer it is. Anything else counts `publishFailures`, logs the
+payload, and **enqueues the rejected publish's key** for repair; the handler
+never touches an entry, because the entries are the publishing thread's
+(02 §7). The publishing thread drains the queue before its next message, on
+an idle timer, and at shutdown, so a repair does not wait for traffic on that
+order. The repair itself (S2):
+
+- for a rejected **delta**: a `delta_publish` of **every cached field** —
+  dirty-all over the mask — never a `publish`. The cache deliberately does not
+  hold the order's descriptive terms ([02 §3.2](02-architecture.md#32-what-is-deliberately-not-in-it)),
+  so a `publish` built from it would replace the record and erase the
+  account, symbol and side the exposure views group by;
+- for a rejected **creation** (the FULL publish): the kept `createdPayload`
+  is re-sent whole; if it was already released by a persisted
+  acknowledgement that turned out to be for something else, it is rebuilt
+  from the D on `orders_audit` by `/9020`;
+- for a rejected **audit** publish: the record is not the remedy; the payload
+  is re-routed to `fix42/unrouted` in lenient mode and `auditPublishFailures`
+  counts, so the copy is not lost.
+
+Assumption to verify on build: the Java client reports server-side rejections
+only through this handler, which requires a store.
 
 **Two-phase apply.** `OrderStateMachine.plan` stages the changes without
-touching the entry; the publisher writes the audit publishes and the blotter
-publish through the store; only then `commit()` applies the staged changes
-and `FeedAdapter.onMessage` returns, letting the FIX engine acknowledge. A
-publish that throws (a store that cannot accept, a client that is closed)
-propagates before `commit`, so the cache is unchanged and the message is
-redelivered. With `FILE`, a message the engine has acknowledged is on disk;
-with `MEMORY`, the unacknowledged window is the loss bound, and §8 states it.
+touching the entry; the publisher writes the **blotter publish first, then
+the audit publishes**, through the store; only then `commit()` applies the
+staged changes and `FeedAdapter.onMessage` returns, letting the FIX engine
+acknowledge. A publish that throws (a store that cannot accept, a client that
+is closed) propagates before `commit`, so the cache is unchanged and the
+message is redelivered — and the publishes that *were* stored before the
+throw are sent anyway: idempotent on the keyed topics, a possible duplicate
+on the non-SOW `fix42/unrouted` and `fix42/malformed` (S14). While
+disconnected the `HAClient` stores and returns (that is what the store is
+for; **verify on build** that it does not block the calling thread), so a
+network drop does not stall the FIX session. With `FILE`, a message the engine
+has acknowledged is on disk; with `MEMORY`, the unacknowledged window is the
+loss bound, and §8 states it.
 
 ## 7. Observability
 
@@ -269,16 +322,17 @@ allocates):
 | `ignoredDuplicate`, `ignoredStale`, `ignoredLate`, `ignoredAbsorbed`, `ignoredLateFill` | reports dropped by [03 §4–5](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) | low; a spike is a feed replaying |
 | `ignoredRequest` | duplicate or late requests | low |
 | `ignoredUnrouted`, `malformed`, and a histogram per 35 value | lenient mode's catch-all | zero on a feed the rules cover |
-| `midstreamChains`, `midstreamWithKnownOrderId` | entries created from a non-D; of those, ones that carried a 37 and still missed | zero on a feed the publisher saw from the start |
+| `midstreamChains`, `midstreamWithKnownOrderId`, `missLookups`, `missLookupOrphans` | entries created from a non-D; of those, ones that carried a 37 and still missed; cache misses resolved through the audit topics; hits whose blotter record was gone | zero on a feed the publisher saw from the start, except `missLookups` after a `NONE` start |
 | `lateDs` | D's that arrived after their order's reports | — |
-| `unmatchedRejects`, `unmatchedConfirms` | 9s and `150=5`s that named no pending request | zero |
+| `unmatchedRejects`, `unmatchedConfirms` | 9s, `150=8`s and `150=5`s that named no pending request | zero on a venue that answers under the request's id; a steady rate on one that echoes the original id (06 E9) |
 | `inferredReplaceAnswers`, `inferredRequests` | a `150=5` resolved by the single-pending rule; pending entries created from acknowledgements | low; a steady rate names a venue convention |
 | `requestRejectsAsReports` | `150=8` naming a pending REPLACE or CANCEL | zero; otherwise the venue's dialect |
-| `lateFills`, `reopenedByVenue`, `terminalFromReject` | the after-terminal rows and the 9 policy | low; also on the record as 9026 for late fills |
+| `lateFills`, `reopenedByVenue`, `terminalFromReject`, `lateIocAck`, `reopenUndecidable` | the after-terminal rows and the 9 policy | low; also on the record as 9026 for late fills |
+| a histogram per 150 value and per 35 value | every report's ExecType, every message's type | a new value appearing is the signal to read [03 §5](03-state-machine.md#5-arbitration-on-execution-reports) step 1 again |
 | `inconsistentReports` | reports with `38 ≠ 14 + 151` on a working order | zero; otherwise the venue |
 | `pendingOnTerminal` | orders that went terminal with requests unanswered | zero; otherwise a venue that does not reject late requests |
 | `idConflicts`, `keyCollisions`, `strippedTags`, `auditKeyTagConflict` | identity and payload hygiene | zero, except `strippedTags` on a framed feed |
-| `publishFailures`, `publishDuplicatesOnReplay` | the `FailedWriteHandler` | zero; duplicates after a reconnect are expected |
+| `publishFailures`, `auditPublishFailures`, `publishDuplicatesOnReplay`, `repairs` | the `FailedWriteHandler` and the repair queue | zero; duplicates after a reconnect are expected |
 | `recoveredWithDefaults`, `unrecovered` | the SOW rebuild | zero after the first run on a new schema |
 | `fullPublishes`, `deltaPublishes`, `bytesPublished` | wire | — |
 | `cacheEntries`, `indexEntries`, `tombstones`, `publishStoreDepth` | size | tracks the day; the store depth is near zero while AMPS is up |
@@ -298,8 +352,11 @@ the ones worth setting first are `publishFailures > 0`,
 | publisher crashes mid-flow, `publish-store: MEMORY` | messages in the unacknowledged window are missing from the record **and the engine will not resend them** | `publishStoreDepth` at the crash is the bound | accept the bound, or run `FILE`; `recovery: JOURNAL` cannot help because the audit publishes were in the same window |
 | publisher restarts on another host | as above; with `FILE` the store file must travel | — | same |
 | AMPS restarts, or the network drops | the record is behind by the unacknowledged window until reconnect | the `HAClient` reconnects and replays | nothing to do; duplicates on replay are logged as expected |
-| AMPS rejects a publish (unparseable payload, missing key) | that delta is missing | `publishFailures`; the handler logs the payload | the entry is dirty-all; the next outcome republishes the whole record |
-| `sow/fix42/order_state` SOW file lost, journal intact | empty blotter | the rebuild finds nothing; `midstreamChains` climbs | `recovery: JOURNAL` replays the audit topics and rebuilds the records |
+| AMPS rejects a blotter delta (unparseable payload, missing key) | that delta is missing | `publishFailures`; the handler logs the payload | the publishing thread re-sends every cached field as a delta from the repair queue, without waiting for traffic |
+| AMPS rejects a creation (the FULL publish) | no record | `publishFailures` | the kept payload is re-sent whole, or rebuilt from the D on `orders_audit` |
+| AMPS rejects an audit publish | the blotter is right; the audit copy is missing from its topic | `auditPublishFailures` | the payload goes to `fix42/unrouted` (lenient) |
+| a publish throws after an earlier publish for the same message was stored | the stored ones are sent; the message is redelivered | — | keyed topics overwrite idempotently; `fix42/unrouted`/`malformed` may hold a duplicate |
+| `sow/fix42/order_state` SOW file lost, journal intact | either empty, or **rebuilt by AMPS from its own journal at startup** — the topic is journalled now, and the repository's notes say AMPS reconciles a persistent SOW against the transaction log (S13, **verify on build**) | the rebuild finds nothing, or everything | if empty: `recovery: JOURNAL` replays the audit topics |
 | two cancels race, either order | `39=4`, `9013=NONE` | — | n/a: [03 §7.1–7.2](03-state-machine.md#71-two-cancels-confirm-then-reject-the-motivating-case) |
 | feed replays a PossDup range | unchanged; `9025` counts | `ignoredDuplicate` | n/a |
 | an old status report is redelivered | unchanged; `9025` counts | `ignoredLate` | n/a (decision 1) |
@@ -310,12 +367,14 @@ the ones worth setting first are `publishFailures > 0`,
 | feed starts mid-stream | `9018=MIDSTREAM`, terms as far as the reports give them | `midstreamChains` | the late D, if it ever comes, fills the terms (`D_LATE`) |
 | cache evicted or did not load an order; a late bust | the right record, restated | the tombstone resolves it | n/a |
 | cache lacks an order; a late request under a new ClOrdID | the right record, via the `orders_audit` lookup | `missLookups` | n/a; without `miss-lookup`, a second `MIDSTREAM` record |
+| the blotter was reset but the audit topics were not; yesterday's order reports again (a GTC, a late bust) | a `MIDSTREAM` record under yesterday's key | `missLookupOrphans` | n/a; the reset keeps open orders (§9), so this is a closed order's late message |
+| a redelivered old bust or restatement | unchanged | `ignoredLate` or `ignoredDuplicate` (9031) | n/a (S5) |
 | a D is resent, or a day replayed, against a populated SOW with an empty cache | the record is kept | the keyed check before a FULL publish | n/a (R4c) |
 | venue never answers a request | `9016 > 0` on an otherwise finished order | `pendingOnTerminal`; filter `/9016 > 0 AND /9017 = 'Y'` | operational: the venue, not the publisher |
 | a request rejected by `35=j` instead of `35=9` | the request stays pending | `9016 > 0`; the j on `fix42/unrouted` | a follow-up (the MsgSeqNum ring); until then, operational |
 | a second publisher instance starts by mistake | nothing: `NameInUse` | the server | it retries until told to stop |
 | a hook throws | nothing changes; the feed stops at that message | the exception | fix the hook; redeliver |
-| a new 150 value appears | applied with the venue's 39; it touches no pending entry | the per-150 histogram | add it to the answering or reopening sets if it should be |
+| a new 150 value appears | applied as *other* or *fill* with the venue's 39 and absolutes; it touches no pending REPLACE or CANCEL | the per-150 histogram | add it to the answering or reopening sets if it should be (S11) |
 | an unknown 35 type appears | recorded on `fix42/unrouted` | the per-35 histogram | a later version replays the topic |
 
 ## 9. The daily reset
@@ -328,11 +387,25 @@ still there. The reset is therefore part of the design, not housekeeping:
    export the records a desk may want to investigate — `sow` with
    `/9016 > 0`, `/9018 = 'MIDSTREAM'`, `/9025 > 0`, or simply everything —
    to a file;
-2. delete `sow/fix42/order_state`'s records (`sow_delete` by filter, or the
-   SOW file while AMPS is down); **never** the journalled audit topics, which
-   are the history and the replay source, nor `sow/fix42/execs`, which is
-   keyed by OrderID and does not collide;
-3. start the publisher with `recovery: SOW` against the empty blotter.
+2. `sow_delete` on `sow/fix42/order_state` with the filter `/9017 = 'Y'`:
+   the **terminal** records go, the open ones (a GTC, a GTD, anything the
+   venue has not closed) stay, so tomorrow's reports for them find their
+   record (S8). `sow_delete` is journalled and durable
+   ([docs/src/sow-and-recovery.md](../../docs/src/sow-and-recovery.md));
+   deleting the SOW *file* is not the tool, because the topic is journalled
+   and AMPS may rebuild it from the transaction log at startup (S13,
+   **verify on build**). **Never** the journalled audit topics, which are the
+   history and the replay source;
+3. start the publisher with `recovery: SOW`; the cache holds the open orders.
+
+Two consequences of keeping the audit topics across the reset. A ClOrdID
+reused today **overwrites** yesterday's `orders_audit` SOW record for that id
+(the topic is keyed `/11`, last publish wins); the journal keeps both, the SOW
+does not, so the per-day history is the journal and a lookup for yesterday's
+id returns today's 9020. And a late message for a closed order from yesterday
+— a bust of a fill on an order the reset removed — finds its key on the audit
+topics but no record, and becomes a `MIDSTREAM` record under that key
+(§3, `missLookupOrphans`): correct, if sparse.
 
 A deployment that must keep several days on one blotter does not reuse
 ClOrdIDs across days — most OMSs date-stamp them — and runs the reset weekly
@@ -350,7 +423,8 @@ AMPS_FLOW=fix42-order-state ./server/scripts/amps.sh start
 ```
 
 The runner publishes the scripted flow plus the edge-case scenarios from
-phase 1 of the [plan](05-implementation-plan.md), with `publish-store: MEMORY`
-and `mode: strict`, and exits; the admin console at `http://127.0.0.1:8085/`
+phase 1 of the [plan](05-implementation-plan.md) under the `demo` profile
+(`publish-store: MEMORY`, `mode: strict` — [02 §6](02-architecture.md#6-configuration)),
+and exits; the admin console at `http://127.0.0.1:8085/`
 can `SELECT` from `sow/fix42/order_state`, and the two-cancels order is the
 one to look at first.

@@ -11,6 +11,9 @@ than take them as given.
 This document is the register of what it found, condensed but complete, with a
 disposition against each finding. Docs 01–07 **have been revised** for every
 finding, under the six decisions in §6; §8 says where each finding landed.
+The revised documents were reviewed again: [09](09-review-round-2.md) is that
+round's register, and it verified each disposition below against what
+actually landed (17 closed, 4 partial, 1 regressed, all since fixed).
 
 Dispositions: **accept, rule** — a rule in [03](03-state-machine.md) changes
 and [06](06-case-coverage.md) gets rows; **accept, design** — an architecture,
@@ -450,11 +453,11 @@ Sequences:
 
 | rows | verdict | dispute | resolution |
 | --- | --- | --- | --- |
-| E32 | handled | not when fills echo the pending request's id, which the mock itself does (R1) | **policy** |
+| E32 | handled | not when fills echo the pending request's id, which the mock itself does (R1) | handled for a cancel; **policy** for an amend |
 | E8, N14 | handled | the generalized answering rule is dialect-dependent (R1) | N14 handled by the NEW rule; E8 **policy** |
-| E21, E29 | handled | detail-only plus terminal-after-terminal cannot tell a late fill detail from a venue reopen (R2) | E21 restricted to fills; E29 **policy** |
+| E21, E29 | handled | detail-only plus terminal-after-terminal cannot tell a late fill detail from a venue reopen (R2) | E21 restricted to fills; E29 stays handled — applied unconditionally once past the late guard |
 | E6, E7 | handled | only answers overtaking requests; a pending ack overtaking keeps the request out (R9) | handled after R9 |
-| E9, E10 | handled, limited | the convention that makes E9 handled breaks every replace via E10 (R8) | E10 **policy** |
+| E9, E10 | handled, limited | the convention that makes E9 handled breaks every replace via E10 (R8) | E10 handled for one pending amend by the single-pending inference, limited for two; unconditional, no knob |
 | E31 | limited | the prose is incoherent, and wrong: an equal-CumQty report with an ExecID outside the ring on a *working* order is applied in full, so `8 150=0 39=0 17=E-1 14=0` resent after nine pending/status reports takes 39 from `6` back to `0` and 60 backwards | rewrite; status-bearing reports with equal CumQty need the TransactTime guard of §6 |
 | E40, E47, E48, E49 | handled, limited | all assume the missing order's key was its OrderID; for D-opened orders it is the root ClOrdID (R4); E49 ignores the async buffer (R5) | per R4, R5 |
 | N4, N5 | policy | the default adopts `6`/`E`/`A` and terminal values from a 9 without a report's consequences (R6) | per R6 |
@@ -764,9 +767,9 @@ The revision of docs 01–07 that followed the decisions, finding by finding.
 
 | finding | landed in |
 | --- | --- |
-| R1 answering on fills | [03 §1](03-state-machine.md#1-vocabulary) *answering report*; [03 §6.4](03-state-machine.md#64-358-executionreport) pending-set rows; `fill-under-pending-id`; [03 §7.14](03-state-machine.md#714-a-fill-while-a-cancel-is-pending-under-the-cancels-id); 06 E8, E15, E32, N14 |
+| R1 answering on fills | [03 §1](03-state-machine.md#1-vocabulary) *answering report*; [03 §6.4](03-state-machine.md#64-358-executionreport) pending-set rows; `fill-under-pending-id`; [03 §7.14](03-state-machine.md#714-a-fill-while-a-cancel-is-pending-under-the-cancels-id); 06 E8, E15, E32, N14. The NEW rule landed broader than this register's wording: a pending NEW is answered by *any* non-pending-acknowledgement report, not only one carrying the D's id |
 | R2 detail-only row | [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) after-terminal table (fills only; venue-asserted reopen with the TransactTime tiebreak); `non-fill-after-terminal`; [03 §7.16](03-state-machine.md#716-a-replace-reported-as-cancel-then-new); 06 E21, E35–E37 |
-| R3 `150=8` adopting proposals | [03 §6.4](03-state-machine.md#64-358-executionreport) 38/44 row and `150=8` row; [03 §7.15](03-state-machine.md#715-an-amend-rejected-by-an-execution-report); 06 E16 |
+| R3 `150=8` adopting proposals | [03 §6.4](03-state-machine.md#64-358-executionreport) 38/44 row and `150=8` row; [03 §7.15](03-state-machine.md#715-an-amend-rejected-by-an-execution-report); 06 E16. Landed narrower than this register's wording: 38/44 are excluded from `150=8` and pending acknowledgements only — a `150=3`/`C` restates current terms and adopting them is harmless |
 | R4 second records | [04 §2–4](04-recovery-and-operations.md#2-restart): `MissResolver`, the D keyed check, tombstones from every record, `recovery: NONE` refused; [03 §6.1](03-state-machine.md#61-35d-newordersingle); 06 E48, E53–E56 |
 | R5 publish failures | [04 §6](04-recovery-and-operations.md#6-the-publish-path); [03 §2](03-state-machine.md#2-outcomes) plan/commit; [02 §7](02-architecture.md#7-threading-and-ordering); 06 E70–E73; the blotter topic journalled |
 | R6 a 9's terminal 39 | [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) policy table and the 151 rule; [03 §7.19](03-state-machine.md#719-a-cancel-reject-that-carries-a-terminal-status); 06 N4, N5, E18 |
@@ -786,6 +789,6 @@ The revision of docs 01–07 that followed the decisions, finding by finding.
 | R20 hooks | [07 §2](07-extension-points.md#2-tier-two-hooks): fail-fast, `IndexView`, original frame to audit, the view copies budgeted; `strip-tags` in [03 §6.1](03-state-machine.md#61-35d-newordersingle); 06 E60, E74 |
 | R21 `37=NONE`, rotated 37, absent 17 | [03 §6.4](03-state-machine.md#64-358-executionreport) 37 row; the `key-guard`; tombstones of every 37 — [04 §4](04-recovery-and-operations.md#4-eviction); 06 E44 |
 | R22 daily reset | [04 §9](04-recovery-and-operations.md#9-the-daily-reset); 06 E77 |
-| §3 disputed verdicts | every row revised in [06](06-case-coverage.md), marked **(revised)** |
+| §3 disputed verdicts | every row re-examined in [06](06-case-coverage.md); those whose text changed are marked **(revised)**, those whose text already matched the resolution are not |
 | §4 ambiguities | 1: [03 §3.1](03-state-machine.md#31-resolution); 2: [03 §6.1](03-state-machine.md#61-35d-newordersingle); 3: 9010/9011 in [02 §4](02-architecture.md#4-the-record); 4: 9014 in [03 §6.4](03-state-machine.md#64-358-executionreport); 5: row order in [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision); 6–7: [02 §3.1](02-architecture.md#31-one-entry-per-order), `RecordWriter`; 8: [02 §9](02-architecture.md#9-what-changes-for-a-consumer-of-the-old-blotter); 9: [03 §3.2](03-state-machine.md#32-creation); 10–11: [03 §5](03-state-machine.md#5-arbitration-on-execution-reports), §6.4; 12–13: [04 §5](04-recovery-and-operations.md#5-one-writer); 14: 06 E5; 15: [02 §6](02-architecture.md#6-configuration); 16: [03 §6.6](03-state-machine.md#66-every-message) |
 | §5 plan gaps | [05](05-implementation-plan.md), marked *(added)* and *(changed)* |

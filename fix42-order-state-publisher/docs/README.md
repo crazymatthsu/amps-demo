@@ -23,6 +23,7 @@ the phases.
 | [06](06-case-coverage.md) | Case coverage | fifty-odd lifecycle and edge cases — normal flows, requests racing their answers, reports racing each other, mid-stream and identity — each with the rule that handles it and a verdict; and the three rules the matrix tightened |
 | [07](07-extension-points.md) | Extension points | per-venue policy bundles, the `OrderStateHook` SPI (what a hook may and must not do), replaceable components, and what is deliberately not extensible |
 | [08](08-review-findings.md) | Review findings, round 1 | an independent adversarial review of the first version of 01–07: twenty-two findings with the message sequence, what the docs said, what went wrong and a disposition; the six decisions taken on them; and where each finding landed in the revised documents |
+| [09](09-review-round-2.md) | Review findings, round 2 | the revised documents reviewed again: the status of every round-1 disposition as it actually landed; twenty-two new findings, three of them serious — the collision rule unreachable behind a single id map, a publish-failure repair that would erase a record's terms, a topic outside the design's own journal rule — with dispositions and where each landed |
 
 ## The design in one paragraph
 

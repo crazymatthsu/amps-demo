@@ -25,26 +25,27 @@ suites, which every module in the repository already uses.
  ┌──────────────────────────────────────────────────────────────────────────────┐
  │ fix42-order-state-publisher                                                  │
  │                                                                              │
- │   FixFrame ──► AuditRouter ──► publish (whole message + 9020) ───────────►   │
- │       │          per route; key check per payload;      sow/fix42/orders_audit
- │       │          catch-all in lenient mode               sow/fix42/execs_audit
- │       │                                                 sow/fix42/execs
- │       │                                                 sow/fix42/rejects
- │       │                                                 fix42/unrouted, fix42/malformed
- │       ▼                                                                      │
- │   OrderStateMachine.plan(frame)      pure: reads the entry, stages changes   │
- │     OrderKeyIndex   11/41/37 ──► OrderKey                                     │
- │     OrderState      one small entry per order (§3)                           │
- │     rules           docs/03: identity, pending set, arbitration, apply       │
+ │   FixFrame ──► OrderStateMachine.plan(frame)   pure: reads the entry, stages │
+ │                  OrderKeyIndex   11/41 ──► ClOrdID map; 37 ──► OrderID map   │
+ │                  MissResolver    keyed lookups on a miss (docs/04 §3)        │
+ │                  OrderState      one small entry per order (§3)              │
+ │                  rules           docs/03: identity, pending set, arbitration │
  │       │                                                                      │
  │       ▼  Outcome: CREATED (full record) | CHANGED (dirty fields) | IGNORED  │
  │   RecordWriter ──► publish        (35=D opens a chain)    sow/fix42/order_state
  │                ──► delta_publish  (everything else)       key /9020 OrderKey
  │       │                                                                      │
- │       ▼  the HAClient accepted the publish into its publish store            │
+ │       ▼                                                                      │
+ │   AuditRouter ──► publish (whole message + 9020 trailer) ─►  sow/fix42/orders_audit
+ │                     per route; key check per topic;          sow/fix42/execs_audit
+ │                     catch-all in lenient mode                sow/fix42/execs
+ │       │                                                      sow/fix42/rejects
+ │       │                                                      fix42/unrouted, fix42/malformed
+ │       ▼  every publish accepted into the HAClient's publish store            │
  │   OrderStateMachine.commit()         the entry changes; the adapter acks     │
  │                                                                              │
- │   FailedWriteHandler: a server-side rejection marks the entry dirty-all      │
+ │   FailedWriteHandler: a server-side rejection queues a repair for the        │
+ │   publishing thread (docs/04 §6)                                             │
  │   on start: SowCacheLoader  sow sow/fix42/order_state ──► rebuild cache      │
  └──────────────────────────────────────────────────────────────────────────────┘
         │
@@ -53,7 +54,7 @@ suites, which every module in the repository already uses.
    sow/fix42/orders_audit  /11    journalled                            system of record
    sow/fix42/execs_audit   /17    journalled                            system of record
    sow/fix42/rejects       /11    journalled                            system of record
-   sow/fix42/execs         /37    latest report per order               convenience
+   sow/fix42/execs         /37    journalled; latest report per order   convenience
    fix42/unrouted, fix42/malformed   journalled, not SOW                lenient mode's catch-all
    view/fix42/exposure/*          json aggregations over order_state, unchanged shape
    view/fix42/recon/parent_vs_child
@@ -66,13 +67,16 @@ route claims. The audit and exec topics keep their names and keys, so the
 `amps-cli` commands and the admin console queries in the existing READMEs
 still work.
 
-**The blotter topic is journalled.** The first version left it out of the
-transaction log as "derivable". Decision 4 puts the publisher on a publish
-store, and AMPS acknowledges a publish as persisted only for a journalled
-topic ([04 §6](04-recovery-and-operations.md#6-the-publish-path)); a store that
-is never acknowledged never drains. The cost is the deltas themselves, about
-200 MB for a million-message day beside the audit topics' 300 MB, under the
-same ageing policy.
+**Every topic this client publishes to is journalled** — the blotter and
+`sow/fix42/execs` included, which the first version left out as "derivable".
+Decision 4 puts the publisher on a publish store, and AMPS acknowledges a
+publish as persisted only for a journalled topic
+([04 §6](04-recovery-and-operations.md#6-the-publish-path)); a store that is
+never acknowledged never drains. The cost is the blotter's deltas, about
+200 MB for a million-message day, and a second copy of every report for
+`execs`, beside the audit topics' 300 MB, all under the same ageing policy. A
+deployment that does not want the second copy drops the `execs` route; the
+same question is answered by `execs_audit` filtered by `/9020` or `/37`.
 
 ## 2. Components
 
@@ -82,13 +86,13 @@ same ageing policy.
 | `OrderChain` / `MockFixFlow` / `Instrument` / `FixEvent` / `OrderScope` | the deterministic mock venue | per chain, test only | copied in phase 0; extended in phase 1 with multi-request scenarios and venue-dialect switches |
 | `FeedAdapter` | hands each received message to the publisher and acknowledges it to the session only after `commit()` | none | new; `MockFlowRunner` implements it for the demo, a QuickFIX/J `fromApp` adapter in phase 4 |
 | `AuditRouter` | which pass-through topics a message goes to, whole, plus tag 9020; the per-payload key check; the lenient-mode catch-all | none | new, a simplified `PublishPlanner`: no projection, FULL by default |
-| `OrderKeyIndex` | every ClOrdID and OrderID seen → OrderKey; tombstones; answered ids | one map entry per id | new |
+| `OrderKeyIndex` | two maps — ClOrdID → OrderKey and OrderID → OrderKey, never conflated ([03 §3.1](03-state-machine.md#31-resolution)); tombstones; answered ids | one map entry per id | new |
 | `OrderState` | the cache entry (§3) | one per order | new |
 | `PendingRequest` set | the in-flight D/G/F requests of one order, requested or inferred | inside `OrderState` | new |
 | `OrderStateMachine` | `plan`: resolve, arbitrate, stage; `commit`: apply. Reports what changed | owns the two maps | new, rules in [03](03-state-machine.md) |
 | `RecordWriter` | encode an `OrderState` as FIX tags: whole, or only the dirty fields; the 9015/9021 encodings and their parsers | per-thread buffer | new |
-| `OrderStatePublisher` | `send(FixFrame)`: router + machine + writer → `HAClient`; `commit` after the store accepted the publish; counters | per-thread scratch | new, the shape of `AmpsDeltaPublisher` with a store ([04 §6](04-recovery-and-operations.md#6-the-publish-path)) |
-| `AmpsClientConfiguration` | an `HAClient` with a `PublishStore` (`FILE`, `MEMORY` or `NONE`) and a `FailedWriteHandler` | none | new, after `amps-connectors` and `fix-pub-seqno` |
+| `OrderStatePublisher` | `send(FixFrame)`: plan → blotter publish → audit publishes → `commit`, all through the `HAClient`; drains the repair queue before each message, on an idle timer and at shutdown; counters | per-thread scratch | new, the shape of `AmpsDeltaPublisher` with a store ([04 §6](04-recovery-and-operations.md#6-the-publish-path)) |
+| `AmpsClientConfiguration` | an `HAClient` with a `PublishStore` (`FILE`, `MEMORY` or `NONE`) and a `FailedWriteHandler` that enqueues the rejected publish's key for repair — it never touches an entry itself | none | new, after `amps-connectors` and `fix-pub-seqno` |
 | `SowCacheLoader` | on start, rebuild the maps from `sow/fix42/order_state`; tombstones for records not kept; schema version check | none | new, [04](04-recovery-and-operations.md) |
 | `MissResolver` | on a cache miss, the keyed lookups of [04 §3](04-recovery-and-operations.md#3-cache-misses) before a `MIDSTREAM` entry is created | none | new |
 | `OrderStateProperties` | the yml surface (§6) | none | new, the shape of `Fix42Properties` |
@@ -120,7 +124,10 @@ AvgPx from `35=8`. Plus the fields without which those cannot be kept right:
 | `venueStatus` | 39 from the last applied report; `A` until the first on a D-opened chain | terminal rules, and the 35=9 policy |
 | `lastExecType` | 150 | published as 150 |
 | `cumQty`, `leavesQty`, `avgPx` | 14/151/6, held as numbers | the stale guard, and 151 forced to 0 on terminal |
-| `lastExecId` (+ a ring, default 8) | 17 | duplicate detection; 9028 is the last *fill's* |
+| `lastExecId` (+ a ring, default 8) | 17 | duplicate detection |
+| `lastFillExecId`, `lastFillCorrectionExecId` | the fill's 17; a correct's 17 | 9028; which execution a bust's 19 may name when it busts the last fill |
+| `bustedExecIds` | 19 of every bust and correct, 17 of every correct | 9031; a redelivered bust is a duplicate however old |
+| `createdPayload` | the FULL publish's bytes | kept until its persisted acknowledgement, so a rejected creation can be re-sent whole ([04 §6](04-recovery-and-operations.md#6-the-publish-path)) |
 | `lastReportTime` | max 60 over applied reports | 9029; the late guard and the after-terminal tiebreak |
 | `pending` | the set of unanswered requests: `{clOrdId, action, requested-or-inferred, proposedQty, proposedPx}` | the whole point |
 | `msgCount`, `ignoredCount`, `lateFills` | bookkeeping | 9023 / 9025 / 9026 |
@@ -151,8 +158,8 @@ and `0300` compare equal; the record keeps the venue's text as sent.
   hardest bookkeeping from the cache and is what makes two concurrent requests
   trivial rather than special.
 - **The last fill's 31/32/30.** They go straight to the record on each fill;
-  only the fill's ExecID (9028) is kept, so a bust of the last fill can zero
-  them.
+  only the fill's ExecID and its latest correction's (9028, 9031) are kept, so
+  a bust of the last fill can zero them.
 - **A history.** The audit topics are the history, filterable by 9020.
 
 ### 3.3 Size
@@ -187,7 +194,7 @@ checkpoint ([04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-check
 | 37 | OrderID | every report carrying a real one | the latest non-`NONE` OrderID; `NONE` is never written |
 | 9027 | LinkedClOrdID | the D | a 41 carried on the D (a cancel-and-new OMS): lineage, not followed |
 | 60 | TransactTime | every applied message | the last applied message's — a request's is the client's clock, a report's the venue's |
-| 9029 | LastReportTime | every applied report | the latest TransactTime of any applied report; the tiebreak of [03 §4–5](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) |
+| 9029 | LastReportTime | every applied report and reject | the latest TransactTime of any applied venue message; the tiebreak of [03 §4–5](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) |
 | 9022 | LastMsgType | every applied message | D/G/F/8/9 — the record itself carries **no tag 35** |
 | 9023 | MsgCount | every applied message | messages applied to this order |
 | 9025 | IgnoredCount | every ignored message | duplicates, stale, late and absorbed reports, duplicate and late requests; marked dirty so the next delta carries it |
@@ -200,8 +207,9 @@ checkpoint ([04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-check
 | 17 | ExecID | every applied `35=8` with a real one | the last applied report's |
 | 14, 151, 6 | CumQty, LeavesQty, AvgPx | every applied `35=8`; 151 **forced to 0** when 39 is terminal | venue absolutes |
 | 32, 31, 30 | LastShares, LastPx, LastMkt | fills and corrects; `32=0 31=0` on a bust of the last fill | the most recent fill |
-| 9028 | LastFillExecID | fills and corrects | which execution 32/31 describe |
-| 9010, 9011 | PendingOrderQty, PendingPrice | pending set changes | the terms of the **newest pending REPLACE**, else 0 — even when a cancel is the newest request |
+| 9028 | LastFillExecID | fills and corrects | which execution 32/31 describe; kept after a bust zeroes them, so a reader sees why |
+| 9031 | BustedExecIDs | busts and corrects | the 19 of every bust and correct and the 17 of every correct, escaped like 9021; a bust or correct naming one again is a duplicate |
+| 9010, 9011 | PendingOrderQty, PendingPrice | pending set changes | the terms of the **newest pending REPLACE**, else 0 — even when a cancel is the newest request; also 0 while the REPLACE is only inferred, or for a term it did not propose (a replace to market has no price) |
 | 9012 | PendingClOrdID | pending set changes | the newest in-flight request's id, else `NONE` |
 | 9013 | PendingAction | pending set changes | `NONE` / `NEW` / `REPLACE` / `CANCEL` of the newest in-flight request |
 | 9015 | PendingRequests | pending set changes | every in-flight request, §4.1, or `NONE` |
@@ -210,6 +218,9 @@ checkpoint ([04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-check
 | 9018 | ChainOrigin | creation; a late D; a failed rebuild | `D`, `MIDSTREAM`, `D_LATE`, `UNRECOVERED` |
 | 9000 | ParentOrderID | the D | child slices only, as today |
 | 9100+ | — | hooks | reserved for deployment-specific fields written through the SPI ([07 §2](07-extension-points.md#2-tier-two-hooks)); the machine never writes or reads them |
+
+Tags 9032 and 9033 are not record tags: they wrap unparseable bytes on
+`fix42/malformed` ([03 §9](03-state-machine.md#9-unrouted-and-unparseable-messages)).
 
 Three deliberate choices in that table:
 
@@ -241,7 +252,10 @@ the id last**: `ACTION:flag:qty:px:id`, elements joined by `;`, **oldest
 first**. `ACTION` is `NEW`, `REPLACE` or `CANCEL`; `flag` is `R` (the request
 itself was seen) or `I` (inferred from the venue's pending acknowledgement,
 [03 §6.4](03-state-machine.md#64-358-executionreport)); `qty` and `px` are
-the proposed terms of a REPLACE and `0` otherwise. Any `%`, `:`, `;` or `,`
+the proposed terms of a REPLACE and **empty** where nothing was proposed — a
+NEW, a CANCEL, an inferred REPLACE, a replace to market with no 44 — so a
+genuine price of zero and "no proposal" never read the same (S17); the tag
+value itself is never empty. Any `%`, `:`, `;` or `,`
 inside an id is `%`-escaped (`%25`, `%3A`, `%3B`, `%2C`), in 9015 and in 9021
 alike, so an id such as `20261031:DESK7:000123` round-trips (R11). The empty
 set is the literal `NONE`, not an absent or empty tag: a delta publish can
@@ -252,7 +266,7 @@ After an amend and then a cancel on the same order
 ([03 §7.4](03-state-machine.md#74-amend-and-cancel-both-in-flight-reject-for-the-cancel-contract-edge-4)):
 
 ```
-9015=REPLACE:R:12000:185.75:A-2;CANCEL:R:0:0:A-3
+9015=REPLACE:R:12000:185.75:A-2;CANCEL:R:::A-3
 9016=2
 9013=CANCEL  9012=A-3  9010=12000  9011=185.75   <- newest request is the cancel;
                                                       9010/9011 still describe the pending amend
@@ -274,7 +288,8 @@ amend it accepted ([03 §6.4–6.5](03-state-machine.md#64-358-executionreport))
 Answers may therefore arrive in any order, which is what makes
 confirm-then-reject and reject-then-confirm converge on the same record. A
 fill that carries a pending request's id is **not** an answer and leaves the
-set alone. A request the venue never answers stays in the set; the filter
+set alone, unless `fill-under-pending-id: ANSWERS_REPLACE_IF_TERMS_MATCH` says
+a fill at the proposed terms is. A request the venue never answers stays in the set; the filter
 `/9016 > 0 AND /9017 = 'Y'` finds such orders.
 
 **Size.** An array list inside the cache entry, allocated on the first
@@ -298,7 +313,7 @@ more than one in-flight request must read 9015.
 
 | message | to the blotter | why |
 | --- | --- | --- |
-| `35=D` for an unknown chain, cache complete | **`publish`** of the whole record: the D's fields less the stripped tags, plus every state tag of §4 with its initial value | creates the record; every later delta relies on the terms being there |
+| `35=D` for an unknown chain, cache complete | **`publish`** of the whole record: the D's fields less the stripped tags, plus every state tag of §4 with its initial value; the payload is kept until AMPS acknowledges it | creates the record; every later delta relies on the terms being there, which is also why a rejected creation is re-sent whole rather than rebuilt from the cache ([04 §6](04-recovery-and-operations.md#6-the-publish-path)) |
 | `35=D` for an unknown chain, cache **incomplete** (`recovery: NONE`, a partial load) | a keyed `sow` by `9020 =` 11 first; a hit makes it the late-D or resent-D case below | a FULL publish over a record the cache merely did not know about would erase every delta since (R4c) |
 | any other message that changes the state | **`delta_publish`** of the **dirty fields only**: whatever the machine changed, plus the last-message bookkeeping (11, 41, 60, 9022, 9023) | the merge preserves everything else — **verified** by `Fix42DeltaPublishIT` |
 | a non-D for an unknown chain, after the miss lookups found nothing | `delta_publish` of the best-effort record, `9018=MIDSTREAM` | if a record exists the merge enriches it; if none exists AMPS stores the delta as the record — **verify on build**, with a `publish` fallback ([04 §3](04-recovery-and-operations.md#3-cache-misses)) |
@@ -311,29 +326,47 @@ rather than "changed": a fill re-sends 38 even when it did not move, which
 keeps the writer simple and the record checkable against itself. A fill puts
 roughly a dozen tags on the wire and a pending ack (`150=6`) five.
 
+**Order of operations, once:** `plan` (including any miss lookup) → the
+blotter publish → the audit publishes → `commit`. The audit publishes come
+after `plan` because their 9020 trailer needs the resolved key (S20), and
+after the blotter publish because that is the one that must not be lost; the
+audit copies are keyed, so a redelivery after a failure between the two
+overwrites them idempotently (two journal entries, one SOW record). The
+non-SOW `fix42/unrouted` and `fix42/malformed` can carry a duplicate after
+such a redelivery; stated in [04 §8](04-recovery-and-operations.md#8-failure-matrix),
+not prevented (S14).
+
 The pass-through topics receive the message **whole** (`publish`) **plus tag
 9020** appended as a trailer, after any tag 10 the message carries, so a
 framed message's BodyLength and CheckSum stay valid for the bytes they cover
 (decision 3, [08 §7.1](08-review-findings.md#71-tag-9020-on-the-audit-publishes)).
-A message that already carries 9020 is published as it is and
-`auditKeyTagConflict` counts. The audit topics thereby hold the message as
+The trailer is omitted when the message resolved to no chain (an unmatched
+`35=9`, an unrouted type). A message that already carries 9020 is published
+as it is and `auditKeyTagConflict` counts. The audit topics thereby hold the message as
 received, filed under the key the machine gave it: one `sow` with
 `/9020 = '<key>'` per audit topic is the order's complete history, and a
 keyed read of `orders_audit` by any ClOrdID is the cheap cache-miss lookup
 of [04 §3](04-recovery-and-operations.md#3-cache-misses). `AuditRouter` keeps
-the stateless planner's per-payload key check: a message that lacks its
-topic's key tag goes to `fix42/unrouted` in lenient mode rather than to a
-publish AMPS would refuse (R21).
+the stateless planner's per-payload key check, **per topic**: a message that
+lacks one topic's key tag — a `20=3` status report with no 17, say — skips
+that topic and goes whole to `fix42/unrouted` instead, is still published to
+the topics whose key it carries, and is still applied to the blotter
+(R21, S10). A `key-guard` on a route does the same for sentinel values
+(`37=NONE`, `17=0`).
 
 ## 6. Configuration
 
 Bound to `OrderStateProperties`, validated at startup the way `Fix42Properties`
 is (a route naming a topic with no `topic-keys` entry, or whose selection
-omits the key, refuses to boot; `recovery: NONE` against a non-empty blotter
-refuses to start unless told otherwise).
+omits the key, refuses to boot; `audit.key-tag` must equal
+`order-state.key-tag`; `recovery: NONE` against a non-empty blotter refuses
+to start unless told otherwise).
 
 ```yaml
 fix42-order-state:
+  # Profiles: the shipped defaults below are production's. The `demo`
+  # profile (bootRun, the integration tests) overrides publish-store: MEMORY
+  # and mode: strict.
   amps:
     uri: tcp://127.0.0.1:9007/amps/fix       # must end /fix, as before
     client-name: fix42-order-state-publisher
@@ -380,12 +413,16 @@ fix42-order-state:
     terminal-retention: PT0S
     # Rebuild the cache at startup: SOW (default), NONE, later JOURNAL. docs/04 §2.
     recovery: SOW
-    # Load only open orders (bodies); every record still yields a tombstone.
+    # Keep a cache body only for open orders; terminal records yield a
+    # tombstone (every 37 -> 9020) instead. docs/04 §2.1.
     load-open-orders-only: false
     # Let recovery NONE start against a non-empty blotter.
     allow-incomplete-cache: false
-    # On a cache miss, look the order up before creating a MIDSTREAM entry. docs/04 §3.
+    # On a cache miss, look the order up through the audit topics before
+    # creating a MIDSTREAM entry. docs/04 §3.
     miss-lookup: true
+    # Also try sow/fix42/order_state by /37 (needs a server-side index on 37).
+    miss-lookup-by-order-id: false
     # Publish 9025 at once for messages the machine ignored.
     publish-unchanged: false
     # Named bundles of the policy knobs above, one per venue. docs/07 §1.
@@ -397,7 +434,8 @@ fix42-order-state:
         fill-under-pending-id: ANSWERS_REPLACE_IF_TERMS_MATCH
 
   audit:
-    # Appended to every pass-through publish as a trailer; 0 disables. docs/02 §5.
+    # Appended to every pass-through publish as a trailer; 0 disables; must
+    # equal order-state.key-tag or validate() refuses to boot. docs/02 §5.
     key-tag: 9020
 
   topic-keys:
@@ -425,8 +463,11 @@ fix42-order-state:
     - name: execution-report
       msg-types: ["8"]
       topics: ["sow/fix42/execs", "sow/fix42/execs_audit"]
-      # a report with 37=NONE skips sow/fix42/execs: the key would be NONE
-      key-guard: { "37": "NONE" }
+      # a report whose key tag holds a sentinel skips the topic keyed by it:
+      # 37=NONE would collapse execs onto one record, 17=0 execs_audit.
+      key-guard:
+        "sow/fix42/execs": { "37": ["NONE"] }
+        "sow/fix42/execs_audit": { "17": ["0", "NONE"] }
     - name: cancel-reject
       msg-types: ["9"]
       topics: ["sow/fix42/rejects"]
@@ -471,6 +512,15 @@ and the server's acknowledgement is the loss bound, stated in
 throws propagates out of `onMessage` before `commit`, so the cache is
 unchanged and the engine does not acknowledge.
 
+The `FailedWriteHandler` runs on the AMPS client's receive thread. It never
+touches an entry: it enqueues the rejected publish's key, and the publishing
+thread drains the queue before the next message, on an idle timer, and at
+shutdown ([04 §6](04-recovery-and-operations.md#6-the-publish-path)). An
+exception out of `onMessage` is, for QuickFIX/J, a session-level event — the
+engine does not retry in place; it disconnects and the counterparty resends
+on the next logon — which is the redelivery the two-phase apply relies on
+(assumption about the engine, to verify in phase 4).
+
 Ordering is assumed within a session and not across sessions. A report that
 arrives before its request (possible on a drop-copy tap that merges two
 sessions) is handled as a mid-stream chain or an inferred pending entry, and
@@ -499,7 +549,8 @@ by contract and fail fast, so every recovery path in
 | duplicate or stale reports regress the record | ignored; 9025 counts them; an old status report is caught by its TransactTime |
 | a fill after a cancel confirm overwrites 39/151 with the fill's | the economics land, 39/151 stay terminal, 9026 counts (default policy) |
 | 60 = the last message's TransactTime | the same; 9029 is the latest *report's*, monotonic |
-| 32/31 keep the last fill's values after a bust of that fill | `32=0 31=0`; 9028 says which execution they describe |
+| 32/31 keep the last fill's values after a bust of that fill | `32=0 31=0`; 9028 says which execution they described; 9031 lists what was busted |
+| 44 is the last price any message carried | 44 is the acked limit price, and `44=0` once the order became a market order (`40=1`) |
 | `sow/fix42/orders_audit` holds the tags each route selected | holds the message as received plus 9020 as a trailer |
 | the `{scope}` placeholder needs 9000 on every venue message | 9000 remembered from the D; a report without it still routes |
 | exposure and recon views over `sow/fix42/orders` | the same four views, declared over `sow/fix42/order_state`; same fields, same filters (`/9000 IS NULL`); a `/9018 = 'MIDSTREAM'` record contributes what its reports carried |
