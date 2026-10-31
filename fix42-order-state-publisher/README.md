@@ -32,3 +32,4 @@ AMPS_FLOW=fix42-order-state ./server/scripts/amps.sh start
 | [docs/05](docs/05-implementation-plan.md) | six phases, class layout, open decisions, risks |
 | [docs/06](docs/06-case-coverage.md) | the case matrix: every lifecycle and edge case, the rule that handles it, and a verdict |
 | [docs/07](docs/07-extension-points.md) | policies per venue, the hook SPI, replaceable components |
+| [docs/08](docs/08-review-findings.md) | round-1 review findings and their dispositions; the decisions pending before 01–07 are revised |

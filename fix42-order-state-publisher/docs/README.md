@@ -22,6 +22,7 @@ the phases.
 | [05](05-implementation-plan.md) | The implementation plan | six phases with deliverables, tests and exit criteria; the class layout; the decisions still open, each with a recommendation |
 | [06](06-case-coverage.md) | Case coverage | fifty-odd lifecycle and edge cases — normal flows, requests racing their answers, reports racing each other, mid-stream and identity — each with the rule that handles it and a verdict; and the three rules the matrix tightened |
 | [07](07-extension-points.md) | Extension points | per-venue policy bundles, the `OrderStateHook` SPI (what a hook may and must not do), replaceable components, and what is deliberately not extensible |
+| [08](08-review-findings.md) | Review findings, round 1 | an independent adversarial review of 01–07: twenty-two findings with the message sequence, what the docs say, what goes wrong and a disposition; the matrix verdicts it disputes; the ambiguities; the plan gaps; and the six decisions the revision needs first. **Docs 01–07 have not yet been revised for it** |
 
 ## The design in one paragraph
 
