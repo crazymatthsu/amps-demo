@@ -1,0 +1,35 @@
+# fix42-order-state-publisher
+
+**Design stage — no code yet.** The architecture and the implementation plan
+are in [`docs/`](docs/README.md); read that first.
+
+The stateful successor to [`fix42-publisher`](../fix42-publisher/README.md).
+Same FIX 4.2 drop-copy flow, same audit topics, same full publish on `35=D`
+and delta publish for everything after — but the order blotter is keyed by the
+**publisher**, from a small in-memory cache of ids, acked terms, venue status,
+cumulative quantities and the *set* of requests in flight, instead of by the
+AMPS chaining key generator module.
+
+The case that motivates it: two cancels for one order, the venue confirms one
+and then rejects the other. The stateless publisher's last-writer-wins merge
+leaves that order reading as cancel-rejected; this one leaves it canceled,
+whichever answer arrives first
+([docs/01](docs/01-problem-the-two-cancels.md), [docs/03 §7.1](docs/03-state-machine.md#71-two-cancels-confirm-then-reject-the-motivating-case)).
+
+```bash
+# once built, per docs/05:
+export AMPS_IMAGE=localhost/amps-demo:5.3.5.135
+AMPS_FLOW=fix42-order-state ./server/scripts/amps.sh start
+./gradlew :fix42-order-state-publisher:bootRun
+```
+
+| document | what it covers |
+| --- | --- |
+| [docs/01](docs/01-problem-the-two-cancels.md) | the failure, traced through the shipped rulebook; the class of edge cases it belongs to |
+| [docs/02](docs/02-architecture.md) | topology, the cache, the record schema, publish modes, server flow, configuration |
+| [docs/03](docs/03-state-machine.md) | the rules, and eleven walkthroughs showing the record after every message |
+| [docs/04](docs/04-recovery-and-operations.md) | restart, cache misses, eviction, single writer, metrics, failure matrix |
+| [docs/05](docs/05-implementation-plan.md) | six phases, class layout, open decisions, risks |
+| [docs/06](docs/06-case-coverage.md) | the case matrix: every lifecycle and edge case, the rule that handles it, and a verdict |
+| [docs/07](docs/07-extension-points.md) | policies per venue, the hook SPI, replaceable components |
+| [docs/08](docs/08-review-findings.md) | round-1 review findings and their dispositions; the decisions pending before 01–07 are revised |
