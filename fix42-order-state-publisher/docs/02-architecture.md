@@ -194,6 +194,64 @@ request, so a consumer written against `fix42-publisher`'s blotter needs no
 change beyond the key field. 9015/9016 are the full set for a consumer that
 wants it.
 
+### 4.1 Several requests in flight: tag 9015
+
+The pending set is one tag holding every unanswered request, and 9010–9013
+are a summary of its newest member. Collected here because the question
+"what if more than one request is in flight?" is the question this module
+exists to answer.
+
+**Encoding.** One element per request, `clOrdId:ACTION[:qty:px]`, joined by
+`;`, **oldest first**. A REPLACE carries its proposed terms; a NEW or a CANCEL
+has none. The empty set is the literal `NONE`, not an absent or empty tag: a
+delta publish can overwrite a field but never remove it, so the cleared
+state must be a written value. 9016 is the element count.
+
+After an amend and then a cancel on the same order
+([03 §7.4](03-state-machine.md#74-amend-and-cancel-both-in-flight-reject-for-the-cancel-contract-edge-4)):
+
+```
+9015=A-2:REPLACE:12000:185.75;A-3:CANCEL
+9016=2
+9013=CANCEL  9012=A-3  9010=0  9011=0      <- the newest member, a cancel
+```
+
+When the `35=9` for A-3 arrives it is removed and the summary falls back to
+what remains:
+
+```
+9015=A-2:REPLACE:12000:185.75
+9016=1
+9013=REPLACE  9012=A-2  9010=12000  9011=185.75
+```
+
+**A set, not a stack.** Each answering message removes the request whose
+ClOrdID equals its own tag 11: a `150=4` names the cancel it confirmed, a
+`35=9` the request it rejected, a `150=5` the amend it accepted
+([03 §6.4–6.5](03-state-machine.md#64-358-executionreport)). Answers may
+therefore arrive in any order, which is what makes confirm-then-reject and
+reject-then-confirm converge on the same record. A request the venue never
+answers stays in the set; the filter `/9016 > 0 AND /9017 = 'Y'` finds such
+orders.
+
+**Size.** An array list inside the cache entry, allocated on the first
+request after the D's own NEW is answered. In practice it holds zero to two
+elements, three in the amend-plus-two-cancels case. There is no fixed upper
+bound; a venue that leaves many requests unanswered grows the tag, and the
+`pendingOnTerminal` counter ([04 §6](04-recovery-and-operations.md#6-observability))
+is the signal.
+
+**Recovery.** 9015 is parsed back into the set verbatim on a restart
+([04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-checkpoint)),
+so no in-flight request is lost. This is the state the contract's
+per-request status snapshots would have made unrecoverable, and the reason
+[03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision)
+keeps none.
+
+**Consumer caveat.** 9010–9013 describe the newest request only, kept so a
+reader of the old blotter needs no code change. A consumer that cares about
+more than one in-flight request must read 9015.
+
 ## 5. Publish modes
 
 | message | to the blotter | why |
