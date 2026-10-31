@@ -5,8 +5,13 @@ publisher handed every message to a *planner* that selected tags by route and
 let the server resolve the record, this one hands it to a *state machine* that
 resolves the record itself, applies the message to a cached order state, and
 emits the fields that changed. Everything around that — the FIX parsing, the
-mock venue, the audit routing, the Spring Boot shell, the test harness — is
-shared or copied with its shape intact.
+mock venue, the audit routing, the Spring Boot shell — is **copied** into this
+module's own package with its shape intact. The two modules share no code and
+neither depends on the other: each builds, tests and demos on its own, so
+either can be lifted out of this repository as a standalone project without
+taking the other along. The only thing they have in common is the
+`amps-test-harness` module that starts a container for their integration
+suites, which every module in the repository already uses.
 
 ---
 
@@ -57,8 +62,8 @@ existing READMEs still work.
 
 | component | responsibility | state | where it comes from |
 | --- | --- | --- | --- |
-| `FixFrame` / `FixWriter` / `FixMessage` / `FixTags` | parse, index and render FIX; the tag vocabulary | none | `fix42-publisher`, extracted to a shared module in phase 0 |
-| `OrderChain` / `MockFixFlow` | the deterministic mock venue | per chain, test only | shared; extended in phase 1 with multi-request scenarios |
+| `FixFrame` / `FixWriter` / `FixMessage` / `FixTags` / `Prices` | parse, index and render FIX; the tag vocabulary | none | copied from `fix42-publisher` into this module's package in phase 0; `FixTags` gains the 9015–9025 family |
+| `OrderChain` / `MockFixFlow` / `Instrument` / `FixEvent` / `OrderScope` | the deterministic mock venue | per chain, test only | copied in phase 0; extended in phase 1 with multi-request scenarios |
 | `AuditRouter` | which pass-through topics a message goes to, whole | none | new, a simplified `PublishPlanner`: no projection, FULL by default |
 | `OrderKeyIndex` | every ClOrdID and OrderID seen → OrderKey | one map entry per id | new |
 | `OrderState` | the cache entry (§3) | one per order | new |

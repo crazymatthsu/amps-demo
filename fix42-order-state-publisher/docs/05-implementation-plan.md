@@ -7,35 +7,38 @@ written yet; this is the order to write it in.
 
 ---
 
-## Phase 0 — Share the FIX layer and the mock venue
+## Phase 0 — Stand the module up, with its own copy of the FIX layer and mock venue
 
 **Why first.** The new module needs `FixFrame`, `FixWriter`, `FixMessage`,
 `FixTags`, `Prices`, and the mock venue (`OrderChain`, `MockFixFlow`,
-`Instrument`, `FixEvent`, `OrderScope`). Copying them forks the mock, and the
-whole point of the mock is that both publishers can be fed the same scripted
-flow.
+`Instrument`, `FixEvent`, `OrderScope`). It gets them as a **copy**, not a
+dependency: the two publishers are to stay independent of each other, so that
+each builds, tests and demos alone and either can later be extracted from this
+repository as a standalone project. A shared module was considered and
+rejected for that reason; so was depending on `fix42-publisher`'s jar, which
+would drag a second Spring Boot application onto the classpath.
 
 **Deliverables**
 
-- a new Gradle module `fix42-common` holding `fix42-publisher`'s `fix/` and
-  `mock/` packages **with their package names unchanged**
-  (`com.demo.amps.fix42.fix`, `com.demo.amps.fix42.mock`), so no import in
-  `fix42-publisher` moves;
-- `fix42-publisher` depends on `:fix42-common`; its own tests for those
-  packages (`FixFrameTest`, `FixMessageTest`, `FixWriterTest`, `PricesTest`,
-  `FillArithmeticTest`, `MockFixFlowTest`) move with the code;
-- `settings.gradle.kts` includes the new module; the version catalog needs
-  nothing new.
+- the Gradle module `fix42-order-state-publisher`, included in
+  `settings.gradle.kts`, with `build.gradle.kts` copied from `fix42-publisher`
+  (same `integrationTest` source set, same environment-variable inputs for the
+  build cache, `bootJar` off); the version catalog needs nothing new;
+- `fix42-publisher`'s `fix/` and `mock/` packages copied to
+  `com.demo.amps.fix42.state.fix` and `com.demo.amps.fix42.state.mock`, with
+  their unit tests (`FixFrameTest`, `FixMessageTest`, `FixWriterTest`,
+  `PricesTest`, `FillArithmeticTest`, `MockFixFlowTest`); `FixTags` gains the
+  new 9015–9025 constants, and nothing else changes in the copy;
+- a `ScriptedFlowPinTest` recording a hash of `MockFixFlow`'s rendered
+  messages as a literal, taken from `fix42-publisher`'s flow at copy time.
+  This is what keeps the two mock venues producing the **same scripted flow**
+  without a dependency between them, so the end state of the ordinary ten
+  chains can be compared across the two blotters by eye or by script;
+- `fix42-publisher` is not touched.
 
-**Alternative, if the extraction is unwelcome:** depend on `:fix42-publisher`
-as a library (its `jar` task is already enabled). Simpler, but it puts a
-second `@SpringBootApplication` and its `@Component`s on the classpath; the
-new module's component scan must then be rooted in its own package and never
-widened. The extraction is recommended; the alternative is one line.
-
-**Exit criteria.** `./gradlew build` green; `fix42-publisher`'s unit and
-integration suites unchanged in count; `OrderScope`'s only non-`mock` client
-(`Fix42Properties`) still compiles.
+**Exit criteria.** `./gradlew :fix42-order-state-publisher:build` green on its
+own; `./gradlew build` green; the pin test passes; `fix42-publisher`'s suites
+unchanged in count.
 
 ## Phase 1 — Scenarios the stateless publisher cannot pass
 
@@ -49,8 +52,8 @@ tested against, and they double as the demo the runner publishes.
   `cancelRequest()` while one is outstanding; `cancelConfirmed(requestClOrdId)`
   and `cancelReject(requestClOrdId, …)` naming which request they answer;
   `amendReject` likewise. The existing single-request methods keep their
-  behaviour so `MockFixFlow`'s output is byte-identical (pinned by a test that
-  hashes the scripted flow's rendered messages before and after);
+  behaviour so this module's `MockFixFlow` still renders the same messages as
+  `fix42-publisher`'s (the phase 0 pin test keeps passing);
 - new venue behaviours: `resendLastReport()` (PossDup duplicate),
   `redeliver(reportOrdinal)` (stale), `cancelRequest()` after close-out (late
   request on a terminal order), `withoutNewOrder()` (drop the D from the
@@ -64,8 +67,8 @@ tested against, and they double as the demo the runner publishes.
   flow is asserted on the new blotter too.
 
 **Exit criteria.** `FillArithmeticTest`'s invariants (`38 = 14 + 151`, AvgPx
-consistent with the fills) hold for every new chain; the scripted-flow hash
-is unchanged.
+consistent with the fills) hold for every new chain; the scripted-flow pin
+still passes.
 
 ## Phase 2 — The state machine, with no server
 
@@ -115,10 +118,9 @@ dependency in the package.
   `OrderStatePublisher`, `AmpsClientConfiguration`,
   `Fix42OrderStatePublisherApplication`, `MockFlowRunner`;
   `application.yml` as in [02 §6](02-architecture.md#6-configuration);
-- the module's `build.gradle.kts`, copied from `fix42-publisher` with the
-  same `integrationTest` source set, the same environment-variable inputs (the
-  build-cache trap is documented there and applies unchanged), and a `jar`
-  disabled since nothing consumes it.
+- the integration-test plumbing in `build.gradle.kts` from phase 0 put to
+  use: the `integrationTest` task's environment-variable inputs (the
+  build-cache trap documented in `fix42-publisher` applies unchanged).
 
 **Integration tests** (each starts its own instance, as the existing suites do)
 
@@ -188,24 +190,26 @@ numbers from a run.
 
 ## Class layout
 
-```
-fix42-common/                                   phase 0
-  src/main/java/com/demo/amps/fix42/fix/        FixFrame FixWriter FixMessage FixTags Prices
-  src/main/java/com/demo/amps/fix42/mock/       OrderChain MockFixFlow Instrument FixEvent OrderScope
+Self-contained: nothing under `fix42-order-state-publisher/` imports from
+`fix42-publisher`, and the only in-repository dependency is the test-scope
+`amps-test-harness`, which every container-backed suite here uses.
 
+```
 fix42-order-state-publisher/
-  build.gradle.kts
+  build.gradle.kts                              phase 0
   README.md
   docs/                                         these notes
   src/main/resources/application.yml            02 §6
   src/main/java/com/demo/amps/fix42/state/
     Fix42OrderStatePublisherApplication.java
     MockFlowRunner.java
+    fix/      FixFrame FixWriter FixMessage FixTags Prices         copied, phase 0
+    mock/     OrderChain MockFixFlow Instrument FixEvent OrderScope copied, phase 0; EdgeCaseFlow, phase 1
     config/   OrderStateProperties  AmpsClientConfiguration  CancelRejectStatusPolicy
     machine/  OrderKeyIndex  OrderState  PendingRequest  OrderStateMachine  Outcome  RecordWriter
     publish/  AuditRouter  OrderStatePublisher
     recovery/ SowCacheLoader  (JournalReplayer, later)
-    mock/     EdgeCaseFlow
+  src/test/java/…/fix/, …/mock/                  copied unit tests + ScriptedFlowPinTest, phase 0
   src/test/java/…/machine/                       phase 2: per-rule and per-walkthrough tests, round-trip
   src/test/java/…/config/                        properties validation
   src/test/java/…/it/OrderStateConfigurations    binds the shipped application.yml, as Fix42Configurations does
@@ -222,7 +226,7 @@ Each with the recommendation the documents assume. None blocks phase 0–2.
 
 | decision | options | recommended | why |
 | --- | --- | --- | --- |
-| how the new module gets the FIX layer | extract `fix42-common` / depend on `fix42-publisher` | **extract** | one mock venue for both publishers, no stray Spring beans |
+| how the new module gets the FIX layer | copy / shared module / depend on `fix42-publisher` | **copy** (decided) | the two publishers stay independent, each testable and demoable alone and extractable as a standalone project; the pin test keeps the two mock flows identical |
 | audit topics receive | the whole message / route-selected tags | **whole** | an audit trail, and the replay source for `recovery: JOURNAL`; `tags:` on a route restores the old shape |
 | `35=9`'s tag 39 | `WHEN_NOT_TERMINAL` / `NEVER` / `ALWAYS` | **`WHEN_NOT_TERMINAL`** | [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision); it is a per-venue fact, so it is a knob |
 | duplicate detection | last ExecID + ring / unbounded set | **ring, depth 8** | the cache stays small; the stale guard covers the rest |
@@ -240,7 +244,8 @@ Each with the recommendation the documents assume. None blocks phase 0–2.
 | `delta_publish` with no existing record behaves differently on this build | phase 3 verifies on the container before phase 4 relies on it; the `publish` fallback for `CREATED(MIDSTREAM)` is one branch |
 | a bookmark subscription across three topics does not preserve journal order | `recovery: JOURNAL` is optional and last; the SOW rebuild does not need it |
 | the cache's allocations move the tail latency the old publisher was tuned for | phase 5 measures; ids can be canonicalised through the index (the key strings already live there) before anything else is tried |
-| the mock venue's new multi-request methods disturb the scripted flow | the hash pin in phase 1 |
+| the mock venue's new multi-request methods disturb the scripted flow | the pin test from phase 0 |
+| the two copies of the FIX layer and the mock venue drift apart | by design they are allowed to: the new module owns its copy. The pin test guards the one thing that must stay equal, the scripted flow; a fix found in one `FixFrame` is ported to the other by hand, and the two unit-test suites are the check |
 | a venue dialect's `35=9` semantics differ from all three policies | the policy is an enum behind one switch; a fourth value is a small change, and the record's 9025/9016 make the symptom visible first |
 | `OrderChain`'s single-request model resists a multi-request extension | model the outstanding requests as a list from the start of phase 1 and derive `currentClOrdId` from it; the existing methods become the one-element case |
 
