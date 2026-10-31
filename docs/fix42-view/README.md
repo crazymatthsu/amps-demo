@@ -94,3 +94,12 @@ build has recorded in [08](08-exposure-views.md).
 | [08-exposure-views.md](08-exposure-views.md) | exposure by account × symbol × side as AMPS views over the blotter — the verified cross-type syntax, the `IF()` drift that a restart hides, and a join view reconciling the parent and child levels (LEFT OUTER, no `<Filter>`, breaks selected by the reader) |
 | [09-parent-child-reconciliation.md](09-parent-child-reconciliation.md) | the analysis behind that join view: snapshot-and-diff vs a live reconciliation topic, the breaks query, the measured break, and why the per-parent key needs a root ClOrdID |
 | [10-expired-rejected-restated-reports.md](10-expired-rejected-restated-reports.md) | the catch-all gap: an expired, rejected or restated report (150=C/8/D) never reached the blotter, so the views of 08/09 over-counted exposure — the two routes that close it, the forced `151=0` on every terminal projection, and the live proof |
+
+## What comes next
+
+The chained blotter's remaining limit — a merge cannot apply a message
+*conditionally* — has a concrete production shape: two cancels for one order,
+one confirmed and one rejected, leave the record reading as the reject. The
+design for the stateful successor, `fix42-order-state-publisher`, which keeps
+everything above except the module and adds a small per-order cache, is in
+[fix42-order-state-publisher/docs/](../../fix42-order-state-publisher/docs/README.md).
