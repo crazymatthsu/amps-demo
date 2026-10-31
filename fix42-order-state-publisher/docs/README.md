@@ -20,6 +20,8 @@ the phases.
 | [03](03-state-machine.md) | The state machine | identity resolution, the pending-request *set*, the status rule (venue truth, with one policy decision on `35=9`), arbitration (duplicate, stale, terminal absorption), and the transition rules per message type — then the two-cancels case and nine more edge cases walked through as the record a subscriber would read after each message |
 | [04](04-recovery-and-operations.md) | Recovery and operations | why the SOW record is the checkpoint and the cache is only an accelerator; restart by SOW rebuild vs journal replay; cache misses and eviction; the single-writer rule; metrics; the failure matrix |
 | [05](05-implementation-plan.md) | The implementation plan | six phases with deliverables, tests and exit criteria; the class layout; the decisions still open, each with a recommendation |
+| [06](06-case-coverage.md) | Case coverage | fifty-odd lifecycle and edge cases — normal flows, requests racing their answers, reports racing each other, mid-stream and identity — each with the rule that handles it and a verdict; and the three rules the matrix tightened |
+| [07](07-extension-points.md) | Extension points | per-venue policy bundles, the `OrderStateHook` SPI (what a hook may and must not do), replaceable components, and what is deliberately not extensible |
 
 ## The design in one paragraph
 

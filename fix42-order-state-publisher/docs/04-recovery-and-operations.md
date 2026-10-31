@@ -193,6 +193,8 @@ allocates):
 | `ignoredDuplicate`, `ignoredStale`, `ignoredAbsorbed`, `ignoredRequest` | §5 of [03](03-state-machine.md) | low; a spike is a feed replaying |
 | `midstreamChains` | entries created from a non-D | zero on a feed the publisher saw from the start |
 | `unmatchedRejects` | 9s that named no pending request | zero |
+| `lateFills` | fills applied after a terminal report ([03 §7.12](03-state-machine.md#712-cancel-confirmed-then-a-late-execution)) | low; also on the record as 9026 |
+| `inconsistentReports` | reports with `38 ≠ 14 + 151` on a working order | zero; otherwise the venue |
 | `pendingOnTerminal` | orders that went terminal with requests unanswered | zero; otherwise a venue that does not reject late requests |
 | `fullPublishes`, `deltaPublishes`, `bytesPublished` | wire | — |
 | `cacheEntries`, `indexEntries`, `tombstones` | size | tracks the day |
@@ -211,6 +213,8 @@ plain SOW filters.
 | `sow/fix42/order_state` SOW file lost, journal intact | empty blotter | the rebuild finds nothing; `midstreamChains` climbs | `recovery: JOURNAL` replays the audit topics and rebuilds the records |
 | two cancels race (the motivating case), either order | `39=4`, `9013=NONE` | — | n/a: [03 §7.1–7.2](03-state-machine.md#71-two-cancels-confirm-then-reject-the-motivating-case) |
 | feed replays a PossDup range | unchanged; `9025` counts | `ignoredDuplicate` | n/a |
+| venue reports a trade after confirming the cancel | 14/6 updated, `39=4` kept, `9026=1` | `lateFills` | n/a by default; `late-fill-after-terminal` if the venue means it as a reopen |
+| venue busts or corrects a fill on a closed-out order | restated 14/6 on the same record; status as the venue states | — | n/a: reopening reports are always applied |
 | feed starts mid-stream | `9018=MIDSTREAM`, terms as far as the reports give them | `midstreamChains` | the late D, if it ever comes, fills the terms (`D_LATE`) |
 | cache evicted an order, venue sends a late bust | the right record, restated | the tombstone resolves it | n/a |
 | cache evicted an order, a late request under a new ClOrdID | a second `MIDSTREAM` record | `/9018 = 'MIDSTREAM'` filter | enable `miss-lookup`, or accept and clean up by replay |

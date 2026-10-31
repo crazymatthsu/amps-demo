@@ -82,8 +82,8 @@ still passes.
   elements is the common upper bound);
 - `OrderStateMachine.apply(FixFrame) → Outcome` — the rules of
   [03 §4–6](03-state-machine.md#4-status-venue-truth-and-one-policy-decision);
-  `cancel-reject-status`, `exec-id-history`, `stale-guard` as constructor
-  options;
+  `cancel-reject-status`, `late-fill-after-terminal`, `exec-id-history`,
+  `stale-guard` as constructor options (tier one of [07](07-extension-points.md));
 - `RecordWriter` — `OrderState` → FIX bytes, whole or dirty-only, into a
   `FixWriter`; the `9015` encoding and its parser (needed again by the
   rebuild in phase 4).
@@ -95,6 +95,8 @@ still passes.
 - one test per walkthrough in [03 §7](03-state-machine.md#7-walkthroughs),
   asserting the record **after every message** as the tables state it — these
   are the module's specification and should read like it;
+- one test per row of the coverage matrix in [06](06-case-coverage.md), named
+  by its row id (`N14`, `E20`, …), each **policy** row once per policy value;
 - a round-trip test: every state the machine can reach, written whole by
   `RecordWriter` and parsed back, rebuilds an equal `OrderState` (this is
   what makes the SOW rebuild of phase 4 trustworthy before it exists);
@@ -118,6 +120,10 @@ dependency in the package.
   `OrderStatePublisher`, `AmpsClientConfiguration`,
   `Fix42OrderStatePublisherApplication`, `MockFlowRunner`;
   `application.yml` as in [02 §6](02-architecture.md#6-configuration);
+- `VenueDialect` binding, the `OrderStateHook` SPI with Spring collecting
+  every hook bean in `@Order`, `RecordFields` refusing tags below 9100, and one
+  shipped example hook (a derived desk status in 9100) with its test
+  ([07 §2](07-extension-points.md#2-tier-two-hooks));
 - the integration-test plumbing in `build.gradle.kts` from phase 0 put to
   use: the `integrationTest` task's environment-variable inputs (the
   build-cache trap documented in `fix42-publisher` applies unchanged).
@@ -205,8 +211,11 @@ fix42-order-state-publisher/
     MockFlowRunner.java
     fix/      FixFrame FixWriter FixMessage FixTags Prices         copied, phase 0
     mock/     OrderChain MockFixFlow Instrument FixEvent OrderScope copied, phase 0; EdgeCaseFlow, phase 1
-    config/   OrderStateProperties  AmpsClientConfiguration  CancelRejectStatusPolicy
+    config/   OrderStateProperties  AmpsClientConfiguration  VenueDialect
+              CancelRejectStatusPolicy  LateFillPolicy
     machine/  OrderKeyIndex  OrderState  PendingRequest  OrderStateMachine  Outcome  RecordWriter
+    spi/      OrderStateHook  OrderStateView  Decision  RecordFields  IgnoreReason
+    hooks/    DeskStatusHook (the shipped example)
     publish/  AuditRouter  OrderStatePublisher
     recovery/ SowCacheLoader  (JournalReplayer, later)
   src/test/java/…/fix/, …/mock/                  copied unit tests + ScriptedFlowPinTest, phase 0
@@ -229,6 +238,8 @@ Each with the recommendation the documents assume. None blocks phase 0–2.
 | how the new module gets the FIX layer | copy / shared module / depend on `fix42-publisher` | **copy** (decided) | the two publishers stay independent, each testable and demoable alone and extractable as a standalone project; the pin test keeps the two mock flows identical |
 | audit topics receive | the whole message / route-selected tags | **whole** | an audit trail, and the replay source for `recovery: JOURNAL`; `tags:` on a route restores the old shape |
 | `35=9`'s tag 39 | `WHEN_NOT_TERMINAL` / `NEVER` / `ALWAYS` | **`WHEN_NOT_TERMINAL`** | [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision); it is a per-venue fact, so it is a knob |
+| a fill after a terminal report | `APPLY_ECONOMICS` / `ADOPT_VENUE` / `IGNORE` | **`APPLY_ECONOMICS`** | a trade is money and is never dropped by default; whether it reopens the order is the venue's to say, through a report whose own 39 says so ([06 E20](06-case-coverage.md#3-reports-racing-each-other)) |
+| custom logic | hooks SPI / fork the machine | **hooks**, stateless by contract, own tag range 9100+ | [07](07-extension-points.md); determinism is what every recovery path stands on |
 | duplicate detection | last ExecID + ring / unbounded set | **ring, depth 8** | the cache stays small; the stale guard covers the rest |
 | key tag | new 9020 / reuse 9014 | **9020** | 9014 means "working id" and rotates; a key must not |
 | keep `sow/fix42/execs` (latest report per OrderID) | keep / drop | **keep** | existing tooling reads it; it costs one route line |

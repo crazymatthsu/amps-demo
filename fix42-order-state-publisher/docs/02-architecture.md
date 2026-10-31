@@ -73,6 +73,7 @@ existing READMEs still work.
 | `OrderStatePublisher` | `send(FixFrame)`: router + machine + writer → AMPS client; counters | per-thread scratch | new, the shape of `AmpsDeltaPublisher` |
 | `SowCacheLoader` | on start, rebuild the two maps from `sow/fix42/order_state` | none | new, [04](04-recovery-and-operations.md) |
 | `OrderStateProperties` | the yml surface (§6) | none | new, the shape of `Fix42Properties` |
+| `OrderStateHook` (SPI) + `VenueDialect` | per-venue policy bundles, and hooks called before and after each apply | none, by contract | new, [07](07-extension-points.md) |
 | `Fix42OrderStatePublisherApplication` + `MockFlowRunner` | the Spring Boot shell; publishes the scripted flow and exits | none | copied |
 
 The split that matters for testing is the same as before: everything up to
@@ -172,7 +173,9 @@ checkpoint ([04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-check
 | 9015 | PendingRequests | pending set changes | every in-flight request, `id:ACTION[:qty:px]` joined by `;`, or `NONE` |
 | 9016 | PendingCount | pending set changes | size of the set |
 | 9017 | Terminal | 39 changes | `Y` when 39 ∈ {2, 3, 4, 8, C}, else `N` |
-| 9018 | ChainOrigin | creation | `D` or `MIDSTREAM` |
+| 9018 | ChainOrigin | creation | `D`, `MIDSTREAM`, or `D_LATE` once a late D has filled a mid-stream chain's terms |
+| 9026 | LateFills | a fill with higher CumQty after a terminal report | count of late executions applied ([03 §7.12](03-state-machine.md#712-cancel-confirmed-then-a-late-execution)) |
+| 9100+ | — | hooks | reserved for deployment-specific fields written through the SPI ([07 §2](07-extension-points.md#2-tier-two-hooks)); the machine never writes or reads them |
 | 9000 | ParentOrderID | the D | child slices only, as today |
 
 Three deliberate choices in that table:
@@ -292,6 +295,10 @@ fix42-order-state:
     # What a 35=9's tag 39 may do to the record: WHEN_NOT_TERMINAL (default),
     # NEVER, ALWAYS. docs/03 §4.
     cancel-reject-status: WHEN_NOT_TERMINAL
+    # A fill with higher CumQty after a terminal report: APPLY_ECONOMICS
+    # (default: 14/6/32/31/30 adopted, 39 and 151 kept), ADOPT_VENUE, IGNORE.
+    # docs/03 §4 and §7.12.
+    late-fill-after-terminal: APPLY_ECONOMICS
     # Depth of the per-order ExecID ring used for duplicate detection; 0 = last only.
     exec-id-history: 8
     # Drop a 20=0 report whose CumQty is below the cached one. docs/03 §5.
@@ -302,6 +309,13 @@ fix42-order-state:
     recovery: SOW
     # Publish a 9023/9025/60 delta for messages the machine ignored.
     publish-unchanged: false
+    # Optional: named bundles of the policy knobs above, one per venue, and
+    # which one this publisher runs with. docs/07 §1.
+    dialect: default
+    dialects:
+      venue-z:
+        cancel-reject-status: NEVER
+        late-fill-after-terminal: ADOPT_VENUE
 
   topic-keys:
     "[sow/fix42/order_state]": [9020]
@@ -358,7 +372,17 @@ arrives before its request (possible on a drop-copy tap that merges two
 sessions) is handled as a mid-stream chain and the late request merges into
 it; the machine does not reorder.
 
-## 8. What changes for a consumer of the old blotter
+## 8. Extension
+
+Three tiers, in [07](07-extension-points.md): the policy knobs above, bundled
+per venue as a `VenueDialect`; an `OrderStateHook` SPI called before and after
+each apply, which may veto or normalise a message and add record fields in the
+9100+ range but never touch the machine's own; and constructor-injected
+components (`AuditRouter`, `RecordWriter`, `SowCacheLoader`, `OrderKeyIndex`)
+a deployment can replace. Hooks are stateless by contract, so every recovery
+path in [04](04-recovery-and-operations.md) still holds with them in place.
+
+## 9. What changes for a consumer of the old blotter
 
 | on `sow/fix42/orders` | on `sow/fix42/order_state` |
 | --- | --- |

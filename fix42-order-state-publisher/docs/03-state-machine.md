@@ -25,7 +25,9 @@ request (§4 below), and duplicate detection is bounded (§5).
 | **venue status** | tag 39 as the venue last stated it; `A` (PendingNew) for a D nobody has answered |
 | **terminal** | venue status ∈ {`2` Filled, `3` DoneForDay, `4` Canceled, `8` Rejected, `C` Expired} |
 | **reopening report** | a report that may legitimately move a terminal order: a bust (`20=1`), a correct (`20=2`), or a restatement (`150=D`) |
-| **answering report** | a report whose ExecType answers a request: `150=0` and `150=8` answer a NEW, `150=5` a REPLACE, `150=4` a CANCEL |
+| **pending acknowledgement** | a report with `150 ∈ {A, 6, E}`: the venue has received a request and not yet decided |
+| **answering report** | any report that is not a pending acknowledgement. It answers the pending request named by its own tag 11, whatever that request's action — typically `150=0`/`8` answer a NEW, `150=5` a REPLACE and `150=4` a CANCEL, but a first report that is itself a fill (an IOC or a market order) answers the NEW, and a fill under an amended id whose `150=5` was never seen answers the REPLACE |
+| **late execution** | a non-reopening report on a terminal order whose CumQty is **higher** than the record's: a trade the venue reports after it closed the order out |
 
 ## 2. Outcomes
 
@@ -114,13 +116,27 @@ if `9016 > 0`, else `39`.
 is the default policy's reason for existing: the terminal guard is what keeps
 a canceled order canceled.
 
-**Terminal absorption.** Once the venue status is terminal, the only reports
-that change the record's status or economics are reopening reports (a bust,
-a correct, a restatement) and reports whose own 39 is terminal (a `150=3`
-after a `150=4` — the venue's business, adopted). Any other report — a late
-fill, a late pending ack — is `IGNORED(absorbed)`. A request on a terminal
-order joins the pending set (the venue will reject it, and the record should
-show it is unanswered) and changes nothing else.
+**After a terminal status.** Once the venue status is terminal, a report is
+handled by what it is, not dropped wholesale:
+
+| report on a terminal order | effect |
+| --- | --- |
+| reopening (bust, correct, `150=D`) | applied in full: restated absolutes, 39 as the venue states it, 9017 recomputed. A bust after `150=2` reopens the order; a bust after `150=4` restates 14/6 downward and the order stays canceled |
+| its own 39 is terminal (a `150=3` after a `150=4`) | applied in full: the venue's business |
+| 39 not terminal, 14 **higher** than the record's — a **late execution** | the trade is real money and is never dropped. Per `late-fill-after-terminal`: **`APPLY_ECONOMICS`** (default) adopts 14, 6, 38, 17, 150, 32, 31, 30, keeps 39 terminal and 151 at 0, and counts it in 9026; `ADOPT_VENUE` applies the whole report including 39 and 151, for a venue whose late fill genuinely reopens the order; `IGNORE` drops it, counted in 9025, for a venue known to resend fills already inside the cancel's CumQty under a new ExecID |
+| 39 not terminal, 14 **equal** to the record's, 17 new | the report of a fill the terminal report already counted, arriving late: 17, 150, 32, 31, 30 are adopted (the record learns the last fill's details), nothing else moves |
+| 39 not terminal, 14 **lower** | `IGNORED(stale)` — §5 |
+| 39 not terminal, 14 equal, 17 already seen | `IGNORED(duplicate)` — §5 |
+| a pending acknowledgement (`150 ∈ {A, 6, E}`) | `IGNORED(absorbed)`: it acknowledges a request on an order the venue has since closed |
+
+A request on a terminal order joins the pending set (the venue will reject
+it, and the record should show it is unanswered) and changes nothing else.
+
+The late-execution row is the answer to "cancel confirmed, then a fill": the
+fill's CumQty and AvgPx land on the record, the order stays canceled, and 9026
+says it happened. The default keeps 39 terminal because a venue that closed
+an order and then reports a trade has not reopened it; one that has sends a
+report whose own 39 says so, which the second row applies.
 
 ## 5. Arbitration on execution reports
 
@@ -135,12 +151,15 @@ Applied in this order, before any field is touched:
    lower than the cached CumQty → `IGNORED(stale)`. CumQty is monotonic per
    chain in FIX 4.2 except across a bust or correct, which restate it
    explicitly and are exempt.
-3. **Absorbed.** The order is terminal, the report is not reopening, and its
-   39 is not terminal → `IGNORED(absorbed)` (§4).
+3. **After a terminal status.** The order is terminal and the report is not
+   reopening → the table in §4 decides: late execution, detail-only, or
+   absorbed.
 
 A report that passes all three is applied in full. A report with
 `20=3` (status) is treated as `20=0`: it restates the current state and is
-subject to the same guards.
+subject to the same guards. A report whose own fields disagree
+(`38 ≠ 14 + 151` on a working order) is still applied — the venue's numbers
+are the venue's — and counted in `inconsistentReports`.
 
 ## 6. Transition rules
 
@@ -157,7 +176,7 @@ subject to the same guards.
 | step | effect |
 | --- | --- |
 | resolve via 41, then 37, then 11; unknown → create `MIDSTREAM` keyed per §3.2 | |
-| 11 already in the pending set | `IGNORED(duplicate request)` |
+| 11 already **bound to the chain** (it is in 9021): either this request was seen before, or a report or reject has already answered it — a `150=5` that overtook its own G on a drop-copy tap that merges two sessions | `IGNORED(late or duplicate request)`. Adding it would leave a request pending that the venue has already answered |
 | otherwise add `{11: REPLACE, orig=41, qty=38, px=44}` to the set; bind 11 | `CHANGED`: 11, 41, 60, 9021, 9010 (=38), 9011 (=44), 9012 (=11), 9013=`REPLACE`, 9015, 9016, 9022, 9023 |
 | 38/44 on the record | **untouched** — they are the acked terms |
 | 39 | untouched |
@@ -178,9 +197,9 @@ After §5's arbitration:
 | 59 | adopted on `150=5` and `150=D` when present |
 | 32, 31, 30 | adopted on fills (`150 ∈ {1, 2}`, `20 ∈ {0, 3}`) and corrects (`20=2`); never on a bust (`20=1`), which reports no trade |
 | 37 | adopted on the first report that carries it; bound |
-| 9014 (working id) | set to the report's 11 on `150=0` and `150=5` |
+| 9014 (working id) | set to the report's 11 when the report answers a NEW or a REPLACE (below), and on `150=0` / `150=5` regardless of a match |
 | 9017 | `Y` if the new 39 is terminal, else `N` — a bust can take it back to `N` |
-| pending set | an **answering report** removes the request whose ClOrdID equals the report's tag 11 **and** whose action it answers (`0`/`8` → NEW, `5` → REPLACE, `4` → CANCEL). No match (an unsolicited cancel, a mid-stream start) removes nothing. `150=3`, `C`, `D`, `A`, `6`, `E` and busts/corrects touch the set not at all |
+| pending set | an **answering report** (any report that is not a pending acknowledgement) removes the pending request whose ClOrdID equals the report's tag 11, whatever its action. When that request was a REPLACE, the report's 38/44 are adopted even if it is not a `150=5` — a fill under the amended id means the venue accepted the amend and the confirm was missed. **No match:** a `150=4` removes **every** pending CANCEL (the order is canceled; a venue need not answer each cancel separately, and some echo the original ClOrdID rather than the cancel's); a `150=0` or `150=8` removes a pending NEW; anything else removes nothing. Pending acknowledgements (`A`, `6`, `E`) never touch the set |
 | 9010–9013, 9015, 9016 | recomputed from the set when it changed |
 
 Matching by the report's **own** tag 11 is what distinguishes the two cancels:
@@ -339,6 +358,39 @@ the child blotter whether or not the venue echoed the tag.
 `9 11=U-2 41=U-1 37=NONE 434=1` for an order whose D was never acked:
 resolution skips 37, finds U-2 in the index (bound when the F was seen), removes
 the request. Venue status stays `A`; the NEW request is still in the set.
+
+### 7.12 Cancel confirmed, then a late execution
+
+Order 1000 @ 50, 300 filled, canceled. The venue then reports a trade of 200
+it had matched before the cancel took effect, with the default
+`late-fill-after-terminal: APPLY_ECONOMICS`.
+
+| message | 39 | 14 | 151 | 6 | 32 | 9017 | 9026 | note |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `8 150=4 39=4 11=X-2 14=300 151=0 6=49.9` | 4 | 300 | 0 | 49.9 | — | Y | 0 | canceled |
+| `8 150=1 39=1 17=E-9 14=500 151=500 6=49.94 32=200 31=50` | **4** | **500** | **0** | **49.94** | **200** | Y | **1** | late execution: economics adopted, status kept, 151 kept at 0 |
+| `8 150=1 39=1 17=E-9 …` (resent) | 4 | 500 | 0 | 49.94 | 200 | Y | 1 | duplicate, ignored |
+| `8 150=1 39=1 17=E-8 14=300 …` (the fill the cancel already counted, delivered late) | 4 | 500 | 0 | 49.94 | 200 | Y | 1 | stale: 300 < 500 |
+
+Had the 300-share fill's report arrived late **before** the 200-share one,
+its 14 would have equalled the record's and only its 17/32/31/30 would have
+been adopted (the detail-only row). With `ADOPT_VENUE` the second row would
+read `39=1 151=500 9017=N`: the venue's statement, taken at face value.
+
+### 7.13 Bust and correct after the order is closed out
+
+| message | 39 | 14 | 151 | 6 | 9017 | note |
+| --- | --- | --- | --- | --- | --- | --- |
+| `8 150=4 39=4 14=800 151=0 6=50.1` | 4 | 800 | 0 | 50.1 | Y | canceled with two fills behind it |
+| `8 20=1 19=E-2 150=4 39=4 14=500 151=0 6=50.0` | 4 | **500** | 0 | **50.0** | Y | bust of the second fill: restated absolutes adopted; the venue's 39 on a bust mirrors the current status, so the order stays canceled |
+| `8 20=2 19=E-1 150=4 39=4 14=500 6=49.95 32=500 31=49.95` | 4 | 500 | 0 | **49.95** | Y | the surviving fill repriced |
+| `8 150=2 39=2 14=1000 151=0` *(a different order)* | 2 | 1000 | 0 | — | Y | filled |
+| `8 20=1 19=… 150=1 39=1 14=600 151=400` | **1** | 600 | **400** | — | **N** | bust after a full fill reopens it, as [7.9](#79-bust-after-a-full-fill-reopens-the-order-contract-edge-6) |
+
+A `35=G` after a full fill joins the pending set and the venue's `35=9`
+removes it ([7.3](#73-a-third-cancel-after-the-order-is-canceled)); a
+`150=D` after a close-out is a reopening report and is applied as the venue
+states it.
 
 ## 8. What the machine does not do
 
