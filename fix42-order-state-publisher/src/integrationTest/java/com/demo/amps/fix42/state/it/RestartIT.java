@@ -75,7 +75,7 @@ class RestartIT {
                 wrong.add(chain + ": " + record.value(39) + "/" + record.value(14) + "/" + record.value(151));
             }
             if (record.value(FixTags.Record.MSG_COUNT).isEmpty()) {
-                wrong.add(chain + ": no 9023");
+                wrong.add(chain + ": no 12023");
             }
         }
         assertThat(wrong).isEmpty();
@@ -87,9 +87,9 @@ class RestartIT {
     @DisplayName("S13: the reset's sow_delete of terminal records is durable across a restart; open orders stay")
     void resetIsDurable() throws Exception {
         int before = fixture.sow.records(BLOTTER).size();
-        int open = fixture.sow.records(BLOTTER, "/9017 = 'N'").size();
+        int open = fixture.sow.records(BLOTTER, "/12017 = 'N'").size();
         assertThat(open).isPositive().isLessThan(before);
-        fixture.reader.sowDelete(BLOTTER, "/9017 = 'Y'", fixture.properties.amps().timeoutMs());
+        fixture.reader.sowDelete(BLOTTER, "/12017 = 'Y'", fixture.properties.amps().timeoutMs());
         assertThat(fixture.sow.records(BLOTTER)).hasSize(open);
 
         fixture.server.restart();

@@ -47,7 +47,7 @@ rule references are to [03](03-state-machine.md).
 | E15 | a fill while a cancel is pending, under the cancel's id | any fill during a pending cancel; frequent on active orders, and the shape the mock emits | P1 |
 | E32 | a fill while a cancel or amend is pending | same event as E15 from the other side | P1 |
 | E60 (header half) | a `35=D` carrying FIX header and trailer tags | every message on a real session carries 8, 9, 10, 34, 49, 52, 56 | P1 |
-| E61 | an algo child re-priced hundreds of times | normal for pegged and VWAP children | P1 — a cap on 9021 is one parameter |
+| E61 | an algo child re-priced hundreds of times | normal for pegged and VWAP children | P1 — a cap on 12021 is one parameter |
 | E70d | every `35=8` published to `sow/fix42/execs` through the store | structural: every message, every day | P2 — one line of server config, but it must be there before the first run |
 | E77 | the daily reset | every day the deployment runs | P2 — a script, phase 4 |
 
@@ -84,7 +84,7 @@ rule references are to [03](03-state-machine.md).
 | E51 | a GTC across the day boundary | GTC-heavy desks | P3 — a documented consequence |
 | E53 | a miss under `recovery: NONE` or a partial load | whenever those modes are used | P2 — the lookups, phase 4 |
 | E59 | ClOrdIDs containing `:`, `;`, `,` or `%` | OMSs that build ids from date, desk and sequence | P1 — escaping in the encoder from day one |
-| E62 | a SOW written by an older schema | every upgrade | P2 — the loader; writing 9024 is P1 |
+| E62 | a SOW written by an older schema | every upgrade | P2 — the loader; writing 12024 is P1 |
 | E71 | an AMPS restart or a network drop | maintenance windows, blips | P2 — the `HAClient`, phase 3 |
 | E76a | a status report with no ExecID (**dialect**) | venues whose `20=3` carries no 17 | P2 — the per-topic key check in the router |
 | E31 | an old status report resent from outside the ring | resends after a long outage | P1 — the TransactTime guard is core arbitration |
@@ -112,7 +112,7 @@ rule references are to [03](03-state-machine.md).
 | E26, E27 | a bust or correct after a cancel | as above | P1 |
 | E28 | a `150=D` after a terminal report | a GT renewal of a closed order | P1 — free |
 | E29 | a terminal report after a terminal report | `150=3` after `150=4` | P1 — free |
-| E31a | a redelivered old bust | a resend that reaches back past a bust | P2 — the busted set, 9031 |
+| E31a | a redelivered old bust | a resend that reaches back past a bust | P2 — the busted set, 12031 |
 | E34 | a report with `38 ≠ 14 + 151` | a venue bug | P2 — a counter |
 | E35 | a replace reported as cancel-then-new (**dialect**) | a minority convention | P1 for the reopen rule in the table; P3 for the hook that hides the cancel leg |
 | E36 | a re-ack after an erroneous terminal report | a venue correcting itself | P1 — same table row |
@@ -128,7 +128,7 @@ rule references are to [03](03-state-machine.md).
 | E56 | `recovery: NONE` against a non-empty blotter | operator error | P2 — a startup refusal, trivial |
 | E57 | a numeric OrderID equal to another order's ClOrdID | a coincidence of id schemes | **P1** — the typed index; rare, catastrophic, cheap |
 | E58 | a G whose 37 and 41 disagree; a D carrying 41 | operator error or a cancel-and-new OMS | P1 — resolution order and no-rebind are core |
-| E60 (venue half) | venue custom tags in 9000–9099, 13xxx or 15xxx on a D | a collision of tag ranges | P1 — same strip list as the header half |
+| E60 (venue half) | venue custom tags in 12000–12099, 13xxx or 15xxx on a D | a collision of tag ranges | P1 — same strip list as the header half |
 | E70, E70a, E70b | AMPS rejects a delta, a creation, an audit publish | a payload bug or a missing key | P2 — the `FailedWriteHandler` and repair queue |
 | E70c | a publish throwing after another was stored | a client fault mid-message | P3 — documented, no code |
 | E72 | a publisher crash after the FIX engine acknowledged | process crashes are rare; the consequence is the reason for the file store | P2 — `publish-store: FILE` |

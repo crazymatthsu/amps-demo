@@ -29,7 +29,7 @@ public interface OrderStateHook {
         return Decision.proceed();
     }
 
-    /** After the rules ran and the dirty mask is final. May add record fields in 9100-9999. */
+    /** After the rules ran and the dirty mask is final. May add record fields in 12100-12999. */
     default void afterApply(FixFrame message, OrderStateView before, OrderStateView after, Outcome outcome,
                             RecordFields extra) {
     }
@@ -38,7 +38,7 @@ public interface OrderStateHook {
     default void onIgnored(FixFrame message, OrderStateView state, IgnoreReason reason) {
     }
 
-    /** When a chain is created, before the first publish. May seed record fields in 9100-9999. */
+    /** When a chain is created, before the first publish. May seed record fields in 12100-12999. */
     default void onCreate(FixFrame message, OrderStateView state, RecordFields extra) {
     }
 }

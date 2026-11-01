@@ -107,13 +107,15 @@ public final class FixTags {
     /**
      * The tags of the order-state record, {@code sow/fix42/order_state}.
      *
-     * <p>Added in this module's copy; fix42-publisher has none of them. Three
-     * user-defined ranges, each with one meaning (docs/02 §4):
-     * <b>13xxx</b> is the root value of standard tag xxx, <b>15xxx</b> the
-     * pending value of standard tag xxx, and <b>9000-9099</b> the machine's
-     * bookkeeping. The 9010-9013 constants above are the stateless blotter's
-     * pending family; this record carries the same meaning under 15038,
-     * 15044, 15011 and 15035.
+     * <p>Added in this module's copy; fix42-publisher has none of them. Four
+     * ranges in FIX's internal-use block (10000-19999), each with one meaning
+     * (docs/02 §4): <b>13xxx</b> is the root value of standard tag xxx,
+     * <b>15xxx</b> the pending value of standard tag xxx, <b>12000-12099</b>
+     * the machine's bookkeeping, and <b>12100-12999</b> the hooks'. The
+     * user-defined 9xxx range is left to the deployment (ParentOrderID 9000
+     * among it). The 9010-9014 constants above are the stateless blotter's;
+     * this record carries the same meaning under 15038, 15044, 15011, 15035
+     * and 12014.
      */
     public static final class Record {
         private Record() {
@@ -131,44 +133,55 @@ public final class FixTags {
         /** The pending 44: the newest pending REPLACE's proposed Price, else 0. */
         public static final int PENDING_PRICE = 15044;
 
-        /** The request id the venue last accepted. Same number as the stateless blotter's. */
-        public static final int WORKING_CL_ORD_ID = 9014;
+        /** The request id the venue last accepted; the stateless blotter's 9014. */
+        public static final int WORKING_CL_ORD_ID = 12014;
         /** Every in-flight request, {@code ACTION:flag:qty:px:id;...} oldest first, or {@code NONE}. */
-        public static final int PENDING_REQUESTS = 9015;
-        public static final int PENDING_COUNT = 9016;
+        public static final int PENDING_REQUESTS = 12015;
+        public static final int PENDING_COUNT = 12016;
         /** {@code Y} when 39 is terminal, else {@code N}. */
-        public static final int TERMINAL = 9017;
+        public static final int TERMINAL = 12017;
         /** {@code D}, {@code MIDSTREAM}, {@code D_LATE} or {@code UNRECOVERED}. */
-        public static final int CHAIN_ORIGIN = 9018;
+        public static final int CHAIN_ORIGIN = 12018;
         /** {@code C} when the key is a ClOrdID, {@code O} when it is an OrderID. */
-        public static final int KEY_KIND = 9019;
+        public static final int KEY_KIND = 12019;
         /** The last {@code chain-ids-published} ClOrdIDs, oldest first, comma-joined, escaped. */
-        public static final int CL_ORD_ID_CHAIN = 9021;
+        public static final int CL_ORD_ID_CHAIN = 12021;
         /** D, G, F, 8 or 9: the record carries no tag 35. */
-        public static final int LAST_MSG_TYPE = 9022;
-        public static final int MSG_COUNT = 9023;
-        public static final int SCHEMA_VERSION = 9024;
-        public static final int IGNORED_COUNT = 9025;
-        public static final int LATE_FILLS = 9026;
+        public static final int LAST_MSG_TYPE = 12022;
+        public static final int MSG_COUNT = 12023;
+        public static final int SCHEMA_VERSION = 12024;
+        public static final int IGNORED_COUNT = 12025;
+        public static final int LATE_FILLS = 12026;
         /** A 41 carried on the D: lineage only, never followed. */
-        public static final int LINKED_CL_ORD_ID = 9027;
+        public static final int LINKED_CL_ORD_ID = 12027;
         /** Which execution 32/31 describe; kept after a bust zeroes them. */
-        public static final int LAST_FILL_EXEC_ID = 9028;
+        public static final int LAST_FILL_EXEC_ID = 12028;
         /** The latest TransactTime of any applied venue message. */
-        public static final int LAST_REPORT_TIME = 9029;
+        public static final int LAST_REPORT_TIME = 12029;
         /** How many ClOrdIDs the chain has used. */
-        public static final int CL_ORD_ID_COUNT = 9030;
-        /** The 19 of every bust and correct and the 17 of every correct, escaped like 9021. */
-        public static final int BUSTED_EXEC_IDS = 9031;
+        public static final int CL_ORD_ID_COUNT = 12030;
+        /** The 19 of every bust and correct and the 17 of every correct, escaped like 12021. */
+        public static final int BUSTED_EXEC_IDS = 12031;
 
         /** On {@code fix42/malformed} only: the unparseable bytes, base64. */
-        public static final int MALFORMED_BYTES = 9032;
+        public static final int MALFORMED_BYTES = 12032;
         /** On {@code fix42/malformed} only: why they did not parse. */
-        public static final int MALFORMED_REASON = 9033;
+        public static final int MALFORMED_REASON = 12033;
 
-        /** The first tag hooks may write; 9100-9999 is theirs (docs/07 §2). */
-        public static final int HOOK_TAG_MIN = 9100;
-        public static final int HOOK_TAG_MAX = 9999;
+        /** The machine's bookkeeping range: stripped from every pass-through, refused to hooks. */
+        public static final int MACHINE_TAG_MIN = 12000;
+        public static final int MACHINE_TAG_MAX = 12099;
+
+        /**
+         * The schema-version tag of the 9xxx scheme (schema 1), before the
+         * record moved to 12000-12999: a record carrying it and no 12024 was
+         * written by that scheme and is refused at load (docs/11 §6).
+         */
+        public static final int LEGACY_SCHEMA_VERSION = 9024;
+
+        /** The first tag hooks may write; 12100-12999 is theirs (docs/07 §2). */
+        public static final int HOOK_TAG_MIN = 12100;
+        public static final int HOOK_TAG_MAX = 12999;
     }
 
     // ---- order terms --------------------------------------------------------

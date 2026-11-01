@@ -29,7 +29,7 @@ import org.junit.jupiter.api.Test;
  *   <li>the cache keeps the venue's text as {@code String}s (ids, quantities,
  *       times), so a report that changes a field allocates its new value;</li>
  *   <li>a new order is a new cache entry and new index entries;</li>
- *   <li>the pending set and the chain list (9015, 9021) are built as strings
+ *   <li>the pending set and the chain list (12015, 12021) are built as strings
  *       for the record.</li>
  * </ul>
  * So the goal is a number, not zero: bytes per message over the scripted flow

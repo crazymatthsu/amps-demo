@@ -67,14 +67,14 @@ class TwoCancelsIT {
             assertThat(record.value(FixTags.ORD_STATUS)).as("%s 39", key).isEqualTo("4");
             assertThat(record.value(FixTags.LEAVES_QTY)).as("%s 151", key).isEqualTo("0");
             assertThat(record.value(FixTags.Record.PENDING_ACTION)).as("%s 15035", key).isEqualTo("NONE");
-            assertThat(record.value(FixTags.Record.PENDING_COUNT)).as("%s 9016", key).isEqualTo("0");
-            assertThat(record.value(FixTags.Record.TERMINAL)).as("%s 9017", key).isEqualTo("Y");
+            assertThat(record.value(FixTags.Record.PENDING_COUNT)).as("%s 12016", key).isEqualTo("0");
+            assertThat(record.value(FixTags.Record.TERMINAL)).as("%s 12017", key).isEqualTo("Y");
             assertThat(record.has(FixTags.MSG_TYPE)).as("%s carries no 35", key).isFalse();
         }
     }
 
     @Test
-    @DisplayName("the record says the last thing that happened (9022), and keeps the D's terms")
+    @DisplayName("the record says the last thing that happened (12022), and keeps the D's terms")
     void recordIsHonestAboutWhatHappened() throws Exception {
         FixMessage x = fixture.sow.record(BLOTTER, FixTags.Record.ROOT_CL_ORD_ID, "X-1");
         assertThat(x.value(FixTags.Record.LAST_MSG_TYPE)).isEqualTo("9");
@@ -112,7 +112,7 @@ class TwoCancelsIT {
             FixMessage record = fixture.sow.record(BLOTTER, FixTags.Record.ROOT_CL_ORD_ID, key);
             assertThat(record).as(key).isNotNull();
             assertThat(record.value(FixTags.ORD_STATUS)).as("%s 39", key).isEqualTo("4");
-            assertThat(record.value(FixTags.Record.PENDING_COUNT)).as("%s 9016", key).isEqualTo("0");
+            assertThat(record.value(FixTags.Record.PENDING_COUNT)).as("%s 12016", key).isEqualTo("0");
         }
         assertThat(fixture.publisher.publishStoreDepth()).isZero();
     }

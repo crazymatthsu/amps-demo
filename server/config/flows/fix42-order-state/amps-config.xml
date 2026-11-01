@@ -130,7 +130,7 @@
              aggregates stay bare, because an aggregate nested in IF() drifts
              on live updates on this build (5.3.5.135). COUNT is over 13011,
              which every record carries; 11 is the last applied message's id.
-             A record with 9018=MIDSTREAM contributes what its reports carried. -->
+             A record with 12018=MIDSTREAM contributes what its reports carried. -->
         <View>
             <Name>view/fix42/exposure/parent</Name>
             <MessageType>json</MessageType>

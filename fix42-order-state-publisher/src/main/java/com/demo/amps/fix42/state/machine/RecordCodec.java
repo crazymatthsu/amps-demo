@@ -4,14 +4,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The record's three list encodings, and their parsers: 9015 the pending set,
- * 9021 the ClOrdID chain, 9031 the busted ExecIDs.
+ * The record's three list encodings, and their parsers: 12015 the pending set,
+ * 12021 the ClOrdID chain, 12031 the busted ExecIDs.
  *
  * <p>Any {@code %}, {@code :}, {@code ;} or {@code ,} inside an id is
  * {@code %}-escaped ({@code %25}, {@code %3A}, {@code %3B}, {@code %2C}), so
  * an id such as {@code 20261031:DESK7:000123} round-trips (R11). The parsers
  * are the other half: the SOW rebuild (phase 4) reads the record back through
- * them, and a value they refuse loads as {@code 9018=UNRECOVERED} rather than
+ * them, and a value they refuse loads as {@code 12018=UNRECOVERED} rather than
  * silently empty.
  */
 public final class RecordCodec {
@@ -77,7 +77,7 @@ public final class RecordCodec {
         return out.toString();
     }
 
-    // ---- 9015 -------------------------------------------------------------------
+    // ---- 12015 -------------------------------------------------------------------
 
     /**
      * {@code ACTION:flag:qty:px:id} per request, joined by {@code ;}, oldest
@@ -110,23 +110,23 @@ public final class RecordCodec {
             return pending;
         }
         if (text == null || text.isEmpty()) {
-            throw new IllegalArgumentException("empty 9015");
+            throw new IllegalArgumentException("empty 12015");
         }
         for (String element : text.split(";", -1)) {
             String[] fields = element.split(":", -1);
             if (fields.length != 5) {
-                throw new IllegalArgumentException("9015 element '" + element + "' has "
+                throw new IllegalArgumentException("12015 element '" + element + "' has "
                         + fields.length + " fields, not 5");
             }
             PendingAction action = PendingAction.valueOf(fields[0]);
             boolean requested = switch (fields[1]) {
                 case "R" -> true;
                 case "I" -> false;
-                default -> throw new IllegalArgumentException("9015 flag '" + fields[1] + "'");
+                default -> throw new IllegalArgumentException("12015 flag '" + fields[1] + "'");
             };
             String id = unescape(fields[4]);
             if (id.isEmpty()) {
-                throw new IllegalArgumentException("9015 element '" + element + "' has no id");
+                throw new IllegalArgumentException("12015 element '" + element + "' has no id");
             }
             pending.add(new PendingRequest(id, action, requested,
                     fields[2].isEmpty() ? null : fields[2], fields[3].isEmpty() ? null : fields[3]));
@@ -134,7 +134,7 @@ public final class RecordCodec {
         return pending;
     }
 
-    // ---- 9021 and 9031 ------------------------------------------------------
+    // ---- 12021 and 12031 ------------------------------------------------------
 
     /** The last {@code limit} ids, oldest first, comma-joined and escaped; {@code null} for none. */
     public static String encodeIds(List<String> ids, int limit) {

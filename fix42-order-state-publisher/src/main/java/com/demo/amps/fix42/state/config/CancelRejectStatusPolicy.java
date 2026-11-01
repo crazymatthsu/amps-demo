@@ -6,7 +6,7 @@ package com.demo.amps.fix42.state.config;
  * out to reject a request rather than the order.
  *
  * <p>Under every policy a terminal 39 adopted from a reject carries a report's
- * consequences: {@code 151=0}, {@code 9017=Y}, and {@code terminalFromReject}.
+ * consequences: {@code 151=0}, {@code 12017=Y}, and {@code terminalFromReject}.
  */
 public enum CancelRejectStatusPolicy {
 

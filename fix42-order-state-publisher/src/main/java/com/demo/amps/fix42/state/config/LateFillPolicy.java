@@ -7,8 +7,8 @@ package com.demo.amps.fix42.state.config;
 public enum LateFillPolicy {
 
     /**
-     * Adopt 14, 6, 38, 17, 150, 32, 31, 30 and 9028; keep 39 terminal and 151
-     * at 0; count it in 9026. A trade is money, and the status is the venue's
+     * Adopt 14, 6, 38, 17, 150, 32, 31, 30 and 12028; keep 39 terminal and 151
+     * at 0; count it in 12026. A trade is money, and the status is the venue's
      * to reopen. The default.
      */
     APPLY_ECONOMICS,

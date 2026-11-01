@@ -23,7 +23,7 @@ remedy changes something a consumer or operator sees and needs a call;
 
 **Tag numbers in this register follow the scheme adopted after both review
 rounds**: 13011 for the key (RootClOrdID) and 15011/15035/15038/15044 for the
-pending family. The drafts the review actually read used 9020 and 9010–9013;
+pending family. The drafts the review actually read used 12020 and 9010–9013;
 quotations have been renumbered so the register reads against the current
 documents.
 
@@ -53,14 +53,14 @@ The five that matter most:
    or re-acks after an erroneous terminal report, leaves a working order
    permanently `39=4 151=0` (R2).
 3. **The "second record" outcome is common, not rare**: `recovery: NONE`, the
-   documented `/9017 = 'N'` partial load, and a D redelivered against a
+   documented `/12017 = 'N'` partial load, and a D redelivered against a
    populated SOW each duplicate or destroy records for ordinary D-opened
    orders, and duplicates double-count in the exposure views (R4).
 4. **Publish failures are invisible**: a plain `Client`, no publish store, no
    `FailedWriteHandler`, apply-before-publish with no rollback, and a FIX
    engine that acknowledges before AMPS has the bytes. Cache and SOW diverge
    silently (R5).
-5. The 9015/9021 encodings are unparseable for ids containing their
+5. The 12015/12021 encodings are unparseable for ids containing their
    delimiters (R11), the record has no schema version (R17), and the
    documents give three different id-resolution orders (§4).
 
@@ -82,11 +82,11 @@ and the amend variant: `G 11=A-2 …` ; `8 150=1 39=1 11=A-2 41=A-1 38=10000 44=
 
 - **Docs say**: 03 §1 "answering report: any report that is not a pending
   acknowledgement … answers the pending request named by its own tag 11,
-  whatever that request's action"; 03 §6.4 pending-set and 9014 rows; 06 E8,
+  whatever that request's action"; 03 §6.4 pending-set and 12014 rows; 06 E8,
   N14, E32 ("fill while PENDING_CANCEL … pending stays — handled").
-- **Goes wrong**: the fill removes X-2; the record reads `15035=NONE 9016=0`
+- **Goes wrong**: the fill removes X-2; the record reads `15035=NONE 12016=0`
   while the cancel is unanswered; the later 9 is "unmatched" on a healthy
-  flow. In the amend variant the fill removes A-2 and **rotates 9014 to
+  flow. In the amend variant the fill removes A-2 and **rotates 12014 to
   A-2, an id the venue then rejects**, for the life of the order. A `20=3`
   status report echoing the id does the same.
 - **Disposition**: answering is explicit by ExecType again: `150=0`/`8`
@@ -99,7 +99,7 @@ and the amend variant: `G 11=A-2 …` ; `8 150=1 39=1 11=A-2 41=A-1 38=10000 44=
   knob, `fill-under-pending-id: IGNORE (default) | ANSWERS_REPLACE_IF_TERMS_MATCH`,
   the latter removing the REPLACE only when the fill's 38/44 equal the
   *proposed* terms (which is the evidence E8 actually relied on). `20=3`
-  never touches the set or 9014. E8 and E32 become **policy** rows.
+  never touches the set or 12014. E8 and E32 become **policy** rows.
 
 ### R2 — The after-terminal "detail-only" row swallows non-fill reports; a venue reopen without a bust is unrepresentable — High — **accept, rule**, with a tiebreak to decide (§6)
 
@@ -126,7 +126,7 @@ G 11=A-2 41=A-1 38=12000
 - **Disposition**: the detail-only row is restricted to fills
   (`150 ∈ {1, 2}`). A non-fill, non-pending-ack report whose own 39 is
   non-terminal, arriving on a terminal order, is either a **venue-asserted
-  reopen** (apply in full, recompute 9017, count `reopenedByVenue`) or an
+  reopen** (apply in full, recompute 12017, count `reopenedByVenue`) or an
   **out-of-order late report** (an ack overtaken by the cancel confirm of an
   IOC, say — applying it would wrongly reopen). The two are
   indistinguishable by content; the design author proposes TransactTime as
@@ -154,7 +154,7 @@ G 11=A-2 41=A-1 38=12000 44=185.75
   carries them and 150 ∉ {A, 6, E}".
 - **Goes wrong**: 38/44 become `12000/185.75`, the rejected proposal — the
   exact failure [docs/fix42-view/02 §4.2](../../docs/fix42-view/02-amps-view-feasibility.md#42-what-the-chained-blotter-still-gets-wrong)
-  item 1 describes and this module exists to prevent. 9014 rotates to A-2.
+  item 1 describes and this module exists to prevent. 12014 rotates to A-2.
   With `39=8` the order is also marked terminal while it works.
 - **Disposition**: 38/44 are adopted only from `150 ∈ {0, 5, D}` and from
   fills, busts and corrects (which restate the current terms); never from
@@ -162,7 +162,7 @@ G 11=A-2 41=A-1 38=12000 44=185.75
   (not the NEW) is a *request* reject: remove the request, treat 39 under
   `cancel-reject-status`, count `requestRejectsAsReports`.
 
-### R4 — The "second record" is the common case under `recovery: NONE`, the `/9017 = 'N'` partial load, and a D replayed against a populated SOW; duplicates double-count in the views — High — **accept, design**
+### R4 — The "second record" is the common case under `recovery: NONE`, the `/12017 = 'N'` partial load, and a D replayed against a populated SOW; duplicates double-count in the views — High — **accept, design**
 
 Sequences:
 
@@ -196,7 +196,7 @@ Sequences:
   a D miss is a new order and the hot path stays query-free; (4)
   `recovery: NONE` refuses to start against a non-empty
   `sow/fix42/order_state` without an explicit override; (5) 04 documents
-  that `/9018 = 'MIDSTREAM'` records inflate the views, with a
+  that `/12018 = 'MIDSTREAM'` records inflate the views, with a
   `midstreamWithKnownOrderId` counter.
 
 ### R5 — Publish failures, disconnects and the asynchronous send buffer are invisible; cache and SOW diverge silently — High — **accept, design**
@@ -234,11 +234,11 @@ Sequences:
 
 - **Sequences**: `F 11=X-2 41=X-1 ; 9 11=X-2 434=1 39=4 102=0` (too late,
   already canceled; the `150=4` never seen on this tap): `WHEN_NOT_TERMINAL`
-  adopts `39=4` → `9017=Y` but **151 stays 700**, a terminal record with
+  adopts `39=4` → `12017=Y` but **151 stays 700**, a terminal record with
   live exposure. And `F ; 9 434=1 39=6` from a venue that sends
-  status-at-request-time: `39=6` "pending cancel" with `9016=0` forever.
+  status-at-request-time: `39=6` "pending cancel" with `12016=0` forever.
 - **Docs say**: 03 §4 policy table excludes only `8`; 03 §6.5 CHANGED list
-  names 39/9017 but not 151; 03 §7.2 shows `39=6` adopted and calls it right.
+  names 39/12017 but not 151; 03 §7.2 shows `39=6` adopted and calls it right.
 - **Disposition**: when a 39 adopted from a 9 is terminal, force `151=0`
   exactly as a report would and count `terminalFromReject`; never adopt
   `6`/`E`/`A` from a 9 unless a request of that kind remains in the set.
@@ -246,7 +246,7 @@ Sequences:
 ### R7 — A MIDSTREAM chain created from a G or F adopts the *proposed* 38/44 as acked; the late-D rule is contradictory — Medium — **accept, rule**
 
 - **Sequence** (any cache miss): `G 11=N-2 41=N-1 38=6000 44=122.1` → record
-  `38=6000 44=122.1 39=A 9018=MIDSTREAM` ; `9 11=N-2 434=2` → nothing
+  `38=6000 44=122.1 39=A 12018=MIDSTREAM` ; `9 11=N-2 434=2` → nothing
   reverts.
 - **Docs say**: 03 §3.2 creation table "whatever the message carries:
   38/44 …"; 02 §4 calls 38/44 "acked terms". On the late D, 02 §5 says
@@ -254,30 +254,30 @@ Sequences:
   them yet"; and a request-created chain sits at `39=A` though the order was
   plainly acked before it was amended.
 - **Disposition**: request-created MIDSTREAM chains write only the pending
-  set and 15038/15044; 38/44 and 39 stay absent until a report, `9017=N`. A
+  set and 15038/15044; 38/44 and 39 stay absent until a report, `12017=N`. A
   late D may supply 38/44 only when the record has none *and* no report has
   been seen. 02 §5 and 03 §6.1 are reconciled to one sentence.
 
-### R8 — A `150=5` whose 11 is the original id leaves the REPLACE pending forever and sets 9014 wrongly — Medium — **accept, rule**
+### R8 — A `150=5` whose 11 is the original id leaves the REPLACE pending forever and sets 12014 wrongly — Medium — **accept, rule**
 
 - **Sequence**: `G 11=A-2 41=A-1 38=12000 ; 8 150=5 39=0 11=A-1 37=ORD 38=12000`
   (the venue echoes 41 as 11 — the convention 06 E9 already assumes on
   `150=4`).
-- **Docs say**: 03 §6.4 no-match rule "anything else removes nothing"; 9014
+- **Docs say**: 03 §6.4 no-match rule "anything else removes nothing"; 12014
   "on 150=0 / 150=5 regardless of a match … the report's 11"; 06 E10
   "limited".
 - **Goes wrong**: terms adopted, but `{A-2:REPLACE}` stays for the life of
-  the order and **9014 = A-1** while the venue works A-2. For this venue it
+  the order and **12014 = A-1** while the venue works A-2. For this venue it
   happens on every amend.
 - **Disposition**: on a no-match `150=5`, remove the pending REPLACE when
-  exactly one is pending (mirroring the `150=4` rule) and set 9014 to *that
+  exactly one is pending (mirroring the `150=4` rule) and set 12014 to *that
   request's* 11; count `inferredReplaceAnswers`. E10 becomes **policy**.
 
 ### R9 — A pending acknowledgement that overtakes its request keeps the request out of the set — Medium — **accept, rule**
 
 - **Sequence** (merged tap): `8 150=6 39=6 11=X-2 41=X-1 37=ORD` binds X-2;
   then `F 11=X-2 41=X-1` → "already bound → IGNORED(late or duplicate)".
-- **Goes wrong**: `9016=0` while the venue itself says pending cancel; the
+- **Goes wrong**: `12016=0` while the venue itself says pending cancel; the
   later 9 or `150=4` finds nothing to remove.
 - **Disposition**: the test becomes "already *answered*", not "already
   bound": one bit per bound request id, set by answering reports and 9s. A
@@ -292,21 +292,21 @@ Sequences:
   `IGNORED(duplicate request)` under 03 §6.1 — a genuine new order never
   reaches the blotter.
 - **Disposition**: a D resolves by its own 11 only and always opens a chain
-  (41 on a D is lineage: recorded as `9027 LinkedClOrdID`, not followed).
+  (41 on a D is lineage: recorded as `12027 LinkedClOrdID`, not followed).
   A bound id is never rebound to a different key; `idConflicts` counts and
   logs both keys. One resolution order per message type, stated once (§4.1).
 
-### R11 — 9015 and 9021 are unparseable for ids containing the delimiters — Medium — **accept, rule**
+### R11 — 12015 and 12021 are unparseable for ids containing the delimiters — Medium — **accept, rule**
 
 - **Condition**: ClOrdIDs such as `20261031:DESK7:000123` or `ALGO;VWAP;17`
-  (FIX allows any byte but SOH). `9015=20261031:DESK7:000123:REPLACE:12000:185.75`
-  has no unique parse; a REPLACE without 44 has an unspecified shape; 9021
+  (FIX allows any byte but SOH). `12015=20261031:DESK7:000123:REPLACE:12000:185.75`
+  has no unique parse; a REPLACE without 44 has an unspecified shape; 12021
   is comma-joined.
 - **Goes wrong**: the SOW rebuild reconstructs a wrong or empty pending set;
   behaviour on a parse failure is unspecified.
 - **Disposition**: fixed field count with the id last (`ACTION:qty:px:id`),
   `%`-escaping of `;`, `:`, `,` and `%` in ids for both tags; a parse failure
-  on rebuild sets `9018=UNRECOVERED` and a counter, never silently.
+  on rebuild sets `12018=UNRECOVERED` and a counter, never silently.
 
 ### R12 — One SOW-key namespace for root ClOrdIDs and OrderIDs — Medium — **decide** (§6)
 
@@ -315,7 +315,7 @@ Sequences:
   merge into A's record. Numeric ClOrdIDs and numeric OrderIDs are both
   common; and 02 §7's "one publisher per session" onto one topic puts
   several sessions' ClOrdID namespaces in one key space.
-- **Disposition**: a key-kind prefix (`C:X-1`, `O:ORD-7`) or a `9019 KeyKind`
+- **Disposition**: a key-kind prefix (`C:X-1`, `O:ORD-7`) or a `12019 KeyKind`
   tag plus a dialect-supplied session prefix. The prefix changes what a
   consumer filters on, so it is a decision.
 
@@ -349,27 +349,27 @@ Sequences:
   happened. A late execution or detail-only report sets 60 earlier than the
   cancel's.
 - **Disposition**: on a bust whose 19 equals the last fill's ExecID, write
-  `32=0 31=0`, and carry `9028 LastFillExecID` so a consumer can tell. For 60
+  `32=0 31=0`, and carry `12028 LastFillExecID` so a consumer can tell. For 60
   the record keeps "the last applied message's time" as defined, and gains
-  `9029 LastReportTime` as the running maximum; the consumer rule is stated
+  `12029 LastReportTime` as the running maximum; the consumer rule is stated
   in 02 §9. The repository's earlier objection to 60 moving backwards
   ([docs/fix42-view/04 §1](../../docs/fix42-view/04-pending-state-without-a-state-machine.md#1-the-proposal-that-prompted-this))
   was about a *revert* rewriting history; here the field means what it says.
 
-### R16 — 9025/9026/9021 are stale on the record by default; `publish-unchanged` is mis-specified — Medium — **accept, rule**
+### R16 — 12025/12026/12021 are stale on the record by default; `publish-unchanged` is mis-specified — Medium — **accept, rule**
 
-- **Condition**: CHANGED bookkeeping is "11, 41, 60, 9022, 9023" (02 §5);
-  9025 is published "only with publish-unchanged: true" (03 §2) yet 04 §1
-  recovers `ignoredCount ← 9025` and 02 §4 calls it a health signal. 9026 is
+- **Condition**: CHANGED bookkeeping is "11, 41, 60, 12022, 12023" (02 §5);
+  12025 is published "only with publish-unchanged: true" (03 §2) yet 04 §1
+  recovers `ignoredCount ← 12025` and 02 §4 calls it a health signal. 12026 is
   on the record but absent from the cache list (02 §3.1) and the recovery
-  mapping (04 §1). Ids bound by IGNORED outcomes never reach 9021, so a
+  mapping (04 §1). Ids bound by IGNORED outcomes never reach 12021, so a
   later message under such an id opens a MIDSTREAM record after a restart.
-  `publish-unchanged: true` is described as "a delta of 9023/9025/60", but
-  9023 must not move on an ignored message and a stale report's 60 moves 60
+  `publish-unchanged: true` is described as "a delta of 12023/12025/60", but
+  12023 must not move on an ignored message and a stale report's 60 moves 60
   backwards.
-- **Disposition**: 9025 is marked dirty whenever `ignoredCount` changes, so
-  the next delta carries it; `publish-unchanged` sends 9025 and, when a new
-  id was bound, 9021 — not 9023 or 60; 9021 is published whenever a new id
+- **Disposition**: 12025 is marked dirty whenever `ignoredCount` changes, so
+  the next delta carries it; `publish-unchanged` sends 12025 and, when a new
+  id was bound, 12021 — not 12023 or 60; 12021 is published whenever a new id
   is bound regardless of outcome; `lateFills` joins 02 §3.1 and 04 §1.
 
 ### R17 — No schema version on the record; loader tolerance unspecified — Medium — **accept, design**
@@ -378,7 +378,7 @@ Sequences:
   a hook-enabled instance loaded by a hookless one; the module pointed at
   `sow/fix42/orders` by mistake (no 13011 anywhere). 04 §2.1 step 3 says
   nothing about missing or unknown tags.
-- **Disposition**: `9024 SchemaVersion`, written at creation and bumped by
+- **Disposition**: `12024 SchemaVersion`, written at creation and bumped by
   the writer; the loader fills missing tags with defaults and counts
   `recoveredWithDefaults`, refuses an unknown major version, and refuses a
   record without 13011.
@@ -390,18 +390,18 @@ Sequences:
   absent) collides with dedupe — two reports with 17 absent compare equal
   and every later 17-less report is `IGNORED(duplicate)`. 39 ∈ {`7`, `9`,
   `B`, `D`} and `150=I` are unmentioned.
-- **Disposition**: `20=3` never touches the set or 9014 and is dedupe-exempt
+- **Disposition**: `20=3` never touches the set or 12014 and is dedupe-exempt
   when 17 is absent, `0` or `NONE`; dedupe only on a present, non-`0`,
   non-`NONE` 17; the extra 39 values are listed in 03 §1 as non-terminal,
   with the venue's 151 adopted.
 
-### R19 — 9021 growth and per-request re-send on algo child orders — Medium/Low — **decide** (§6)
+### R19 — 12021 growth and per-request re-send on algo child orders — Medium/Low — **decide** (§6)
 
 - **Condition**: 02 §3.3 sizes an entry at "two or three ClOrdIDs"; a pegged
-  child re-priced every few seconds has a thousand amends a day. 9021 is
+  child re-priced every few seconds has a thousand amends a day. 12021 is
   re-sent whole on every request delta (tens of KB per amend by afternoon)
   and the cache entry grows to megabytes for hot orders.
-- **Disposition**: cap 9021 at the last N ids plus a count. The reviewer's
+- **Disposition**: cap 12021 at the last N ids plus a count. The reviewer's
   further proposal — **stamp 13011 on the pass-through audit publishes** so
   the chain history is one `/13011 = …` query across the three audit topics,
   the index can be rebuilt from `orders_audit`, and `miss-lookup` becomes
@@ -420,14 +420,14 @@ Sequences:
   views imply a per-message copy, absent from the phase 5 budget, and the
   `onIgnored → publish` example does I/O on the thread 07 says must not
   block; (e) **the D's FULL publish ("the whole message less 35") carries
-  any venue custom tags in 9000–9099 — including 9014–9026, and the pending tags — onto the
+  any venue custom tags in 12000–12099 — including 12014–12026, and the pending tags — onto the
   record, overwriting machine state at creation**, and framing tags (8, 9,
   10, 34, 49, 52, 56) land on the record for ever.
 - **Disposition**: hook failure is fail-fast with the message held
   (deterministic on replay); `resolveKey(FixFrame, IndexView)` or a
   `KeyDecorator`; the audit topics always receive the original frame; the
   view copies are budgeted in phase 5; the FULL publish strips 8, 9, 10, 34,
-  49, 52, 56 and every tag in 9000–9099, 13xxx or 15xxx that the machine owns, counting
+  49, 52, 56 and every tag in 12000–12099, 13xxx or 15xxx that the machine owns, counting
   `strippedTags`.
 
 ### R21 — `37=NONE` on rejects, rotated OrderIDs, absent 17 — Low/Medium — **accept, rule**
@@ -447,8 +447,8 @@ Sequences:
 
 - **Condition**: 06 E46 and 05 rely on "a daily restart against a reset
   `order_state` SOW", but nothing says which files are wiped (never the
-  journalled audit topics?), when, and how `9017='Y'` records with
-  `9016 > 0` are preserved for investigation. With a persistent SOW and a
+  journalled audit topics?), when, and how `12017='Y'` records with
+  `12016 > 0` are preserved for investigation. With a persistent SOW and a
   reused ClOrdID, the first D of the new day replaces yesterday's record
   (R4c).
 - **Disposition**: a reset procedure in 04 §8: which SOW files, at what
@@ -482,7 +482,7 @@ Sequences:
 3. **15038/15044**: 02 §4 "the newest in-flight REPLACE's terms, else 0";
    02 §4.1 and 03 §7.4 show `0/0` when the newest request is a CANCEL while
    a REPLACE is still pending.
-4. **9014**: 02 §4 says `150=0`/`150=5`; 03 §6.4 also when a fill answers.
+4. **12014**: 02 §4 says `150=0`/`150=5`; 03 §6.4 also when a fill answers.
 5. **After-terminal precedence**: a `150=6` with a higher 14 matches both the
    late-execution and the absorbed rows; absorbed first.
 6. **Numeric representation**: are 14/151/6/38/44 compared as numbers
@@ -507,7 +507,7 @@ Sequences:
 13. **Rebuild race**: the new instance's `sow` snapshot against the old
     instance's bytes still in flight on another connection; wait for
     `NameInUse` to clear before querying.
-14. **Two chained REPLACEs** (G2's 41 = G1's 11, 06 E5): 9014 rotation when
+14. **Two chained REPLACEs** (G2's 41 = G1's 11, 06 E5): 12014 rotation when
     only G2's `150=5` arrives, and whether G1 is then answered, is unstated.
 15. **`apply-state`** appears only in 02 §6 prose; **`miss-lookup`** needs an
     index whose element name is unverified (acknowledged).
@@ -522,8 +522,8 @@ story depends on where the publisher sits and when the engine acknowledges
 (R5); `HAClient` + `PublishStore` + `FailedWriteHandler` in
 `AmpsClientConfiguration`, a `publishFailures` counter, and the two-phase
 `plan/commit` machine (R5); the catch-all and malformed routes and
-`apply-state` in `validate()` (R13); `9024 SchemaVersion` and loader
-tolerance (R17); the key-kind prefix or `9019` (R12); the 9015/9021 escaping
+`apply-state` in `validate()` (R13); `12024 SchemaVersion` and loader
+tolerance (R17); the key-kind prefix or `12019` (R12); the 12015/12021 escaping
 (R11); `OrderChain` switches for venue conventions — `fillsEchoPendingId`,
 `confirmsEchoOriginalId`, `replaceAsCancelThenNew`,
 `rejectReplaceWithExecReport` — because phase 1's scenarios are "the
@@ -536,15 +536,15 @@ id (R8); the cancel+new replace (R2); `150=8` naming a pending REPLACE with
 carrying `39=4` and one carrying `39=6` (R6); `20=3` reports with `17=0` and
 echoing a pending id (R18); `150=8` with `37=NONE` (R21); a G changing 40/110
 with no 44 (R14); ids containing `:`, `;`, `,` (R11); a D carrying 41, and a
-G whose 37 and 41 name different orders (R10); a venue tag in 9000–9099, 13xxx or 15xxx and
+G whose 37 and 41 name different orders (R10); a venue tag in 12000–12099, 13xxx or 15xxx and
 framing tags on a D (R20); a bust of the *last* fill (R15); a thousand-amend
 algo child (R19).
 
-**Phase 2 tests to add**: numeric comparison of text values; 9015/9021 round
+**Phase 2 tests to add**: numeric comparison of text values; 12015/12021 round
 trip with hostile ids; round-trip equality "modulo the ExecID ring", and
-either encode the pending request's `origClOrdId` in 9015 or drop it from
+either encode the pending request's `origClOrdId` in 12015 or drop it from
 02 §3.1 (no rule uses it); id-conflict behaviour; the `publish-unchanged`
-payload shape; 9025/9026 dirty semantics; late-D pending logic for
+payload shape; 12025/12026 dirty semantics; late-D pending logic for
 request-created chains; detail-only restricted to fills.
 
 **Phase 3 verifications to add**: a rejected publish is *observed* (publish
@@ -559,11 +559,11 @@ equal the mock's per-account sums *including* a MIDSTREAM record.
 record per order or the documented second record *and* the view totals
 (R4a, R4c); the partial load plus a late bust (R4b); a resent D after a
 `NONE` restart does not destroy the record; schema-version loading (records
-missing 9026, unknown 9024); replay determinism with a hook installed and
+missing 12026, unknown 12024); replay determinism with a hook installed and
 with it removed.
 
 **Phase 5**: the allocation budget includes the hooks' before/after views and
-the 9015/9021 string building; memory for a thousand-ClOrdID chain.
+the 12015/12021 string building; memory for a thousand-ClOrdID chain.
 
 **Operations**: the daily reset procedure; the FIX-engine sequence-number
 and flush coupling with its loss bound; alert thresholds for
@@ -580,11 +580,11 @@ keeps the elaborations that preceded decisions 3, 4 and 5.
 | # | decision | options | recommended | **decided** |
 | --- | --- | --- | --- | --- |
 | 1 | TransactTime (60) as the tiebreak between a venue-asserted reopen and an out-of-order late report (R2), and as the staleness guard for equal-CumQty status reports (E31) | trust 60 within a venue / treat every such report as a reopen / treat every such report as late | trust 60 | **yes: trust 60.** Equal timestamps count as not-earlier; `non-fill-after-terminal` keeps the other two behaviours available |
-| 2 | key format (R12) | raw id / kind-prefixed `C:`/`O:` / raw id plus `9019 KeyKind` | kind-prefixed | **no: keep the drop copy's own ids as the key.** R12's disposition changes to collision *detection*: when a `MIDSTREAM` chain would be keyed by an OrderID that is already another chain's key (a root ClOrdID of the same text) and that chain's own OrderID is different or unknown, the next candidate id is used instead (41, then 11), `keyCollisions` counts it, and the record carries `9019 KeyKind` (`C` or `O`) as metadata only. If every candidate collides the message is `IGNORED(keyConflict)` and logged with both keys |
-| 3 | the key tag on the pass-through audit publishes (R19) | message as received / message plus the key / CorrelationId header / side-index topic | plus the key | **yes: plus the key tag**, appended as a trailer — §7.1. The tag was 9020 when decided and is 13011 (RootClOrdID) since the renumbering |
+| 2 | key format (R12) | raw id / kind-prefixed `C:`/`O:` / raw id plus `12019 KeyKind` | kind-prefixed | **no: keep the drop copy's own ids as the key.** R12's disposition changes to collision *detection*: when a `MIDSTREAM` chain would be keyed by an OrderID that is already another chain's key (a root ClOrdID of the same text) and that chain's own OrderID is different or unknown, the next candidate id is used instead (41, then 11), `keyCollisions` counts it, and the record carries `12019 KeyKind` (`C` or `O`) as metadata only. If every candidate collides the message is `IGNORED(keyConflict)` and logged with both keys |
+| 3 | the key tag on the pass-through audit publishes (R19) | message as received / message plus the key / CorrelationId header / side-index topic | plus the key | **yes: plus the key tag**, appended as a trailer — §7.1. The tag was 12020 when decided and is 13011 (RootClOrdID) since the renumbering |
 | 4 | AMPS client (R5) | plain `Client` with apply-then-publish / `HAClient` with a publish store, `FailedWriteHandler`, two-phase machine | the latter | **yes: `HAClient` with a store**, `FILE` in production, `MEMORY` for demo and tests; the blotter topic journalled — §7.2 |
 | 5 | unrouted message types (R13) | raise / catch-all route | a mode | **yes: a mode**, `strict` for tests, `lenient` for production — §7.3 |
-| 6 | 32/31 after a bust of the last fill (R15) | leave as the stateless blotter does / write `32=0 31=0` plus `9028` | write zeros plus 9028 | **yes** |
+| 6 | 32/31 after a bust of the last fill (R15) | leave as the stateless blotter does / write `32=0 31=0` plus `12028` | write zeros plus 12028 | **yes** |
 
 ## 7. Elaborations for the open decisions
 
@@ -601,8 +601,8 @@ publish is unaffected.
 
 1. *Chain history in one query.* `sow` on each audit topic with filter
    `/13011 = 'X-1'` returns every message of the order — D, every G and F,
-   every report, every reject — without walking 41 links or trusting 9021,
-   and so lets 9021 be capped at the last N ids (R19) without losing the
+   every report, every reject — without walking 41 links or trusting 12021,
+   and so lets 12021 be capped at the last N ids (R19) without losing the
    history.
 2. *Cache-miss lookup through primary keys only.* On a miss, almost every
    message names a prior request id: a G or F carries 41, a report carries
@@ -646,7 +646,7 @@ publish is unaffected.
 | A. stamp 13011 in the payload (trailer) | changed by one field | yes | ~30 B per publish |
 | B. carry the key in the AMPS `CorrelationId` header | untouched | no — content filters evaluate the body (verify on build); a reader sees the key on each record but cannot select by it | nil |
 | C. a side topic `sow/fix42/order_index` keyed /11 holding `11, 41, 37, 13011` | untouched | yes, via the side topic | one extra ~60 B publish per D/G/F/9 (not per report) |
-| D. nothing: uncapped 9021 plus a hash-indexed /37 lookup | untouched | partly | 9021 grows with every amend; the index is verify-on-build |
+| D. nothing: uncapped 12021 plus a hash-indexed /37 lookup | untouched | partly | 12021 grows with every amend; the index is verify-on-build |
 
 **Recommendation.** A, with the trailer placement, unless a compliance rule
 requires the stored copy to be byte-identical to the wire, in which case C.
@@ -731,7 +731,7 @@ stateless publisher's at-most-once semantics, with the failure matrix in 04
 | 35 | message | on an order drop copy | effect on the design if unhandled |
 | --- | --- | --- | --- |
 | `Q` | DontKnowTrade | the client disowns a fill; references 37 and 17 | in the contract (rule 6); out of scope for v1; **no order-level change** is needed, so nothing on the blotter is wrong without it |
-| `H` | OrderStatusRequest | a client request for a status snapshot; the answer is a `35=8` with `150=I` | the H itself changes nothing; the `150=I` *is* routed as an 8 and must be treated as a status restatement — adopt the venue's absolutes if not stale, never touch the pending set or 9014 (joins R18's list) |
+| `H` | OrderStatusRequest | a client request for a status snapshot; the answer is a `35=8` with `150=I` | the H itself changes nothing; the `150=I` *is* routed as an 8 and must be treated as a status restatement — adopt the venue's absolutes if not stale, never touch the pending set or 12014 (joins R18's list) |
 | `j` | BusinessMessageReject | the venue could not process an application message; `45 RefSeqNum`, `372 RefMsgType`, `58` | **a G or F rejected this way instead of by a `35=9` leaves its request pending forever.** Handling it needs a map from the request's MsgSeqNum (34) to its ClOrdID — a small ring, since the reject follows within seconds — which is a follow-up |
 | `3` | session Reject | as `j`, at the session level | same |
 | `E`, `N`, `L` | list orders and their status | out of scope by the contract | nothing |
@@ -750,7 +750,7 @@ bytes that do not parse as FIX at all.
 | | `strict` | `lenient` |
 | --- | --- | --- |
 | unrouted type | the machine raises; the publisher stops. The stateless publisher's stance ("a silent drop looks like an AMPS bug from the far side") | published whole to `fix42/unrouted`, a **journalled, non-SOW topic** (no key needed; every message kept in arrival order; replayable by bookmark); `IGNORED(unrouted)`; a counter per 35 value; a rate-limited WARN |
-| unparseable bytes | raise | wrapped as a fix message (`9032=<base64 of the bytes>`, `9033=<reason>`) on `fix42/malformed`, same topic shape; counter |
+| unparseable bytes | raise | wrapped as a fix message (`12032=<base64 of the bytes>`, `12033=<reason>`) on `fix42/malformed`, same topic shape; counter |
 | a known type the rules cannot place (`150` unknown, key tag missing) | raise | audit as far as the key allows; `IGNORED(unrouted)` for the blotter; counter |
 | default | tests and development: a missing rule fails the first run that hits it | production: the feed never stops because of a message type, and nothing received is lost |
 
@@ -782,19 +782,19 @@ The revision of docs 01–07 that followed the decisions, finding by finding.
 | R7 MIDSTREAM from a request | [03 §3.2](03-state-machine.md#32-creation); [03 §6.1](03-state-machine.md#61-35d-newordersingle) late-D row; [02 §5](02-architecture.md#5-publish-modes) |
 | R8 `150=5` echoing the original id | [03 §6.4](03-state-machine.md#64-358-executionreport) `150=5` row; [03 §7.17](03-state-machine.md#717-a-replace-confirm-that-echoes-the-original-id); 06 E10 |
 | R9 pending ack overtaking | inferred pending entries, [03 §1](03-state-machine.md#1-vocabulary), §6.2, §6.4; [03 §7.18](03-state-machine.md#718-a-pending-acknowledgement-that-overtakes-its-request); 06 E17 |
-| R10 binding conflicts, D with 41 | [03 §3.1](03-state-machine.md#31-resolution), §3.3; 9027; 06 E58 |
-| R11 delimiters in ids | [02 §4.1](02-architecture.md#41-several-requests-in-flight-tag-9015) encoding; `UNRECOVERED`; 06 E59 |
-| R12 key namespace | decision 2: collision detection at mint time, 9019 — [03 §3.2](03-state-machine.md#32-creation); 06 E57 |
+| R10 binding conflicts, D with 41 | [03 §3.1](03-state-machine.md#31-resolution), §3.3; 12027; 06 E58 |
+| R11 delimiters in ids | [02 §4.1](02-architecture.md#41-several-requests-in-flight-tag-12015) encoding; `UNRECOVERED`; 06 E59 |
+| R12 key namespace | decision 2: collision detection at mint time, 12019 — [03 §3.2](03-state-machine.md#32-creation); 06 E57 |
 | R13 unrouted messages | decision 5: [03 §9](03-state-machine.md#9-unrouted-and-unparseable-messages); `mode`; `fix42/unrouted`, `fix42/malformed`; 06 E50, E76 |
 | R14 term drift | `order-term-tags`, `44=0` — [03 §6.4](03-state-machine.md#64-358-executionreport); 06 N19 |
-| R15 stale 32/31, 60 | decision 6: `32=0 31=0` with 9028; 9029 LastReportTime — [02 §4](02-architecture.md#4-the-record), [03 §7.13](03-state-machine.md#713-bust-and-correct-after-the-order-is-closed-out) |
-| R16 stale bookkeeping | [03 §2](03-state-machine.md#2-outcomes), §6.6; [02 §5](02-architecture.md#5-publish-modes) last row; 9026 in [02 §3.1](02-architecture.md#31-one-entry-per-order) and [04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-checkpoint) |
-| R17 schema version | 9024 — [02 §4](02-architecture.md#4-the-record); [04 §2.1](04-recovery-and-operations.md#21-rebuild-from-the-sow-recovery-sow-the-default); 06 E62 |
+| R15 stale 32/31, 60 | decision 6: `32=0 31=0` with 12028; 12029 LastReportTime — [02 §4](02-architecture.md#4-the-record), [03 §7.13](03-state-machine.md#713-bust-and-correct-after-the-order-is-closed-out) |
+| R16 stale bookkeeping | [03 §2](03-state-machine.md#2-outcomes), §6.6; [02 §5](02-architecture.md#5-publish-modes) last row; 12026 in [02 §3.1](02-architecture.md#31-one-entry-per-order) and [04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-checkpoint) |
+| R17 schema version | 12024 — [02 §4](02-architecture.md#4-the-record); [04 §2.1](04-recovery-and-operations.md#21-rebuild-from-the-sow-recovery-sow-the-default); 06 E62 |
 | R18 `20=3`, absent 17, extra 39 values | [03 §1](03-state-machine.md#1-vocabulary) *status restatement* and *terminal*; §5 steps 1–2; 06 E33, N18 |
-| R19 9021 growth | `chain-ids-published`, 9030; decision 3 — [02 §4](02-architecture.md#4-the-record), [02 §5](02-architecture.md#5-publish-modes); 06 E61 |
+| R19 12021 growth | `chain-ids-published`, 12030; decision 3 — [02 §4](02-architecture.md#4-the-record), [02 §5](02-architecture.md#5-publish-modes); 06 E61 |
 | R20 hooks | [07 §2](07-extension-points.md#2-tier-two-hooks): fail-fast, `IndexView`, original frame to audit, the view copies budgeted; `strip-tags` in [03 §6.1](03-state-machine.md#61-35d-newordersingle); 06 E60, E74 |
 | R21 `37=NONE`, rotated 37, absent 17 | [03 §6.4](03-state-machine.md#64-358-executionreport) 37 row; the `key-guard`; tombstones of every 37 — [04 §4](04-recovery-and-operations.md#4-eviction); 06 E44 |
 | R22 daily reset | [04 §9](04-recovery-and-operations.md#9-the-daily-reset); 06 E77 |
 | §3 disputed verdicts | every row re-examined in [06](06-case-coverage.md); those whose text changed are marked **(revised)**, those whose text already matched the resolution are not |
-| §4 ambiguities | 1: [03 §3.1](03-state-machine.md#31-resolution); 2: [03 §6.1](03-state-machine.md#61-35d-newordersingle); 3: 15038/15044 in [02 §4](02-architecture.md#4-the-record); 4: 9014 in [03 §6.4](03-state-machine.md#64-358-executionreport); 5: row order in [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision); 6–7: [02 §3.1](02-architecture.md#31-one-entry-per-order), `RecordWriter`; 8: [02 §9](02-architecture.md#9-what-changes-for-a-consumer-of-the-old-blotter); 9: [03 §3.2](03-state-machine.md#32-creation); 10–11: [03 §5](03-state-machine.md#5-arbitration-on-execution-reports), §6.4; 12–13: [04 §5](04-recovery-and-operations.md#5-one-writer); 14: 06 E5; 15: [02 §6](02-architecture.md#6-configuration); 16: [03 §6.6](03-state-machine.md#66-every-message) |
+| §4 ambiguities | 1: [03 §3.1](03-state-machine.md#31-resolution); 2: [03 §6.1](03-state-machine.md#61-35d-newordersingle); 3: 15038/15044 in [02 §4](02-architecture.md#4-the-record); 4: 12014 in [03 §6.4](03-state-machine.md#64-358-executionreport); 5: row order in [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision); 6–7: [02 §3.1](02-architecture.md#31-one-entry-per-order), `RecordWriter`; 8: [02 §9](02-architecture.md#9-what-changes-for-a-consumer-of-the-old-blotter); 9: [03 §3.2](03-state-machine.md#32-creation); 10–11: [03 §5](03-state-machine.md#5-arbitration-on-execution-reports), §6.4; 12–13: [04 §5](04-recovery-and-operations.md#5-one-writer); 14: 06 E5; 15: [02 §6](02-architecture.md#6-configuration); 16: [03 §6.6](03-state-machine.md#66-every-message) |
 | §5 plan gaps | [05](05-implementation-plan.md), marked *(added)* and *(changed)* |

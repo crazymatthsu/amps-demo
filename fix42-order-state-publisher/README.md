@@ -141,7 +141,7 @@ For sizing:
 - **Eviction:** the shipped default `terminal-retention: PT0S` never evicts a
   finished order. Set a retention to bound the cache; [Eviction](#eviction)
   says how it works and what it costs.
-- **Long chains:** the record publishes only the newest 50 ClOrdIDs (9021),
+- **Long chains:** the record publishes only the newest 50 ClOrdIDs (12021),
   but the cache keeps every one, so a report quoting any of them still
   resolves. Every message also copies that list, adding 4 bytes per id to each
   message on a long chain ([docs/11 F9](docs/11-build-findings.md)).
@@ -227,8 +227,8 @@ To measure on your own JVM and ids:
 | --- | --- | --- |
 | tombstones are never removed ([docs/11 F10](docs/11-build-findings.md)) | 276 bytes per evicted order for the rest of the day: about 14 GB at 50M orders, the bulk of the 24 GB plan | size for it; the daily restart clears it |
 | a late message costs a round trip | the publishing thread waits for every publish in flight to be acknowledged, then for the query, so a burst of busts after eviction stalls the feed for as long as those round trips take (not measured under load) | keep the retention longer than your venues' usual delay for busts and corrections |
-| the rebuilt entry has lost its ExecID ring | duplicate detection is one deep for the first reports after a rebuild; the CumQty and TransactTime guards still apply, and busted ExecIDs (9031) are recovered from the record | nothing; stated for completeness |
-| eviction needs `miss-lookup: true` ([docs/11 F11](docs/11-build-findings.md)) | without the lookup the record can't be read back, so a late venue report would build a mid-stream record from itself and delta-publish it over the real one, overwriting the chain list (9021, 9030), the message count (9023) and the origin (9018) | refused at startup: `terminal-retention` above zero, or `load-open-orders-only: true`, with `miss-lookup: false` does not boot |
+| the rebuilt entry has lost its ExecID ring | duplicate detection is one deep for the first reports after a rebuild; the CumQty and TransactTime guards still apply, and busted ExecIDs (12031) are recovered from the record | nothing; stated for completeness |
+| eviction needs `miss-lookup: true` ([docs/11 F11](docs/11-build-findings.md)) | without the lookup the record can't be read back, so a late venue report would build a mid-stream record from itself and delta-publish it over the real one, overwriting the chain list (12021, 12030), the message count (12023) and the origin (12018) | refused at startup: `terminal-retention` above zero, or `load-open-orders-only: true`, with `miss-lookup: false` does not boot |
 | orders loaded at startup are scheduled from the restart ([docs/11 F12](docs/11-build-findings.md)) | with `recovery: SOW` and `load-open-orders-only: false`, a restart puts every finished order back in the cache in full, and each is evicted one retention after the restart, not one retention after it finished | for a lower peak right after a restart, set `load-open-orders-only: true`: finished orders then load as tombstones at once |
 
 ## Run it
@@ -263,11 +263,24 @@ its defaults are production's. The ones that change behaviour most:
 | `order-state.miss-lookup` | `true` | before creating a mid-stream order, look an unknown id up on the audit topics |
 | `order-state.terminal-retention` | `PT0S` | how long a finished order stays in the cache; `PT0S` keeps it forever |
 | `order-state.cancel-reject-status` and the other policies | per venue | what a reject's 39, a late fill or a late report may do ([docs/07 §1](docs/07-extension-points.md#1-tier-one-policies)) |
-| `hooks.desk-status` | `false` | a one-word desk status in tag 9100 |
+| `hooks.desk-status` | `false` | a one-word desk status in tag 12100 |
 | `hooks.reject-status-at-request-time` | `false` | for a venue whose rejects carry the request-time status (docs/11 F2) |
 
+The record's tags sit in FIX's internal-use block, 10000–19999:
+- **13xxx:** the root value of standard tag xxx. 13011, the root ClOrdID, is
+  the SOW key.
+- **15xxx:** the pending value of standard tag xxx.
+- **12000–12099:** the machine's bookkeeping, such as 12015 for the pending
+  set and 12017 for the terminal flag.
+- **12100–12999:** the hooks'.
+
+The user-defined 9xxx range is yours: a 9xxx tag on a message passes through
+to the record. ParentOrderID stays at 9000. Records written before schema 2
+used 9xxx bookkeeping tags and refuse to load; see
+[docs/11 §6](docs/11-build-findings.md) for the cutover.
+
 Custom behaviour goes in hooks: Spring beans implementing `OrderStateHook`,
-writing in tags 9100–9999 ([docs/07 §2](docs/07-extension-points.md#2-tier-two-hooks)).
+writing in tags 12100–12999 ([docs/07 §2](docs/07-extension-points.md#2-tier-two-hooks)).
 
 ## Tests
 

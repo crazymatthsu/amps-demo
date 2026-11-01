@@ -47,7 +47,7 @@ public enum RecordField {
     /** Every field: what a FULL publish, a MIDSTREAM creation and a repair write. */
     public static final long ALL = (1L << values().length) - 1;
 
-    /** What every applied message carries: 11, 41, 60, 9022, 9023 (docs/03 §6.6). */
+    /** What every applied message carries: 11, 41, 60, 12022, 12023 (docs/03 §6.6). */
     public static final long BOOKKEEPING = CL_ORD_ID.bit() | ORIG_CL_ORD_ID.bit()
             | TRANSACT_TIME.bit() | LAST_MSG_TYPE.bit() | MSG_COUNT.bit();
 

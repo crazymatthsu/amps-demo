@@ -21,9 +21,9 @@ import java.util.Set;
  * @param execIdHistory        depth of the per-order ExecID ring
  * @param orderTermTags        order terms a {@code 150=0/5/D} report refreshes
  * @param stripTags            session header and trailer tags never copied onto the record
- * @param chainIdsPublished    how many ClOrdIDs 9021 carries
- * @param schemaVersion        9024 on a new record
- * @param publishUnchanged     publish 9025 at once for an ignored message
+ * @param chainIdsPublished    how many ClOrdIDs 12021 carries
+ * @param schemaVersion        12024 on a new record
+ * @param publishUnchanged     publish 12025 at once for an ignored message
  */
 public record MachineOptions(CancelRejectStatusPolicy cancelRejectStatus,
                              LateFillPolicy lateFillAfterTerminal,
@@ -54,7 +54,7 @@ public record MachineOptions(CancelRejectStatusPolicy cancelRejectStatus,
         return new MachineOptions(CancelRejectStatusPolicy.WHEN_NOT_TERMINAL,
                 LateFillPolicy.APPLY_ECONOMICS, NonFillAfterTerminalPolicy.ADOPT_VENUE_IF_LATER,
                 FillUnderPendingIdPolicy.IGNORE, true, true, 8, DEFAULT_ORDER_TERM_TAGS,
-                DEFAULT_STRIP_TAGS, 50, 1, false);
+                DEFAULT_STRIP_TAGS, 50, 2, false);
     }
 
     public MachineOptions withCancelRejectStatus(CancelRejectStatusPolicy value) {

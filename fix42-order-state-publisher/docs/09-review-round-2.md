@@ -13,7 +13,7 @@ Dispositions as in 08: **accept, rule** / **accept, design** / **partly** /
 
 **Tag numbers in this register follow the scheme adopted after both review
 rounds**: 13011 for the key (RootClOrdID) and 15011/15035/15038/15044 for the
-pending family. The drafts the review actually read used 9020 and 9010–9013;
+pending family. The drafts the review actually read used 12020 and 9010–9013;
 quotations have been renumbered so the register reads against the current
 documents.
 
@@ -60,7 +60,7 @@ blotter (S10), and removed a contradiction about unknown 150 values (S11).
 | R3 | closed | — ; adjacent no-match case open | S6 |
 | R4 | closed | — ; new gaps exposed on a hit without a record and on recreation | S8, S9 |
 | R5 | **regressed** | the repair path (dirty-all `publish`), the cross-thread write, `execs` unjournalled | S2, S3 |
-| R6, R7, R9, R11, R14, R15, R16, R17, R19, R20, R22 | closed | nits only (R7: a late D did not convert an inferred NEW; R15: 9028 after zeroing unstated; R20: stripping not stated for MIDSTREAM creation) | S7, S22, S18 |
+| R6, R7, R9, R11, R14, R15, R16, R17, R19, R20, R22 | closed | nits only (R7: a late D did not convert an inferred NEW; R15: 12028 after zeroing unstated; R20: stripping not stated for MIDSTREAM creation) | S7, S22, S18 |
 | R8 | closed | 06 E10 labelled handled/limited where 08 §3 said policy; the rule is unconditional | 08 §3 corrected |
 | R10 | **partial** | 06 E58 said "37 wins for the G" while 03 §3.1 resolves a G by 41 first | 06 E58 corrected |
 | R12 | **not addressed** for the headline case | collision detection unreachable behind a single index | S1 |
@@ -72,7 +72,7 @@ Disputed verdicts (08 §3): E29, E10 and E32 carried labels in 08 §3 that did
 not match what the revision built (handled, not policy); 08 §3 now says what
 06 says. 08 §8's claim that every disputed row was marked **(revised)** was
 false for rows whose text had not changed; the claim now says so. Ambiguity
-4 (9014 on a no-match `150=0`) and ambiguity 10 (14/151/6 on a pending
+4 (12014 on a no-match `150=0`) and ambiguity 10 (14/151/6 on a pending
 acknowledgement) were only partly resolved; S15 settles the first, and the
 second is now stated as adopted (03 §6.4 adopts 14/151/6 from every report;
 a venue that echoes a proposed quantity in 151 on a `150=E` is a dialect for
@@ -93,7 +93,7 @@ a `beforeApply` hook).
   case.
 - **Landed**: `OrderKeyIndex` keeps two maps; the 37 step consults only the
   OrderID map, the 11/41 steps only the ClOrdID map; binding goes to the
-  matching map; the rebuild fills them from 9021 and 37 separately. The
+  matching map; the rebuild fills them from 12021 and 37 separately. The
   same-order case (a venue whose OrderID equals the ClOrdID) resolves through
   11 and is not a collision. [03 §3.1–3.3](03-state-machine.md#31-resolution),
   [03 §7.21](03-state-machine.md#721-an-orderid-that-equals-another-orders-clordid),
@@ -151,7 +151,7 @@ a `beforeApply` hook).
   cancel-then-new walkthrough work.
 - **Landed**: a venue-asserted reopen needs either an answer to a pending
   request (the cancel-then-new `150=0` names the pending REPLACE, so it needs
-  no time at all) or a TransactTime later than 9029 — strictly later by a
+  no time at all) or a TransactTime later than 12029 — strictly later by a
   whole second when either timestamp lacks milliseconds; never on an IOC/FOK
   (`59 ∈ {3, 4}`) that answers nothing (`lateIocAck`); a report with no 60 is
   judged by 52, and with neither is not believed (`reopenUndecidable`). The
@@ -166,9 +166,9 @@ a `beforeApply` hook).
 - **Sequence**: a bust applied, nine reports later a session resend
   redelivers it from outside the ExecID ring.
 - **Went wrong**: 14/151/6 regressed to the old bust's restated values.
-- **Landed**: a reopening report older than 9029 is `IGNORED(late)` whatever
+- **Landed**: a reopening report older than 12029 is `IGNORED(late)` whatever
   its CumQty (a bust the venue issued is newer than every report before it);
-  and a small per-order **busted set** (9031: every bust's and correct's 19,
+  and a small per-order **busted set** (12031: every bust's and correct's 19,
   every correct's own 17) makes a bust or correct naming one again a
   duplicate however old. [03 §5](03-state-machine.md#5-arbitration-on-execution-reports)
   steps 2 and 4, [03 §6.4](03-state-machine.md#64-358-executionreport),
@@ -194,10 +194,10 @@ a `beforeApply` hook).
   inferred.
 - **Landed**: a G or F whose 41 names an inferred entry of the same action
   re-keys it to the request's 11 and marks it requested; a late D converts an
-  inferred NEW; 15038/15044 read 0 for an inferred REPLACE, and 9015 writes
+  inferred NEW; 15038/15044 read 0 for an inferred REPLACE, and 12015 writes
   empty sub-fields for terms that were never proposed. [03 §6.1–6.2](03-state-machine.md#61-35d-newordersingle),
   [03 §7.23](03-state-machine.md#723-a-pending-acknowledgement-that-names-the-working-id),
-  [02 §4](02-architecture.md#4-the-record), [02 §4.1](02-architecture.md#41-several-requests-in-flight-tag-9015),
+  [02 §4](02-architecture.md#4-the-record), [02 §4.1](02-architecture.md#41-several-requests-in-flight-tag-12015),
   06 E17a, E41.
 
 ### S8 — A lookup hit whose record is gone; the reset and the audit topics — Medium — **accept, design**
@@ -207,7 +207,7 @@ a `beforeApply` hook).
   `orders_audit` record.
 - **Landed**: a lookup hit whose `order_state` record is gone creates the
   entry `MIDSTREAM` under the found key, `missLookupOrphans`; the reset
-  deletes only `9017 = 'Y'` records so open orders keep theirs; 04 §9 states
+  deletes only `12017 = 'Y'` records so open orders keep theirs; 04 §9 states
   that a reused ClOrdID overwrites yesterday's audit SOW record and that the
   per-day history is the journal. [04 §3](04-recovery-and-operations.md#3-cache-misses),
   [04 §9](04-recovery-and-operations.md#9-the-daily-reset), 06 E51, E77, 05
@@ -218,8 +218,8 @@ a `beforeApply` hook).
 - **Landed**: a lookup hit for a key that is cached binds the id only; for a
   key that is not cached, `publishFlush` precedes the keyed read so the SOW
   cannot lag the store; an evicted entry is recreated by the same path, never
-  from the report, so 9021/9023 are not overwritten. Ids found on
-  `orders_audit` that are not in 9015 are marked answered (S21).
+  from the report, so 12021/12023 are not overwritten. Ids found on
+  `orders_audit` that are not in 12015 are marked answered (S21).
   [04 §3–4](04-recovery-and-operations.md#3-cache-misses), 05 `EvictionIT`,
   06 E47.
 
@@ -270,14 +270,14 @@ a `beforeApply` hook).
 
 | # | finding | landed |
 | --- | --- | --- |
-| S15 | 9014 on a no-match `150=0` unspecified; "adopting its terms" ambiguous | only on a match; untouched otherwise; set at `MIDSTREAM` creation from a `150=0`/`150=5`; the *report's* 38/44 — [03 §6.4](03-state-machine.md#64-358-executionreport) |
+| S15 | 12014 on a no-match `150=0` unspecified; "adopting its terms" ambiguous | only on a match; untouched otherwise; set at `MIDSTREAM` creation from a `150=0`/`150=5`; the *report's* 38/44 — [03 §6.4](03-state-machine.md#64-358-executionreport) |
 | S16 | the no-match `150=4` removes every pending CANCEL, including one the cancel-then-new leg should not | noted under [03 §7.16](03-state-machine.md#716-a-replace-reported-as-cancel-then-new); `unmatchedRejects`' healthy value qualified in 04 §7 |
-| S17 | 9015's `0` sentinel ambiguous with a genuine zero price | empty sub-fields for terms never proposed — [02 §4.1](02-architecture.md#41-several-requests-in-flight-tag-9015); every walkthrough encoding updated |
+| S17 | 12015's `0` sentinel ambiguous with a genuine zero price | empty sub-fields for terms never proposed — [02 §4.1](02-architecture.md#41-several-requests-in-flight-tag-12015); every walkthrough encoding updated |
 | S18 | stripping stated for the D only | every payload the machine builds from a message — [03 §6.1](03-state-machine.md#61-35d-newordersingle) |
-| S19 | 9029 excluded a `35=9`'s 60 | a reject updates 9029 — [03 §6.5](03-state-machine.md#65-359-ordercancelreject), [02 §4](02-architecture.md#4-the-record) |
+| S19 | 12029 excluded a `35=9`'s 60 | a reject updates 12029 — [03 §6.5](03-state-machine.md#65-359-ordercancelreject), [02 §4](02-architecture.md#4-the-record) |
 | S20 | trailer unconditional vs "when it resolves"; the diagram published audit before plan | omitted when unresolved; the order stated once — [02 §1](02-architecture.md#1-topology), [02 §5](02-architecture.md#5-publish-modes), [03 §9](03-state-machine.md#9-unrouted-and-unparseable-messages) |
-| S21 | a PossDup resend of a request answered before the 9021 cap re-added as pending | ids found on `orders_audit` and not in 9015 are marked answered — [04 §3](04-recovery-and-operations.md#3-cache-misses) |
-| S22 | 9028 after zeroing; which ExecID a bust names | 9028 keeps the busted id; 19 is compared against the last fill's original and latest correction — [03 §6.4](03-state-machine.md#64-358-executionreport) |
+| S21 | a PossDup resend of a request answered before the 12021 cap re-added as pending | ids found on `orders_audit` and not in 12015 are marked answered — [04 §3](04-recovery-and-operations.md#3-cache-misses) |
+| S22 | 12028 after zeroing; which ExecID a bust names | 12028 keeps the busted id; 19 is compared against the last fill's original and latest correction — [03 §6.4](03-state-machine.md#64-358-executionreport) |
 
 ## 4. Walkthroughs recomputed by the reviewer
 
@@ -305,7 +305,7 @@ parameter on `cancelReject`, `restateWhilePending`,
 the router would have diverted; the runner's profile; 15038/15044 for an
 inferred REPLACE; 02 §4.1's missing policy caveat; E41's 38/44 wording; the
 late guard's precedence over the terminal-after-terminal row; the unused
-9031 (now the busted set) and the non-record tags 9032/9033; the `44=0`
+12031 (now the busted set) and the non-record tags 12032/12033; the `44=0`
 consumer note.
 
 **Still to verify on a build**, carried from both rounds: AMPS's persisted

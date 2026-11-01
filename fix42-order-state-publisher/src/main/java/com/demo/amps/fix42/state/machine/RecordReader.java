@@ -22,8 +22,8 @@ public final class RecordReader {
      * @param state       the rebuilt entry
      * @param defaulted   a field of the current schema was missing and took
      *                    its default ({@code recoveredWithDefaults})
-     * @param unrecovered 9015, 9021 or 9031 did not parse; the entry was
-     *                    loaded with an empty set and {@code 9018=UNRECOVERED}
+     * @param unrecovered 12015, 12021 or 12031 did not parse; the entry was
+     *                    loaded with an empty set and {@code 12018=UNRECOVERED}
      */
     public record Result(OrderState state, boolean defaulted, boolean unrecovered) {
     }
@@ -33,8 +33,9 @@ public final class RecordReader {
 
     /**
      * @throws IllegalArgumentException when the record has no 13011 (the
-     *         publisher is pointed at the wrong topic) or a schema version
-     *         newer than {@code knownSchema}: either refuses the start (R17)
+     *         publisher is pointed at the wrong topic), a schema version
+     *         newer than {@code knownSchema}, or the 9xxx tags of schema 1
+     *         (docs/11 §6): each refuses the start (R17)
      */
     public static Result read(FixMessage record, int knownSchema) {
         String key = record.value(FixTags.Record.ROOT_CL_ORD_ID);
@@ -48,8 +49,16 @@ public final class RecordReader {
 
         String schema = record.value(FixTags.Record.SCHEMA_VERSION);
         if (schema.isEmpty()) {
+            if (record.has(FixTags.Record.LEGACY_SCHEMA_VERSION)) {
+                // Loading it would find none of its fields under 12xxx and
+                // silently drop its pending set, chain and counters.
+                throw new IllegalArgumentException("record " + key + " carries the 9xxx tags of schema 1 ("
+                        + FixTags.Record.LEGACY_SCHEMA_VERSION + "=" + record.value(FixTags.Record.LEGACY_SCHEMA_VERSION)
+                        + "); this publisher writes 12000-12999, schema " + knownSchema
+                        + ". Empty the blotter at a daily reset before the first start of this version (docs/11 §6)");
+            }
             defaulted = true;
-            s.schemaVersion = 1;
+            s.schemaVersion = knownSchema;
         } else {
             s.schemaVersion = Integer.parseInt(schema);
             if (s.schemaVersion > knownSchema) {

@@ -131,7 +131,7 @@ it:
   by the venue's own reports; the pending family holds an in-flight amend. The
   family keeps its meaning under the deployment's tag scheme — 15038, 15044,
   15011 and 15035 are the pending 38, 44, 11 and 35, where the old blotter
-  used 9010–9013 — and 9014 is unchanged.
+  used 9010–9013 — and the working ClOrdID, 9014 there, is 12014 here.
 - **`151=0` stamped on every terminal projection**, so the exposure views
   over the blotter stop counting a cancelled, expired or rejected order
   ([10](../../docs/fix42-view/10-expired-rejected-restated-reports.md)).

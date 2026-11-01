@@ -79,7 +79,7 @@ class EdgeCaseFlowPropertyTest {
             check(wrong, chain, "14", Long.toString(chain.cumQty()), record.value(FixTags.CUM_QTY));
             check(wrong, chain, "151", Long.toString(chain.leavesQty()), record.value(FixTags.LEAVES_QTY));
             checkNumber(wrong, chain, "6", Prices.plain(chain.avgPx()), record.value(FixTags.AVG_PX));
-            check(wrong, chain, "9017", OrderState.isTerminal(chain.ordStatus()) ? "Y" : "N",
+            check(wrong, chain, "12017", OrderState.isTerminal(chain.ordStatus()) ? "Y" : "N",
                     record.value(FixTags.Record.TERMINAL));
             assertThat(m.cached(key).value(FixTags.CUM_QTY))
                     .as("%s: the cache agrees with the merged record", chain)
@@ -112,7 +112,7 @@ class EdgeCaseFlowPropertyTest {
             "transact-time-in-seconds", List.of(
                     "EC-E36 39=4 (venue: 1)",
                     "EC-E36 151=0 (venue: 500)",
-                    "EC-E36 9017=Y (venue: N)"));
+                    "EC-E36 12017=Y (venue: N)"));
 
     private static void check(List<String> wrong, OrderChain chain, String tag, String expected, String actual) {
         if (!expected.equals(actual)) {

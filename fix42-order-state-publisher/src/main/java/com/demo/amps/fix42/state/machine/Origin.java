@@ -1,6 +1,6 @@
 package com.demo.amps.fix42.state.machine;
 
-/** How a chain came to exist: tag 9018. */
+/** How a chain came to exist: tag 12018. */
 public enum Origin {
     /** Opened by its own 35=D. */
     D,

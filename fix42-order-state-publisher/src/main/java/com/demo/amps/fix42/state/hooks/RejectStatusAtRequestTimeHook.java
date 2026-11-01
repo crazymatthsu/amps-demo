@@ -15,7 +15,7 @@ import com.demo.amps.fix42.state.spi.OrderStateView;
  * acknowledges a cancel with {@code 150=6 39=6}, then rejects it with
  * {@code 39=6} again. The machine rightly refuses that 39 (no CANCEL is left
  * in the set, R6), but nothing else moves the {@code 6} the acknowledgement
- * wrote, so the record would read pending cancel with {@code 9016=0} until the
+ * wrote, so the record would read pending cancel with {@code 12016=0} until the
  * next report.
  *
  * <p>This hook rewrites the reject's 39, before the rules run, to the status

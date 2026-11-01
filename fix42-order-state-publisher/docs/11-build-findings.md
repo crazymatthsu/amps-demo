@@ -20,7 +20,7 @@ not state.
 arbitration order: classify, duplicate, stale, **late**, then **after a
 terminal status**, and [07 §4](07-extension-points.md#4-what-is-not-extensible-on-purpose)
 makes that order non-negotiable. Step 4 drops a non-reopening report whose
-CumQty equals the record's and whose `60` is older than 9029. Two rows of the
+CumQty equals the record's and whose `60` is older than 12029. Two rows of the
 after-terminal table in [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision)
 are written as if a report reaches them regardless of its time, and with
 `transact-time-guard: true` (the default) neither is reached by an older
@@ -28,8 +28,8 @@ report:
 
 | row | what the table says | what happens to a report with an older `60` |
 | --- | --- | --- |
-| a fill, 14 **equal**, 17 new (06 E21) | 17, 150, 32, 31, 30, 9028 adopted | `IGNORED(late)` at step 4; the record keeps the previous fill's 17/32/31/30/9028 |
-| `non-fill-after-terminal: ADOPT_VENUE` | "applies it without the time test" | an equal-CumQty re-ack older than 9029 is `IGNORED(late)` at step 4 |
+| a fill, 14 **equal**, 17 new (06 E21) | 17, 150, 32, 31, 30, 12028 adopted | `IGNORED(late)` at step 4; the record keeps the previous fill's 17/32/31/30/12028 |
+| `non-fill-after-terminal: ADOPT_VENUE` | "applies it without the time test" | an equal-CumQty re-ack older than 12029 is `IGNORED(late)` at step 4 |
 
 Neither costs money: the economics are equal by construction in the first row,
 and the second is the conservative side. But the documents read as if both rows
@@ -39,7 +39,7 @@ work by default, and they do not:
   the terminal report (a venue that stamps 60 at send time, or a fill with no
   60 and no 52);
 - `ADOPT_VENUE` differs from `ADOPT_VENUE_IF_LATER` only for a re-ack whose
-  time **equals** 9029 or that has none. A deployment that wants it to believe
+  time **equals** 12029 or that has none. A deployment that wants it to believe
   an older re-ack needs `transact-time-guard: false` as well, which is the
   pairing [07 §1](07-extension-points.md#1-tier-one-policies) already
   recommends for a tap merging clocks.
@@ -57,7 +57,7 @@ own status, and [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy
 adopts it. When the venue then rejects the cancel with a `35=9` whose 39 is the
 **stale pending status** — `39=6` with no CANCEL left in the set — the
 `WHEN_NOT_TERMINAL` policy rightly refuses it (R6). But nothing else touches the
-record's 39, so it goes on reading `6`, pending cancel, with `9016=0`, until the
+record's 39, so it goes on reading `6`, pending cancel, with `12016=0`, until the
 next report. A venue whose rejects carry the status at request time produces
 this on every rejected cancel that was acknowledged first (06 E15 and E31 under
 the `reject-status-at-request-time` mock dialect).
@@ -67,7 +67,7 @@ requests in flight trivial. Options:
 
 | option | effect | cost |
 | --- | --- | --- |
-| **leave it** (current) | `39=6 9016=0` until the next report; a reader can derive "not really pending" from `9016=0` | the record contradicts itself for a while |
+| **leave it** (current) | `39=6 12016=0` until the next report; a reader can derive "not really pending" from `12016=0` | the record contradicts itself for a while |
 | derive on the reject | when a reject removes the last request of the kind the record's pending 39 stands for, and its own 39 is not adopted, set 39 from the cumulative state: `0` if `14 = 0`, else `1` | the machine computes a status, which [03 §8](03-state-machine.md#8-what-the-machine-does-not-do) says it does not |
 | a `beforeApply` hook | the deployment that connects to such a venue rewrites the 9's 39 to the derived value ([07 §2](07-extension-points.md#2-tier-two-hooks)) | per venue |
 
@@ -131,10 +131,10 @@ each against its own throwaway instance of the `fix42-order-state` flow.
 
 ### F4 — A confirm overtaken by a later-stamped reject is dropped, and the order stays live
 
-A `35=9` moves 9029 (S19: a reject is the venue's clock too). On a tap that
+A `35=9` moves 12029 (S19: a reject is the venue's clock too). On a tap that
 merges two sessions, the venue's `150=4` for X-2 stamped T5 can arrive
 **after** its `35=9` for X-3 stamped T6. The confirm then has equal CumQty and
-a 60 older than 9029, and §5 step 4 drops it as late: the record keeps
+a 60 older than 12029, and §5 step 4 drops it as late: the record keeps
 `39=6` (or 1) and **live LeavesQty** while the venue has canceled the order --
 exposure the views count until the next report, which for a canceled order
 may never come. On a single session the venue's clock and the arrival order
@@ -224,7 +224,7 @@ and the lease as a phase 4-5 follow-up. Pinned by
 | `sow_delete` by filter is durable; a journalled topic does not bring deleted records back at restart (S13) | **yes** for `sow_delete`; deleting the SOW *file* was not tried | `RestartIT.resetIsDurable` |
 | a 17-less `20=3` reaches the blotter and `fix42/unrouted`, not `execs_audit` (S10) | **yes** | `PublishPathIT.statusReportWithoutExecId` |
 | the four views over the new topic | agree with the venue's totals per account × symbol × side, terminal orders contributing no LeavesQty, `MIDSTREAM` records contributing what their reports carried | `ExposureViewIT` |
-| `bootRun` shows the two-cancels orders as canceled | **yes**: `EC-E1-1` and `EC-E2-1` read `39=4 151=0 15035=NONE 9016=0 9017=Y` (and `9100=CLOSED` from the shipped hook) | run by hand against a throwaway instance |
+| `bootRun` shows the two-cancels orders as canceled | **yes**: `EC-E1-1` and `EC-E2-1` read `39=4 151=0 15035=NONE 12016=0 12017=Y` (and `12100=CLOSED` from the shipped hook) | run by hand against a throwaway instance |
 
 Still unverified: whether AMPS acknowledges a publish to an **unjournalled**
 topic (every topic is journalled, so the question never arises), and whether
@@ -266,16 +266,16 @@ misses and a later OrderID would hit. Pinned by
 
 ### Two more fixes the recovery suites forced
 
-- **9030 outlives 9021's cap.** The first version derived 9030 from the chain
+- **12030 outlives 12021's cap.** The first version derived 12030 from the chain
   list, which a rebuild holds only as the last `chain-ids-published` ids: E61's
   thousand-amend order came back from a restart counting from 50. The entry now
-  carries the count, loaded from 9030. Pinned by `RecoveryIT.sowRecovery` (tag
+  carries the count, loaded from 12030. Pinned by `RecoveryIT.sowRecovery` (tag
   for tag against the uninterrupted run).
 - **A key minted while the cache is incomplete is checked against the blotter.**
   An order first seen mid-stream before a `recovery: NONE` restart has no audit
   record naming its ids (its first message was a report), so every lookup misses
   and the machine mints its key again -- the same key, whose record exists. The
-  first version then delta-published a fresh entry over it, resetting 9023, 9021
+  first version then delta-published a fresh entry over it, resetting 12023, 12021
   and the counters. Now, while the cache is incomplete, a minted key is read from
   the blotter first and the entry rebuilt from the record (R4c, S9, extended
   from the D to every message). One keyed read per new chain, only in that mode.
@@ -288,9 +288,9 @@ misses and a later OrderID would hit. Pinned by
 | E49 a publisher restart mid-flow, `recovery: SOW` | every record equal, tag for tag, to the uninterrupted run's; no `MIDSTREAM` chain | `RecoveryIT.sowRecovery` |
 | E53/E55 `recovery: NONE` with `allow-incomplete-cache` | one record per order, venue fields right; a resent D keeps the record; a stranger's report is a `MIDSTREAM` record. E43 (two replaces missed, known only by 37) needs `miss-lookup-by-order-id`, now built; without it, the documented `MIDSTREAM` twin | `RecoveryIT.noneWithLookups`, `CacheMissTest.knownOnlyByOrderId` |
 | E56 `recovery: NONE` against a non-empty blotter | refused, naming `allow-incomplete-cache` | `RecoveryIT.noneRefused` |
-| E54 `load-open-orders-only`, then a late bust | lands on the terminal order's record through the tombstone; 9021 kept, 9023 counts on | `TombstoneIT.partialLoad` |
+| E54 `load-open-orders-only`, then a late bust | lands on the terminal order's record through the tombstone; 12021 kept, 12023 counts on | `TombstoneIT.partialLoad` |
 | E47/E48 `terminal-retention`, then a late bust and a late cancel | both find the record again, the cancel through `orders_audit` by its 41 | `TombstoneIT.eviction` |
-| E62 a record missing 9026; a record of schema 2 | loads with the default and counts `recoveredWithDefaults`; refuses the start | `TombstoneIT.schema` |
+| E62 a record missing 12026; a record of schema 2 | loads with the default and counts `recoveredWithDefaults`; refuses the start | `TombstoneIT.schema` |
 
 ## 4. Measurements (phase 5)
 
@@ -330,7 +330,7 @@ publisher's.
 
 [04 §6](04-recovery-and-operations.md#6-the-publish-path)'s two-phase apply
 plans each message on a copy of its order's cache entry. The copy includes
-`clOrdIds`, which holds every ClOrdID the chain has had: 9021 publishes only
+`clOrdIds`, which holds every ClOrdID the chain has had: 12021 publishes only
 the newest 50, but the cache keeps all of them, and so does the index, so a
 report quoting any of them resolves ([03 §3](03-state-machine.md#3-identity)).
 On an order amended 999 times, each later fill allocates 7,808 bytes against
@@ -385,10 +385,10 @@ nothing, so the machine takes the S8 path meant for a record that is truly
 gone: a `MIDSTREAM` chain under the key, built from the report alone and
 delta-published over the real record. Measured on a filled order, a late bust
 overwrote:
-- 9021 `X-1,X-2` with `X-2`;
-- 9030 `2` with `1`;
-- 9023 `6` with `1`;
-- 9018 `D` with `MIDSTREAM`.
+- 12021 `X-1,X-2` with `X-2`;
+- 12030 `2` with `1`;
+- 12023 `6` with `1`;
+- 12018 `D` with `MIDSTREAM`.
 
 That is the S9 overwrite 04 §4 says eviction never does. Until this fix,
 nothing refused the combination: `terminal-retention` and
@@ -441,3 +441,43 @@ Listed for the next session:
 - `recovery: JOURNAL`;
 - phase 5's optional server-side index on `/37` for
   `miss-lookup-by-order-id`, which today scans the blotter.
+
+## 6. Renumbering: the machine's tags move to 12000–12999 (schema 2)
+
+Made on 2026-11-01. FIX's user-defined range, 5000–9999, is where a
+deployment puts its own tags. The publisher's tags now leave it for the
+internal-use block, 10000–19999, which already holds the 13xxx root values and
+the 15xxx pending values. Every number moved by 3,000:
+
+| what | before | after |
+| --- | --- | --- |
+| the machine's bookkeeping: working id, pending set and count, terminal flag, origin, key kind, chain list, counters, schema version, report time | 9014–9031 | 12014–12031 |
+| `fix42/malformed`'s wrapped bytes and reason | 9032, 9033 | 12032, 12033 |
+| the range the pass-through strips and hooks may not write | 9001–9099 | 12000–12099 |
+| the hooks' range | 9100–9999 | 12100–12999 |
+| `DeskStatusHook`'s desk status | 9100 | 12100 |
+| the schema version's value | 1 | 2 |
+
+**Unchanged:**
+- 13011, the SOW key, and the rest of 13xxx and 15xxx.
+- ParentOrderID 9000. It is the feed's tag, set by the OMS on a child order.
+  The server flow's views filter on `/9000` and need no edit.
+- `fix42-publisher`'s own 9010–9014. Docs 01 and 02 still describe them.
+
+**What it changes:**
+- **9xxx tags reach the record.** A 9001–9999 tag on a message is now an
+  ordinary descriptive field, copied onto the record like 55 or 1. The
+  pass-through no longer strips it. `CoverageMatrixTest.e60` pins this:
+  12050 is stripped and 9050 passes.
+- **Readers must switch tags.** Anything that queries the blotter by a
+  bookkeeping tag moves: `/9017 = 'Y'` becomes `/12017 = 'Y'`, `/9016 > 0`
+  becomes `/12016 > 0`, and so on. A hook writes in 12100–12999.
+
+**The cutover.** A record of the 9xxx scheme carries 9024 and no 12024. It
+refuses the start, with a message that names the record and this section.
+Loading it would find none of its fields under 12xxx, and would silently drop
+its pending set, chain list and counters. So the blotter has to be empty the
+first time this version starts: delete its records at a daily reset. No
+migration of an existing blotter is built. Pinned by
+`RecordShapeTest.legacyTagScheme`; every other test reads the tags through
+`FixTags.Record`, so the suites ran unchanged on the new numbers.

@@ -17,10 +17,10 @@ import java.util.Set;
  * remove one.
  *
  * <p>The pass-through never copies the session header and trailer
- * ({@code strip-tags}), any tag in the machine's own ranges (9001-9099,
- * 13000-13999, 15000-15999 -- 9000 is kept, as a field), or a tag the machine
- * writes itself, so a venue or OMS custom tag cannot overwrite state
- * (R20e, S18).
+ * ({@code strip-tags}), any tag in the machine's own ranges (12000-12099,
+ * 13000-13999, 15000-15999), or a tag the machine writes itself, so a venue
+ * or OMS custom tag cannot overwrite state (R20e, S18). The 9xxx range,
+ * ParentOrderID 9000 included, is the deployment's and passes through.
  */
 public final class RecordWriter {
 
@@ -81,9 +81,9 @@ public final class RecordWriter {
         return options.stripTags().contains(tag) || inMachineRange(tag);
     }
 
-    /** 9001-9099, 13000-13999, 15000-15999: the machine's own (9000 is a field, kept). */
+    /** 12000-12099, 13000-13999, 15000-15999: the machine's own. */
     public static boolean inMachineRange(int tag) {
-        return (tag > FixTags.PARENT_ORDER_ID && tag <= 9099)
+        return (tag >= FixTags.Record.MACHINE_TAG_MIN && tag <= FixTags.Record.MACHINE_TAG_MAX)
                 || (tag >= 13000 && tag <= 13999)
                 || (tag >= 15000 && tag <= 15999);
     }
@@ -204,7 +204,7 @@ public final class RecordWriter {
      * The pending family: 15038/15044 the newest pending REPLACE's proposed
      * terms (0 when it is only inferred, or for a term it did not propose),
      * even when a cancel is the newest request; 15011/15035 the newest request
-     * of any kind; 9015 the whole set and 9016 its size (docs/02 §4.1).
+     * of any kind; 12015 the whole set and 12016 its size (docs/02 §4.1).
      */
     private static void pending(OrderState s, FixWriter out) {
         PendingRequest replace = s.newestReplace();

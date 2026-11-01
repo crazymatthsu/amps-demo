@@ -61,7 +61,7 @@ public record OrderStateProperties(Amps amps,
      */
     public record OrderState(@DefaultValue("sow/fix42/order_state") String topic,
                              @DefaultValue("13011") int keyTag,
-                             @DefaultValue("1") int schemaVersion,
+                             @DefaultValue("2") int schemaVersion,
                              @DefaultValue("WHEN_NOT_TERMINAL") CancelRejectStatusPolicy cancelRejectStatus,
                              @DefaultValue("APPLY_ECONOMICS") LateFillPolicy lateFillAfterTerminal,
                              @DefaultValue("ADOPT_VENUE_IF_LATER") NonFillAfterTerminalPolicy nonFillAfterTerminal,

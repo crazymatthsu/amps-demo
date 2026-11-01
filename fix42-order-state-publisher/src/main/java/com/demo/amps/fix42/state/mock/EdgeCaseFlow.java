@@ -265,7 +265,7 @@ public final class EdgeCaseFlow {
                         chain("E60", d, 1_000, 50.0)
                                 .withNewOrderTag(8, "FIX.4.2").withNewOrderTag(34, "17")
                                 .withNewOrderTag(49, "OMS").withNewOrderTag(56, "VENUE")
-                                .withNewOrderTag(9015, "NONE").withNewOrderTag(9050, "venue")
+                                .withNewOrderTag(12015, "NONE").withNewOrderTag(12050, "venue")
                                 .withNewOrderTag(13011, "BOGUS").withNewOrderTag(15038, "1")
                                 .newOrder().ack().partialFill(300, 50.0))),
                 of("E61", "a pegged child re-priced a thousand times", d -> one(chain("E61", d, 1_000, 50.0)

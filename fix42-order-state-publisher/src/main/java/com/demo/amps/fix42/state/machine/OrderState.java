@@ -24,9 +24,9 @@ public final class OrderState implements OrderStateView {
 
     String orderKey;
     char keyKind = 'C';
-    /** Every ClOrdID bound to this order, oldest first -- after a rebuild, the last 9021 held. */
+    /** Every ClOrdID bound to this order, oldest first -- after a rebuild, the last 12021 held. */
     List<String> clOrdIds = new ArrayList<>(3);
-    /** How many ClOrdIDs the chain has used: 9030, which outlives 9021's cap across a rebuild. */
+    /** How many ClOrdIDs the chain has used: 12030, which outlives 12021's cap across a rebuild. */
     long clOrdIdCount;
     String workingClOrdId;
     /** Every OrderID seen, latest first; the record shows the first. */
@@ -56,7 +56,7 @@ public final class OrderState implements OrderStateView {
     long lateFills;
     Origin origin = Origin.D;
     int schemaVersion = 1;
-    /** Bookkeeping of the last applied message: 11, 41, 60, 9022. */
+    /** Bookkeeping of the last applied message: 11, 41, 60, 12022. */
     String lastClOrdId;
     String lastOrigClOrdId;
     String lastTransactTime;
@@ -332,7 +332,7 @@ public final class OrderState implements OrderStateView {
         return orderIds.isEmpty() ? null : orderIds.getFirst();
     }
 
-    /** What 9028 shows: the latest correction of the last fill, else the fill. */
+    /** What 12028 shows: the latest correction of the last fill, else the fill. */
     String lastFillRecorded() {
         return lastFillCorrectionExecId != null ? lastFillCorrectionExecId : lastFillExecId;
     }
