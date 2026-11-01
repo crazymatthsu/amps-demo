@@ -305,6 +305,18 @@ is pinned under a ceiling about 25% above it:
 | cache memory held by a typical order | 1,545 bytes | `ChainMemoryTest` |
 | cache memory held by a 1,000-ClOrdID chain | 102,888 bytes | `ChainMemoryTest` |
 | a fill's allocation, on a 1-id order vs the 1,000-id one | 3,840 vs 7,808 bytes | `ChainMemoryTest` |
+| an evicted order's tombstone, 1,000 orders | 238 bytes | `ChainMemoryTest` |
+
+`ScaleMemoryMeasurement` (`scaleMemory`, not a test) measured the heap at a
+million orders per scenario, as live heap after full collections:
+
+| per order | heap up to 32 GB | heap over 32 GB |
+| --- | ---: | ---: |
+| kept in the cache, 1 ClOrdID | 1,568 B | 1,942 B |
+| kept, 5 ClOrdIDs | 2,379 B | 2,909 B |
+| an evicted order's tombstone | 276 B | 359 B |
+
+The README turns these into a heap plan for 50 million ClOrdIDs.
 
 `OrderStateThroughputBenchmark` (`publishBenchmark`, not a test) gave the
 throughput figures. On `fix42-publisher`'s load, the state machine handles
@@ -338,6 +350,73 @@ in a day pays it on every report.
 **Disposition: open, for the design owner.** Recommendation: leave it, unless
 a venue's flow shows chains in the thousands. Pinned by
 `ChainMemoryTest.thousandClOrdIdChain`, whose ceiling fails if the cost grows.
+
+### F10 — A tombstone costs about 276 bytes, not 40, and none is ever removed
+
+[04 §4](04-recovery-and-operations.md#4-eviction) puts a tombstone at "about
+40 bytes" per OrderID. The figure counted the map entry alone. Measured, an
+evicted order with one OrderID holds 276 bytes at a million orders (238 at a
+thousand, where the tables are sized differently):
+- the key string, in the key set;
+- the OrderID string and its entry in the OrderID map;
+- each map's share of its table.
+
+Without compressed pointers it holds 359 bytes. Nothing removes a tombstone:
+eviction makes them, and only a restart clears them. So with eviction on, the
+cache still grows by that much per order all day. At 50 million orders that
+is about 14 GB, most of the README's 24 GB plan.
+
+| option | effect | cost |
+| --- | --- | --- |
+| **leave it** (current) | grows until the daily restart | sized for; stated in the README |
+| expire tombstones after a second window | bounded | a report after that window resolves only through the miss lookup by its 11 on `orders_audit` (or by 37, with `miss-lookup-by-order-id`), one server query each |
+| keep only the OrderID map | smaller (not measured) | the key set is how a new order's minted key is checked for collisions (03 §3.2), so an evicted order's key could be taken again |
+
+**Disposition: open, for the design owner.** Recommendation: leave it and
+size for it; the daily restart is already the bound docs/04 relies on. 04 §4
+now gives the measured figure. Pinned by `ChainMemoryTest.tombstone`.
+
+### F11 — Eviction without the miss lookup overwrites the record
+
+A late venue report for an evicted order resolves through its tombstone to the
+right key. The entry is then rebuilt from the blotter record, but only through
+the miss lookup's `record` read. With `miss-lookup: false`, that read returns
+nothing, so the machine takes the S8 path meant for a record that is truly
+gone: a `MIDSTREAM` chain under the key, built from the report alone and
+delta-published over the real record. Measured on a filled order, a late bust
+overwrote:
+- 9021 `X-1,X-2` with `X-2`;
+- 9030 `2` with `1`;
+- 9023 `6` with `1`;
+- 9018 `D` with `MIDSTREAM`.
+
+That is the S9 overwrite 04 §4 says eviction never does. Nothing refuses the
+combination: `terminal-retention` and `load-open-orders-only` (which makes the
+same tombstones at load) are validated independently of `miss-lookup`.
+
+**Disposition: open; a fix is recommended.** Refuse the start when
+`terminal-retention` is above zero, or `load-open-orders-only` is true, while
+`miss-lookup` is false, as `recovery: NONE` already refuses a non-empty
+blotter without `allow-incomplete-cache`. Until then, the README says to keep
+the lookup on.
+
+### F12 — Orders loaded at startup are never scheduled for eviction
+
+Eviction is scheduled when a commit leaves an order finished. The SOW loader
+puts entries straight into the cache, without a commit. So after a restart
+with `recovery: SOW` and `load-open-orders-only: false`, every order that was
+already finished comes back as a full entry and stays for the rest of the day,
+unless another message for it happens to arrive. A mid-day restart therefore
+reloads the morning's whole flow, sized as if eviction were off.
+
+| option | effect | cost |
+| --- | --- | --- |
+| schedule finished entries at load, due one retention after the restart | eviction covers the reloaded orders too | none beyond the queue entries |
+| require `load-open-orders-only: true` with eviction | finished orders load as tombstones | a refused start for a configuration that works today |
+
+**Disposition: open, for the design owner.** Recommendation: schedule at load.
+Until then, the README says to set `load-open-orders-only: true` with
+eviction.
 
 ## 5. Not built
 

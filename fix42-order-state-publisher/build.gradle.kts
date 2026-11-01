@@ -105,6 +105,26 @@ tasks.named("check") {
 }
 
 /**
+ * The live heap a day's orders take, measured at scale:
+ * `./gradlew :fix42-order-state-publisher:scaleMemory`.
+ *
+ * A million orders per scenario through the machine, in a JVM of its own with
+ * a 16 GB heap (the test workers' is too small), the heap read after full
+ * collections. Compare JVM flags with -PscaleJvmArgs (for example
+ * -XX:-UseCompressedOops, as a heap above 32 GB runs) and the size with
+ * -PscaleOrders. Not a test, so nothing runs it unasked.
+ */
+tasks.register<JavaExec>("scaleMemory") {
+    group = "verification"
+    description = "Measure the cache's live heap per order at a million orders."
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.demo.amps.fix42.state.machine.ScaleMemoryMeasurement")
+    maxHeapSize = "16g"
+    jvmArgs((findProperty("scaleJvmArgs") as String?)?.split(" ")?.filter { it.isNotBlank() } ?: emptyList<String>())
+    systemProperty("scale.orders", findProperty("scaleOrders") ?: "1000000")
+}
+
+/**
  * The README and the design notes carry relative links, into each other and
  * into the code; a link to a file that does not exist is the rot the docs
  * module already refuses. The same check fix-pub-seqno runs, for this module.
