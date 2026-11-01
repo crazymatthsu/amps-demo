@@ -196,6 +196,20 @@ public record OrderStateProperties(Amps amps,
         if (orderState.chainIdsPublished() < 1 || orderState.execIdHistory() < 0) {
             problems.add("chain-ids-published must be >= 1 and exec-id-history >= 0");
         }
+        // Both leave orders with a tombstone and no cache body. A late report
+        // for one is rebuilt from its blotter record, and only the miss lookup
+        // reads that record: without it the report alone becomes a MIDSTREAM
+        // record delta-published over the real one (docs/11 F11).
+        boolean evicts = orderState.terminalRetention().compareTo(Duration.ZERO) > 0;
+        if (!orderState.missLookup() && (evicts || orderState.loadOpenOrdersOnly())) {
+            String setting = evicts && orderState.loadOpenOrdersOnly()
+                    ? "terminal-retention and order-state.load-open-orders-only"
+                    : evicts ? "terminal-retention" : "load-open-orders-only";
+            problems.add("order-state." + setting + " need order-state.miss-lookup: true. An order left "
+                    + "with only a tombstone is rebuilt from its blotter record when a late report arrives, "
+                    + "and the miss lookup is what reads that record; without it the report would "
+                    + "overwrite the record's chain, counters and origin (docs/11 F11)");
+        }
         if (routes == null || routes.isEmpty()) {
             problems.add("no routes: every message type needs somewhere to go");
         } else {

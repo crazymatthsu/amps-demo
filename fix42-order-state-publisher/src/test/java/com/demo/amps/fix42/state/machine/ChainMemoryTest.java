@@ -9,8 +9,10 @@ import com.demo.amps.fix42.state.fix.FixWriter;
 import com.demo.amps.fix42.state.it.OrderStateConfigurations;
 import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.openjdk.jol.info.GraphLayout;
@@ -43,6 +45,8 @@ class ChainMemoryTest {
     static final long TYPICAL_ORDER_CEILING = 1_950;
     static final long LONG_CHAIN_CEILING = 129_000;
     static final long FILL_ON_LONG_CHAIN_CEILING = 9_800;
+    /** About 25% above the 238 bytes per evicted order measured on 2026-11-01 (docs/11 F10). */
+    static final long TOMBSTONE_CEILING = 300;
 
     private final FixFrame frame = new FixFrame();
     private final FixWriter out = new FixWriter(2048);
@@ -59,6 +63,26 @@ class ChainMemoryTest {
         }
         long perOrder = (retained(machine) - empty) / orders;
         report("a typical order retains", perOrder, TYPICAL_ORDER_CEILING);
+    }
+
+    @Test
+    @DisplayName("an evicted order still holds a tombstone (its key and OrderIDs) until the process restarts")
+    void tombstone() {
+        AtomicLong now = new AtomicLong(0);
+        OrderStateMachine machine = new OrderStateMachine(OPTIONS);
+        machine.setTerminalRetention(Duration.ofMillis(1), now::get);
+        long empty = retained(machine);
+        int orders = 1_000;
+        for (int i = 0; i < orders; i++) {
+            applyAll(machine, typicalOrder(String.format("ORD-20261101-%06d", i)));
+        }
+        now.set(1_000_000);
+        assertThat(machine.evictExpired()).isEqualTo(orders);
+        assertThat(machine.size()).as("every body is gone").isZero();
+        assertThat(machine.index().keyForOrderId("VORD-20261101-000000")).as("the OrderID still resolves")
+                .isEqualTo("ORD-20261101-000000");
+        long perTombstone = (retained(machine) - empty) / orders;
+        report("an evicted order's tombstone retains", perTombstone, TOMBSTONE_CEILING);
     }
 
     @Test

@@ -139,9 +139,8 @@ with no server needed.
 For sizing:
 - **Orders:** 100,000 typical orders hold about 150 MB of cache.
 - **Eviction:** the shipped default `terminal-retention: PT0S` never evicts a
-  finished order. Set a retention to bound the cache. An evicted order leaves a
-  tombstone, and a late message for it finds its record again
-  ([docs/04](docs/04-recovery-and-operations.md)).
+  finished order. Set a retention to bound the cache; [Eviction](#eviction)
+  says how it works and what it costs.
 - **Long chains:** the record publishes only the newest 50 ClOrdIDs (9021),
   but the cache keeps every one, so a report quoting any of them still
   resolves. Every message also copies that list, adding 4 bytes per id to each
@@ -149,6 +148,88 @@ For sizing:
 
 `ChainMemoryTest` measures these with JOL, OpenJDK's object-layout tool, as a
 unit test.
+
+### Heap for a day's flow
+
+The `scaleMemory` task measured these at 1,000,000 orders per scenario. Each
+figure is the live heap after full collections: entries, both index maps and
+their tables, the key set, and every string. The ids are a desk's length:
+21-character ClOrdIDs and 14-character OrderIDs.
+
+| per order | heap up to 32 GB | heap over 32 GB |
+| --- | ---: | ---: |
+| order kept in the cache, 1 ClOrdID, finished or open | 1,568 B | 1,942 B |
+| each extra ClOrdID (an amend) | about 200 B | about 240 B |
+| evicted order: its tombstone | 276 B | 359 B |
+
+Above 32 GB, Java turns off compressed pointers, so every object reference
+doubles in size.
+
+For 50 million ClOrdIDs in a day:
+
+| scenario | live | heap to set |
+| --- | ---: | ---: |
+| 50M orders of 1 ClOrdID, nothing evicted (the default) | about 97 GB | about 150 GB |
+| 10M orders of 5 ClOrdIDs, nothing evicted | about 29 GB | about 45 GB |
+| 50M orders of 1 ClOrdID, eviction on | about 15 GB | 24 GB |
+| 10M orders of 5 ClOrdIDs, eviction on | about 5 GB | 8 GB |
+
+"Heap to set" is live ÷ 0.65, leaving the G1 collector its usual headroom. The
+eviction rows assume up to a million orders in the cache at the busiest
+moment: the open orders plus those finished within the retention window.
+Replace that with your own peak.
+
+- **Avoid heaps between 32 and about 40 GB.** Losing compressed pointers costs
+  about 24% per order, so a 36 GB heap holds less than a 31 GB one.
+- **`-XX:+UseStringDeduplication` saves about 24% on kept orders** (1,568 →
+  1,189 bytes, measured up to 32 GB) and nothing on tombstones.
+- **These figures are slightly conservative at 50M.** The hash tables grow in
+  powers of two and are fuller at 50 million entries than at a million. At
+  200,000 orders the figures read about 4% higher.
+
+To measure on your own JVM and ids:
+
+```bash
+./gradlew :fix42-order-state-publisher:scaleMemory
+```
+
+```bash
+./gradlew :fix42-order-state-publisher:scaleMemory -PscaleJvmArgs=-XX:-UseCompressedOops
+```
+
+### Eviction
+
+**How it works.** With `terminal-retention` above zero:
+- **Scheduling.** When a message leaves an order finished (filled, canceled,
+  rejected, expired), the machine schedules that order's eviction for
+  retention later.
+- **When it runs.** Due evictions are checked after every message and on a
+  one-second timer while the feed is quiet.
+- **What it removes.** At the deadline, if the order is still finished, its
+  cache entry goes and its ClOrdIDs leave the index. A venue reopen in the
+  meantime cancels the eviction.
+- **What it keeps.** A **tombstone** stays behind: the order's key and its
+  OrderIDs, bound to the key.
+- **The SOW is untouched.** Eviction is cache-only; the record stays on the
+  blotter, and subscribers see nothing.
+
+**A late message for an evicted order** ([docs/04 §4](docs/04-recovery-and-operations.md#4-eviction)):
+- **A venue report** (a bust, a correction, a restatement) carries its 37 and
+  resolves through the tombstone. The publisher flushes, reads the record back
+  with one keyed `sow` query, rebuilds the entry from it, applies the report,
+  and schedules eviction again.
+- **A late request under a new ClOrdID** names the old one in 41, and that id
+  is found through `orders_audit`.
+
+**What it costs, and where it can hurt:**
+
+| issue | effect | what to do |
+| --- | --- | --- |
+| tombstones are never removed ([docs/11 F10](docs/11-build-findings.md)) | 276 bytes per evicted order for the rest of the day: about 14 GB at 50M orders, the bulk of the 24 GB plan | size for it; the daily restart clears it |
+| a late message costs a round trip | the publishing thread waits for every publish in flight to be acknowledged, then for the query, so a burst of busts after eviction stalls the feed for as long as those round trips take (not measured under load) | keep the retention longer than your venues' usual delay for busts and corrections |
+| the rebuilt entry has lost its ExecID ring | duplicate detection is one deep for the first reports after a rebuild; the CumQty and TransactTime guards still apply, and busted ExecIDs (9031) are recovered from the record | nothing; stated for completeness |
+| eviction needs `miss-lookup: true` ([docs/11 F11](docs/11-build-findings.md)) | without the lookup the record can't be read back, so a late venue report would build a mid-stream record from itself and delta-publish it over the real one, overwriting the chain list (9021, 9030), the message count (9023) and the origin (9018) | refused at startup: `terminal-retention` above zero, or `load-open-orders-only: true`, with `miss-lookup: false` does not boot |
+| orders loaded at startup are never scheduled ([docs/11 F12](docs/11-build-findings.md)) | with `recovery: SOW` and `load-open-orders-only: false`, a restart puts every finished order back in the cache in full, and none of them is evicted | with eviction on, set `load-open-orders-only: true`, which loads finished orders as tombstones |
 
 ## Run it
 
@@ -221,7 +302,7 @@ Not built yet:
 - a server-side index on `/37`, so `miss-lookup-by-order-id` stops scanning
   the blotter.
 
-Open for the design owner: F4, F6 and F9 in
+Open for the design owner: F4, F6, F9, F10 and F12 in
 [docs/11](docs/11-build-findings.md).
 
 ## Documents

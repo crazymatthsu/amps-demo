@@ -57,4 +57,29 @@ class OrderStatePropertiesTest {
         assertThatThrownBy(() -> OrderStateConfigurations.shipped(URI, null, "order-state.dialect=nope").validate())
                 .hasMessageContaining("nope");
     }
+
+    @Test
+    @DisplayName("docs/11 F11: eviction or a partial load without the miss lookup is refused")
+    void tombstonesNeedTheMissLookup() {
+        assertThatThrownBy(() -> OrderStateConfigurations.shipped(URI, null,
+                "order-state.terminal-retention=PT10M", "order-state.miss-lookup=false").validate())
+                .hasMessageContaining("order-state.terminal-retention need order-state.miss-lookup: true")
+                .hasMessageContaining("F11");
+        assertThatThrownBy(() -> OrderStateConfigurations.shipped(URI, null,
+                "order-state.load-open-orders-only=true", "order-state.miss-lookup=false").validate())
+                .hasMessageContaining("order-state.load-open-orders-only need order-state.miss-lookup: true");
+        assertThatThrownBy(() -> OrderStateConfigurations.shipped(URI, null, "order-state.terminal-retention=PT10M",
+                "order-state.load-open-orders-only=true", "order-state.miss-lookup=false").validate())
+                .hasMessageContaining("terminal-retention and order-state.load-open-orders-only need");
+    }
+
+    @Test
+    @DisplayName("docs/11 F11: with the miss lookup on, or with no tombstones, each is accepted")
+    void tombstonesWithTheMissLookupAreAccepted() {
+        OrderStateConfigurations.shipped(URI, null, "order-state.terminal-retention=PT10M").validate();
+        OrderStateConfigurations.shipped(URI, null, "order-state.load-open-orders-only=true").validate();
+        OrderStateConfigurations.shipped(URI, null, "order-state.miss-lookup=false").validate();
+        OrderStateConfigurations.shipped(URI, null, "order-state.terminal-retention=PT0S",
+                "order-state.miss-lookup=false").validate();
+    }
 }

@@ -182,8 +182,10 @@ after it went terminal. Default `PT0S` means never evict: at the sizes in
 [02 §3.3](02-architecture.md#33-size) a day's flow fits comfortably and a daily
 restart with `recovery: SOW` is the natural bound. For a flow that does not
 fit, eviction removes the entry's **body** and its ClOrdID index entries but
-keeps a **tombstone**: every OrderID the order used → its OrderKey, about 40
-bytes each. A partial load (§2.1) builds the same tombstones for the records
+keeps a **tombstone**: every OrderID the order used → its OrderKey. Measured,
+a tombstone holds about 276 bytes per order, counting its strings and table
+share, and none is removed before a restart
+([11 F10](11-build-findings.md#f10--a-tombstone-costs-about-276-bytes-not-40-and-none-is-ever-removed)). A partial load (§2.1) builds the same tombstones for the records
 it does not keep, so "not loaded" and "evicted" behave alike (R4b).
 
 The tombstone is what makes eviction safe. The messages that legitimately
