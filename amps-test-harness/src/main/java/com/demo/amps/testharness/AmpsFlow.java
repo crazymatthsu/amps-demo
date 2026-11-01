@@ -28,6 +28,9 @@ public record AmpsFlow(String flow, String shortName, String messageType) {
      */
     public static final AmpsFlow FIX42_CHAINING = new AmpsFlow("fix42-chaining", "fix42", "fix");
 
+    /** The publisher-keyed FIX 4.2 blotter under fix42-order-state-publisher; no modules. */
+    public static final AmpsFlow FIX42_ORDER_STATE = new AmpsFlow("fix42-order-state", "fix42os", "fix");
+
     public static final AmpsFlow CACHE = new AmpsFlow("cache", "cache", "json");
 
     public static final AmpsFlow HAZELCAST = new AmpsFlow("hazelcast", "hz", "json");

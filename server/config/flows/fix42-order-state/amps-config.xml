@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Business flow "fix42-order-state": the FIX 4.2 order blotter keyed by the
+  PUBLISHER, not by the server.
+
+  The stateful successor to fix42-chaining. There the chaining key generator
+  resolved 11/41 inside the server and every message merged into its chain's
+  record, last writer wins. Here the publisher keeps a small cache per order,
+  applies each message conditionally, and delta-publishes what changed, keyed
+  by tag 13011 RootClOrdID: the D's own tag 11, written once. The server needs
+  no module, and the blotter is a plain SOW topic. The design is in
+  fix42-order-state-publisher/docs/; this file is its docs/02 section 1.
+
+  Topics, all fix-typed:
+
+    sow/fix42/order_state   /13011   the blotter, one record per order
+    sow/fix42/orders_audit  /11      every D, G and F, whole, plus 13011
+    sow/fix42/execs_audit   /17      every execution report, whole, plus 13011
+    sow/fix42/rejects       /11      every cancel reject, whole, plus 13011
+    sow/fix42/execs         /37      the latest report per order (convenience)
+    fix42/unrouted                   lenient mode's catch-all, not SOW
+    fix42/malformed                  bytes that did not parse, not SOW
+
+  EVERY topic the publisher writes is journalled, the blotter included. The
+  publisher runs on an HAClient with a publish store, and AMPS acknowledges a
+  publish as persisted only for a journalled topic; a store that is never
+  acknowledged never drains (docs/04 section 6). The cost is the blotter's
+  deltas in the journal beside the audit topics.
+
+  The four views are fix42-chaining's, pointed at the new topic: same fields,
+  same filters, same caveats about cross-type references and bare aggregates.
+-->
+<AMPSConfig>
+
+    <Name>amps-fix42-order-state</Name>
+
+    <Admin>
+        <InetAddr>8085</InetAddr>
+        <SQLTransport>amps-websocket</SQLTransport>
+        <FileName>./stats/stats.db</FileName>
+        <Interval>10s</Interval>
+    </Admin>
+
+    <Transports>
+        <!-- One transport, every message type: tcp://host:9007/amps/fix. -->
+        <Transport>
+            <Name>amps-tcp</Name>
+            <Type>tcp</Type>
+            <InetAddr>9007</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>amps</Protocol>
+        </Transport>
+        <Transport>
+            <Name>amps-websocket</Name>
+            <Type>tcp</Type>
+            <InetAddr>9008</InetAddr>
+            <ReuseAddr>true</ReuseAddr>
+            <Protocol>websocket</Protocol>
+        </Transport>
+    </Transports>
+
+    <Logging>
+        <Target>
+            <Protocol>stdout</Protocol>
+            <Level>info</Level>
+        </Target>
+    </Logging>
+
+    <!--
+      Topic names carry slashes, so every SOW file is named explicitly: %n
+      would expand to a path in directories nothing creates.
+    -->
+    <SOW>
+
+        <!-- ===== the blotter =====
+             Keyed by tag 13011, which the publisher writes on EVERY payload:
+             the FULL publish of a D, and every delta after it. One record per
+             order, parents and child slices alike; tag 9000 links a child to
+             its parent as an ordinary field. -->
+        <Topic>
+            <Name>sow/fix42/order_state</Name>
+            <MessageType>fix</MessageType>
+            <Key>/13011</Key>
+            <FileName>./sow/fix42-order-state.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- ===== the audit topics: the system of record =====
+             Each holds the message as received plus 13011 as a trailer, so a
+             sow with /13011 = 'key' over them is one order's history, and a
+             keyed read of orders_audit by any ClOrdID is the cache-miss
+             lookup of docs/04 section 3. -->
+        <Topic>
+            <Name>sow/fix42/orders_audit</Name>
+            <MessageType>fix</MessageType>
+            <Key>/11</Key>
+            <FileName>./sow/fix42-os-orders-audit.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <Topic>
+            <Name>sow/fix42/execs_audit</Name>
+            <MessageType>fix</MessageType>
+            <Key>/17</Key>
+            <FileName>./sow/fix42-os-execs-audit.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <Topic>
+            <Name>sow/fix42/rejects</Name>
+            <MessageType>fix</MessageType>
+            <Key>/11</Key>
+            <FileName>./sow/fix42-os-rejects.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- Latest report per order. Guarded by the publisher against 37=NONE,
+             which would collapse every never-acked order onto one record. -->
+        <Topic>
+            <Name>sow/fix42/execs</Name>
+            <MessageType>fix</MessageType>
+            <Key>/37</Key>
+            <FileName>./sow/fix42-os-execs.sow</FileName>
+            <Durability>persistent</Durability>
+        </Topic>
+
+        <!-- ===== exposure views: account x symbol x side =====
+             As fix42-chaining's, over the new blotter. A json view over a fix
+             topic qualifies every reference as [fix].[topic]./tag; the
+             aggregates stay bare, because an aggregate nested in IF() drifts
+             on live updates on this build (5.3.5.135). COUNT is over 13011,
+             which every record carries; 11 is the last applied message's id.
+             A record with 9018=MIDSTREAM contributes what its reports carried. -->
+        <View>
+            <Name>view/fix42/exposure/parent</Name>
+            <MessageType>json</MessageType>
+            <UnderlyingTopic>[fix].[sow/fix42/order_state]</UnderlyingTopic>
+            <Filter>/9000 IS NULL</Filter>
+            <Projection>
+                <Field>[fix].[sow/fix42/order_state]./1 AS /Account</Field>
+                <Field>[fix].[sow/fix42/order_state]./55 AS /Symbol</Field>
+                <Field>[fix].[sow/fix42/order_state]./54 AS /Side</Field>
+                <Field>COUNT([fix].[sow/fix42/order_state]./13011) AS /Orders</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./38) AS /OrderQty</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./151) AS /LeavesQty</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./14) AS /CumQty</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./14 * [fix].[sow/fix42/order_state]./6) / SUM([fix].[sow/fix42/order_state]./14) AS /AvgPx</Field>
+            </Projection>
+            <Grouping>
+                <Field>[fix].[sow/fix42/order_state]./1</Field>
+                <Field>[fix].[sow/fix42/order_state]./55</Field>
+                <Field>[fix].[sow/fix42/order_state]./54</Field>
+            </Grouping>
+        </View>
+
+        <View>
+            <Name>view/fix42/exposure/child</Name>
+            <MessageType>json</MessageType>
+            <UnderlyingTopic>[fix].[sow/fix42/order_state]</UnderlyingTopic>
+            <Filter>/9000 IS NOT NULL</Filter>
+            <Projection>
+                <Field>[fix].[sow/fix42/order_state]./1 AS /Account</Field>
+                <Field>[fix].[sow/fix42/order_state]./55 AS /Symbol</Field>
+                <Field>[fix].[sow/fix42/order_state]./54 AS /Side</Field>
+                <Field>COUNT([fix].[sow/fix42/order_state]./13011) AS /Orders</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./38) AS /OrderQty</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./151) AS /LeavesQty</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./14) AS /CumQty</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./14 * [fix].[sow/fix42/order_state]./6) / SUM([fix].[sow/fix42/order_state]./14) AS /AvgPx</Field>
+            </Projection>
+            <Grouping>
+                <Field>[fix].[sow/fix42/order_state]./1</Field>
+                <Field>[fix].[sow/fix42/order_state]./55</Field>
+                <Field>[fix].[sow/fix42/order_state]./54</Field>
+            </Grouping>
+        </View>
+
+        <View>
+            <Name>view/fix42/exposure/children_by_parent</Name>
+            <MessageType>json</MessageType>
+            <UnderlyingTopic>[fix].[sow/fix42/order_state]</UnderlyingTopic>
+            <Filter>/9000 IS NOT NULL</Filter>
+            <Projection>
+                <Field>[fix].[sow/fix42/order_state]./9000 AS /ParentOrderID</Field>
+                <Field>COUNT([fix].[sow/fix42/order_state]./13011) AS /Orders</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./38) AS /OrderQty</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./151) AS /LeavesQty</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./14) AS /CumQty</Field>
+                <Field>SUM([fix].[sow/fix42/order_state]./14 * [fix].[sow/fix42/order_state]./6) / SUM([fix].[sow/fix42/order_state]./14) AS /AvgPx</Field>
+            </Projection>
+            <Grouping>
+                <Field>[fix].[sow/fix42/order_state]./9000</Field>
+            </Grouping>
+        </View>
+
+        <!-- The parent level joined to the child level; declared after the
+             views it joins. LEFT OUTER from the first topic; no Filter on a
+             join view on this build. -->
+        <View>
+            <Name>view/fix42/recon/parent_vs_child</Name>
+            <MessageType>json</MessageType>
+            <UnderlyingTopic>
+                <Join>[view/fix42/exposure/parent]./Account = [view/fix42/exposure/child]./Account</Join>
+                <Join>[view/fix42/exposure/parent]./Symbol = [view/fix42/exposure/child]./Symbol</Join>
+                <Join>[view/fix42/exposure/parent]./Side = [view/fix42/exposure/child]./Side</Join>
+            </UnderlyingTopic>
+            <Projection>
+                <Field>[view/fix42/exposure/parent]./Account AS /Account</Field>
+                <Field>[view/fix42/exposure/parent]./Symbol AS /Symbol</Field>
+                <Field>[view/fix42/exposure/parent]./Side AS /Side</Field>
+                <Field>[view/fix42/exposure/parent]./Orders AS /ParentOrders</Field>
+                <Field>[view/fix42/exposure/child]./Orders AS /ChildOrders</Field>
+                <Field>[view/fix42/exposure/parent]./CumQty AS /ParentCumQty</Field>
+                <Field>[view/fix42/exposure/child]./CumQty AS /ChildCumQty</Field>
+                <Field>[view/fix42/exposure/parent]./CumQty - [view/fix42/exposure/child]./CumQty AS /CumQtyDelta</Field>
+                <Field>[view/fix42/exposure/parent]./LeavesQty AS /ParentLeavesQty</Field>
+                <Field>[view/fix42/exposure/child]./LeavesQty AS /ChildLeavesQty</Field>
+                <Field>[view/fix42/exposure/parent]./LeavesQty - [view/fix42/exposure/child]./LeavesQty AS /LeavesQtyDelta</Field>
+            </Projection>
+            <Grouping>
+                <Field>[view/fix42/exposure/parent]./Account</Field>
+                <Field>[view/fix42/exposure/parent]./Symbol</Field>
+                <Field>[view/fix42/exposure/parent]./Side</Field>
+            </Grouping>
+        </View>
+
+    </SOW>
+
+    <!--
+      Every topic the publisher writes, journalled: the audit topics because
+      they are the system of record and the replay source, and the blotter,
+      execs and the two catch-all topics because the publisher's store is
+      drained only by persisted acknowledgements, which AMPS gives a publish
+      to a journalled topic alone.
+    -->
+    <TransactionLog>
+        <JournalDirectory>./journal</JournalDirectory>
+        <PreallocatedJournalFiles>2</PreallocatedJournalFiles>
+        <MinJournalSize>10MB</MinJournalSize>
+
+        <Topic>
+            <Name>sow/fix42/order_state</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>sow/fix42/orders_audit</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>sow/fix42/execs_audit</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>sow/fix42/rejects</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>sow/fix42/execs</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>fix42/unrouted</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+        <Topic>
+            <Name>fix42/malformed</Name>
+            <MessageType>fix</MessageType>
+        </Topic>
+    </TransactionLog>
+
+</AMPSConfig>

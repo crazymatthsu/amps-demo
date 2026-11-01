@@ -103,8 +103,8 @@ What the SPI is for, by example:
 | --- | --- |
 | a venue that reports a replace as cancel-then-new, and should not read as canceled even for one message | `beforeApply` on a `150=4` whose 11 is the working id while a REPLACE is pending: `ignore("replace cancel leg")` |
 | a venue that answers a TIF-only amend with `150=D` | `beforeApply`: `proceedWith` the frame with `150=5` |
-| a venue whose `35=9` semantics match none of the three policies | `beforeApply` on `35=9`: rewrite or remove tag 39 |
-| a desk-specific status (`WORKING`, `CLOSED`, `BROKEN`) derived from 39 and the pending set | `afterApply`: write it to 9100 |
+| a venue whose `35=9` semantics match none of the three policies | `beforeApply` on `35=9`: rewrite or remove tag 39. One ships: `RejectStatusAtRequestTimeHook`, for rejects that carry the request-time `39=6`/`E` after a pending ack ([11 F2](11-build-findings.md#f2--a-pending-acknowledgements-39-outlives-the-request-it-acknowledged)) |
+| a desk-specific status (`WORKING`, `CLOSED`, `BROKEN`) derived from 39 and the pending set | `afterApply`: write it to 9100. One ships: `DeskStatusHook` |
 | mark an order whose reports are inconsistent (`38 ≠ 14 + 151`) | `afterApply`: write 9101=`Y` when the machine's `inconsistentReports` moved |
 | ignore a test-flow account entirely | `beforeApply`: `ignore("test account")` on `1 = 'TEST'` |
 | alert on a late execution or a venue-asserted reopen | `afterApply`: if 9026 moved, or `reopenedByVenue` did, call out |
