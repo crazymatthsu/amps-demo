@@ -165,8 +165,10 @@ public final class EdgeCaseFlow {
                         chain("E17a", d.pendingAcksEchoWorkingId(true), 1_000, 50.0)
                                 .newOrder().ack().amend(1_200, 50.10).pendingReplace()
                                 .deliverLastTwoSwapped().amendAck())),
+                // The case IS a reject that carries 39=4: a dialect that stamps
+                // every reject with its request-time status would not send it.
                 of("E18", "a 35=9 carrying 39=4 when the 150=4 was never seen", d -> {
-                    OrderChain c = chain("E18", d, 1_000, 50.0).newOrder().ack().partialFill(300, 50.0);
+                    OrderChain c = chain("E18", d.rejectStatusAtRequestTime(null), 1_000, 50.0).newOrder().ack().partialFill(300, 50.0);
                     return one(c.cancelRequest().cancelRequestNaming(c.rootClOrdId())
                             .cancelConfirmed(id(c, 2)).dropLast()
                             .cancelRejectFor(id(c, 3), "0", "already canceled"));
@@ -230,16 +232,21 @@ public final class EdgeCaseFlow {
                         .withoutNewOrder().ack().partialFill(100, 10.0).lateNewOrder())),
                 of("E42", "a resent D", d -> one(chain("E42", d, 1_000, 50.0)
                         .newOrder().ack().resendNewOrder().partialFill(300, 50.0))),
+                // Resolves by 37 because 37 is stable: a venue that rotates it
+                // across the missed replaces leaves nothing to resolve by.
                 of("E43", "two replaces missed; the confirm resolves by 37", d -> one(
-                        chain("E43", d, 1_000, 50.0).newOrder().ack()
+                        chain("E43", d.rotateOrderIdOnReplace(false), 1_000, 50.0).newOrder().ack()
                                 .amend(1_100, 50.05).dropLast().amendAck().dropLast()
                                 .amend(1_200, 50.10).dropLast().amendAck().partialFill(100, 50.10))),
                 of("E44", "the venue rotates OrderID across replaces", d -> one(
                         chain("E44", d.rotateOrderIdOnReplace(true), 1_000, 50.0).newOrder().ack()
                                 .amend(1_200, 50.10).amendAck().partialFill(300, 50.10))),
+                // Two orders, two OrderIDs: under orderIdEqualsClOrdId A's
+                // OrderID would be B's too, which no venue issues.
                 of("E57", "an OrderID equal to another order's ClOrdID", d -> List.of(
-                        chain("E57A", d, 100, 50.0).withRootClOrdId("123456").newOrder().ack(),
-                        chain("E57B", d, 500, 50.0).withOrderId("123456").withoutNewOrder().ack()
+                        chain("E57A", d.orderIdEqualsClOrdId(false), 100, 50.0).withRootClOrdId("123456")
+                                .newOrder().ack(),
+                        chain("E57B", d.orderIdEqualsClOrdId(false), 500, 50.0).withOrderId("123456").withoutNewOrder().ack()
                                 .partialFill(100, 50.0))),
                 of("E58", "a G whose 37 names another order; a D carrying 41", d -> {
                     OrderChain other = chain("E58B", d, 100, 50.0).newOrder().ack();

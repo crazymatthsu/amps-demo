@@ -4,8 +4,10 @@
 are in [`docs/`](docs/README.md); read that first. Built so far, per
 [docs/05](docs/05-implementation-plan.md): phase 0 (the module, its own copy of
 the FIX layer and the mock venue, pinned to `fix42-publisher`'s scripted flow)
-and phase 1 (a mock venue with several requests in flight, fourteen dialect
-variants, and `EdgeCaseFlow`: the docs/06 rows as scripts).
+phase 1 (a mock venue with several requests in flight, fourteen dialect
+variants, and `EdgeCaseFlow`: the docs/06 rows as scripts) and phase 2 (the
+state machine, `RecordWriter`/`RecordReader`, and a test per walkthrough and
+per matrix row). What building it found is [docs/11](docs/11-build-findings.md).
 
 The stateful successor to [`fix42-publisher`](../fix42-publisher/README.md).
 Same FIX 4.2 drop-copy flow, same audit topics, same full publish on `35=D`
@@ -39,3 +41,4 @@ AMPS_FLOW=fix42-order-state ./server/scripts/amps.sh start
 | [docs/08](docs/08-review-findings.md) | round-1 review findings, the six decisions taken on them, where each landed |
 | [docs/09](docs/09-review-round-2.md) | round-2 review of the revised docs: round-1 dispositions verified, twenty-two new findings and where each landed |
 | [docs/10](docs/10-case-frequency-and-priority.md) | every case sorted by frequency (normal, sometimes, rare) and build slot, for implementation order |
+| [docs/11](docs/11-build-findings.md) | what the build found: three findings on the rules, and the verify-on-build answers |
