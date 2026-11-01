@@ -62,7 +62,7 @@ fix42-order-state:
     # Order-term tags adopted from a 150=0/5/D report when present.
     order-term-tags: [18, 40, 44, 59, 99, 100, 110, 111, 126]
     # Session header/trailer tags never copied onto the record; the machine's
-    # own ranges 12000-12099, 13000-13999 and 15000-15999 are always removed.
+    # internal ranges 12000-12999, 13000-13999 and 15000-15999 are always removed.
     strip-tags: [8, 9, 10, 34, 43, 49, 50, 52, 56, 57, 97, 115, 116, 122, 128, 129]
     # How many ClOrdIDs 12021 carries; 12030 has the count. docs/02 §4.
     chain-ids-published: 50

@@ -461,15 +461,16 @@ class CoverageMatrixTest {
     }
 
     @Test
-    @DisplayName("E60 a D's header tags and tags in the machine's ranges are stripped and counted; 9xxx passes")
+    @DisplayName("E60 a D's header tags and tags in the internal ranges are stripped and counted; 9xxx passes")
     void e60() {
         MachineTester m = new MachineTester();
         m.send("D 8=FIX.4.2 9=120 34=17 49=OMS 56=VENUE 52=20261031-10:00:00 11=E60 38=100 44=10 55=SYM "
                 + "12015=NONE 12050=venue 9050=desk 9000=PARENT 13011=BOGUS 15038=1 12100=hook 10=123 60=" + t(0));
-        // 9001-9999 is the deployment's since the machine moved to 12000-12099: it passes through.
+        // 9001-9999 is the upstream system's since the publisher moved to 12000-12999: it passes
+        // through. Anything upstream in 12000-12999, the hooks' 12100 included, does not.
         m.expect("E60", "13011=E60 12015=NEW:R:::E60 15038=0 9000=PARENT 55=SYM 12050=- 9050=desk 8=- 9=- 34=- "
-                + "49=- 56=- 52=- 10=- 12100=hook");
-        assertThat(m.count(Counter.STRIPPED_TAGS)).isEqualTo(11);
+                + "49=- 56=- 52=- 10=- 12100=-");
+        assertThat(m.count(Counter.STRIPPED_TAGS)).isEqualTo(12);
     }
 
     @Test

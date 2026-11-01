@@ -79,7 +79,7 @@ has to be able to speak more than one.
   `lateNewOrder()`, `pendingAckBeforeRequest()`, `newOrderLinkedTo(id)` (a D
   carrying 41), `amendNamingAnotherOrder(id)` (a G whose 37 and 41 disagree),
   `amendToMarket()` (`40=1`, no 44, `110=0`), `redeliverBust(ordinal)`, ids
-  containing `:`, `;`, `,` and `%`, a D carrying tags in 12000–12099, 13xxx or 15xxx and FIX
+  containing `:`, `;`, `,` and `%`, a D carrying tags in 12000–12999, 13xxx or 15xxx and FIX
   header tags, `thousandAmends()`, and a second chain whose OrderID equals the
   first chain's root ClOrdID;
 - `EdgeCaseFlow` in the new module: one chain per walkthrough in
@@ -368,7 +368,7 @@ building after phase 4's measurements.
 | the mock venue's dialect switches disturb the scripted flow | the pin test from phase 0; the default dialect is the one the chain already spoke |
 | the two copies of the FIX layer and the mock venue drift apart | by design they are allowed to; the pin test guards the scripted flow; a fix found in one `FixFrame` is ported by hand |
 | a venue dialect matches none of the policies | the policy enums are behind one switch each, and a `beforeApply` hook can normalise the message; 12025/12016/counters make the symptom visible first |
-| a venue uses tags in 12000–12099, 13xxx or 15xxx or 13011 for its own purposes | stripped from the D's FULL publish and counted; the audit key tag is configurable and skipped when present |
+| a venue uses tags in 12000–12999, 13xxx or 15xxx or 13011 for its own purposes | stripped from the D's FULL publish and counted; the audit key tag is configurable and skipped when present |
 
 ## Follow-ups, deliberately out of scope
 

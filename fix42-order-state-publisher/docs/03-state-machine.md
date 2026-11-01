@@ -254,7 +254,7 @@ late guards treat an absent 14 as equal.
 FULL publish, the late-D delta, a `MIDSTREAM` creation from a report — omits
 the FIX session header and trailer (`strip-tags`, default 8, 9, 10, 34, 43,
 49, 50, 52, 56, 57, 97, 115, 116, 122, 128, 129) and **every tag in the
-machine's own ranges** — 12000–12099, 13000–13999 and 15000–15999 —
+publisher's internal ranges** — 12000–12999 (the machine's and the hooks'), 13000–13999 and 15000–15999 —
 that the message carries, because a venue or OMS custom tag there would
 overwrite state (R20e, S18). 9000 is
 kept. The audit publishes strip nothing. `strippedTags` counts.

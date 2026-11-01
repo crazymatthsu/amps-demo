@@ -274,8 +274,12 @@ The record's tags sit in FIX's internal-use block, 10000–19999:
   set and 12017 for the terminal flag.
 - **12100–12999:** the hooks'.
 
-The user-defined 9xxx range is yours: a 9xxx tag on a message passes through
-to the record. ParentOrderID stays at 9000. Records written before schema 2
+The user-defined 9xxx range belongs to the upstream drop-copy system. A 9xxx
+tag on the message that creates an order (normally the D) passes through to
+the record; on later messages it stays on the audit topics, since those copy
+only their order-term tags onto the record. ParentOrderID stays at 9000. An
+upstream tag anywhere in 12000–12999, 13xxx or 15xxx is stripped, so nothing
+from upstream lands in the publisher's range. Records written before schema 2
 used 9xxx bookkeeping tags and refuse to load; see
 [docs/11 §6](docs/11-build-findings.md) for the cutover.
 

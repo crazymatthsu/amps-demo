@@ -164,6 +164,19 @@ class OrderStatePublisherTest {
     }
 
     @Test
+    @DisplayName("an upstream tag in the hooks' range is stripped, so a hook's 12100 is the only one on the record")
+    void upstreamTagInTheHooksRangeIsStripped() throws Exception {
+        OrderStatePublisher publisher = publisher("demo", new DeskStatusHook());
+        send(publisher, "35=D|11=X|38=100|44=10|12100=UPSTREAM|12500=OTHER|9100=DESK|60=20261031-10:00:00.000|");
+        FixMessage blotter = sink.sent.getFirst().message();
+        assertThat(blotter.value(12100)).as("the hook's desk status, not the upstream value").isEqualTo("NEW");
+        assertThat(blotter.has(12500)).as("nothing upstream lands in 12000-12999").isFalse();
+        assertThat(blotter.value(9100)).as("the upstream system's 9xxx passes through").isEqualTo("DESK");
+        assertThat(sink.last().topic()).isEqualTo("sow/fix42/orders_audit");
+        assertThat(sink.last().message().value(12100)).as("the audit copy is the message whole").isEqualTo("UPSTREAM");
+    }
+
+    @Test
     @DisplayName("hooks: a veto is IGNORED(HOOK); a normalised frame feeds the machine, the audit gets the original")
     void vetoAndNormalise() throws Exception {
         OrderStateHook hook = new OrderStateHook() {

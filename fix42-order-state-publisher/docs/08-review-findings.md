@@ -420,14 +420,14 @@ Sequences:
   views imply a per-message copy, absent from the phase 5 budget, and the
   `onIgnored → publish` example does I/O on the thread 07 says must not
   block; (e) **the D's FULL publish ("the whole message less 35") carries
-  any venue custom tags in 12000–12099 — including 12014–12026, and the pending tags — onto the
+  any venue custom tags in 12000–12999 — including 12014–12026, and the pending tags — onto the
   record, overwriting machine state at creation**, and framing tags (8, 9,
   10, 34, 49, 52, 56) land on the record for ever.
 - **Disposition**: hook failure is fail-fast with the message held
   (deterministic on replay); `resolveKey(FixFrame, IndexView)` or a
   `KeyDecorator`; the audit topics always receive the original frame; the
   view copies are budgeted in phase 5; the FULL publish strips 8, 9, 10, 34,
-  49, 52, 56 and every tag in 12000–12099, 13xxx or 15xxx that the machine owns, counting
+  49, 52, 56 and every tag in 12000–12999, 13xxx or 15xxx that the publisher owns, counting
   `strippedTags`.
 
 ### R21 — `37=NONE` on rejects, rotated OrderIDs, absent 17 — Low/Medium — **accept, rule**
@@ -536,7 +536,7 @@ id (R8); the cancel+new replace (R2); `150=8` naming a pending REPLACE with
 carrying `39=4` and one carrying `39=6` (R6); `20=3` reports with `17=0` and
 echoing a pending id (R18); `150=8` with `37=NONE` (R21); a G changing 40/110
 with no 44 (R14); ids containing `:`, `;`, `,` (R11); a D carrying 41, and a
-G whose 37 and 41 name different orders (R10); a venue tag in 12000–12099, 13xxx or 15xxx and
+G whose 37 and 41 name different orders (R10); a venue tag in 12000–12999, 13xxx or 15xxx and
 framing tags on a D (R20); a bust of the *last* fill (R15); a thousand-amend
 algo child (R19).
 

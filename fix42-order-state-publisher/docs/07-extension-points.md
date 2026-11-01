@@ -24,7 +24,7 @@ venue-dialect knobs:
 | `transact-time-guard` | `true` (default), `false` | drop a non-reopening report with equal CumQty and an older TransactTime |
 | `exec-id-history` | integer, default 8 | depth of the per-order ExecID ring |
 | `order-term-tags` | a tag list | which order terms a `150=0/5/D` report refreshes |
-| `strip-tags` | a tag list | the session header and trailer tags removed from every payload the machine builds; 12000–12099, 13xxx or 15xxx are always removed |
+| `strip-tags` | a tag list | the session header and trailer tags removed from every payload the machine builds; 12000–12999, 13xxx or 15xxx are always removed |
 | `chain-ids-published` | integer, default 50 | how many ClOrdIDs 12021 carries |
 | `terminal-retention` | duration, default never | when a terminal order leaves the cache |
 

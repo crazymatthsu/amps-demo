@@ -17,10 +17,12 @@ import java.util.Set;
  * remove one.
  *
  * <p>The pass-through never copies the session header and trailer
- * ({@code strip-tags}), any tag in the machine's own ranges (12000-12099,
- * 13000-13999, 15000-15999), or a tag the machine writes itself, so a venue
- * or OMS custom tag cannot overwrite state (R20e, S18). The 9xxx range,
- * ParentOrderID 9000 included, is the deployment's and passes through.
+ * ({@code strip-tags}), any tag in the publisher's internal ranges
+ * (12000-12999 -- the machine's and the hooks' -- 13000-13999, 15000-15999),
+ * or a tag the machine writes itself, so an upstream custom tag can neither
+ * overwrite state nor collide with a hook's field (R20e, S18). The 9xxx
+ * range, ParentOrderID 9000 included, is the upstream system's and passes
+ * through.
  */
 public final class RecordWriter {
 
@@ -78,12 +80,16 @@ public final class RecordWriter {
 
     /** Whether the machine never copies {@code tag} from a message onto the record. */
     static boolean stripped(int tag, MachineOptions options) {
-        return options.stripTags().contains(tag) || inMachineRange(tag);
+        return options.stripTags().contains(tag) || inInternalRange(tag);
     }
 
-    /** 12000-12099, 13000-13999, 15000-15999: the machine's own. */
-    public static boolean inMachineRange(int tag) {
-        return (tag >= FixTags.Record.MACHINE_TAG_MIN && tag <= FixTags.Record.MACHINE_TAG_MAX)
+    /**
+     * 12000-12999, 13000-13999, 15000-15999: the publisher's internal tags,
+     * which no upstream message may put on the record. 12000-12099 is the
+     * machine's, 12100-12999 the hooks' ({@code RecordFields}).
+     */
+    public static boolean inInternalRange(int tag) {
+        return (tag >= FixTags.Record.MACHINE_TAG_MIN && tag <= FixTags.Record.HOOK_TAG_MAX)
                 || (tag >= 13000 && tag <= 13999)
                 || (tag >= 15000 && tag <= 15999);
     }

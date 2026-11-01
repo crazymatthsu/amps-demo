@@ -168,7 +168,7 @@ public final class FixTags {
         /** On {@code fix42/malformed} only: why they did not parse. */
         public static final int MALFORMED_REASON = 12033;
 
-        /** The machine's bookkeeping range: stripped from every pass-through, refused to hooks. */
+        /** The machine's bookkeeping range, refused to hooks; with the hooks' range, stripped from every pass-through. */
         public static final int MACHINE_TAG_MIN = 12000;
         public static final int MACHINE_TAG_MAX = 12099;
 

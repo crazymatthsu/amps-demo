@@ -453,7 +453,8 @@ the 15xxx pending values. Every number moved by 3,000:
 | --- | --- | --- |
 | the machine's bookkeeping: working id, pending set and count, terminal flag, origin, key kind, chain list, counters, schema version, report time | 9014–9031 | 12014–12031 |
 | `fix42/malformed`'s wrapped bytes and reason | 9032, 9033 | 12032, 12033 |
-| the range the pass-through strips and hooks may not write | 9001–9099 | 12000–12099 |
+| the range hooks may not write: the machine's own | 9001–9099 | 12000–12099 |
+| the range the pass-through strips from upstream messages | 9001–9099 | 12000–12999, the hooks' range included |
 | the hooks' range | 9100–9999 | 12100–12999 |
 | `DeskStatusHook`'s desk status | 9100 | 12100 |
 | the schema version's value | 1 | 2 |
@@ -466,9 +467,17 @@ the 15xxx pending values. Every number moved by 3,000:
 
 **What it changes:**
 - **9xxx tags reach the record.** A 9001–9999 tag on a message is now an
-  ordinary descriptive field, copied onto the record like 55 or 1. The
-  pass-through no longer strips it. `CoverageMatrixTest.e60` pins this:
-  12050 is stripped and 9050 passes.
+  ordinary descriptive field, copied onto the record like 55 or 1, on the
+  message that creates the order (normally the D; later messages copy only
+  their order-term tags, and every message stays whole on its audit topic).
+  The pass-through no longer strips it. `CoverageMatrixTest.e60` pins this:
+  12050 and 12100 are stripped, 9050 passes.
+- **12xxx is the publisher's alone.** An upstream tag anywhere in
+  12000–12999 is stripped, the hooks' 12100–12999 included. Before, an
+  upstream 9100–9999 tag passed through and could collide with a hook's
+  field. `OrderStatePublisherTest.upstreamTagInTheHooksRangeIsStripped` pins
+  it: an upstream 12100 never reaches the record, the desk-status hook's 12100
+  does, and the audit copy keeps the upstream value.
 - **Readers must switch tags.** Anything that queries the blotter by a
   bookkeeping tag moves: `/9017 = 'Y'` becomes `/12017 = 'Y'`, `/9016 > 0`
   becomes `/12016 > 0`, and so on. A hook writes in 12100–12999.
