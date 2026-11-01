@@ -1,9 +1,11 @@
 # fix42-order-state-publisher
 
 **Being built, phase by phase.** The architecture and the implementation plan
-are in [`docs/`](docs/README.md); read that first. Built so far: phase 0 of
-[docs/05](docs/05-implementation-plan.md) — the module, and its own copy of
-the FIX layer and the mock venue, pinned to `fix42-publisher`'s scripted flow.
+are in [`docs/`](docs/README.md); read that first. Built so far, per
+[docs/05](docs/05-implementation-plan.md): phase 0 (the module, its own copy of
+the FIX layer and the mock venue, pinned to `fix42-publisher`'s scripted flow)
+and phase 1 (a mock venue with several requests in flight, fourteen dialect
+variants, and `EdgeCaseFlow`: the docs/06 rows as scripts).
 
 The stateful successor to [`fix42-publisher`](../fix42-publisher/README.md).
 Same FIX 4.2 drop-copy flow, same audit topics, same full publish on `35=D`
