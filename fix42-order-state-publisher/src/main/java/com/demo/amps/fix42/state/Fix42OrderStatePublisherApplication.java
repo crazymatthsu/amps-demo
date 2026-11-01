@@ -3,6 +3,7 @@ package com.demo.amps.fix42.state;
 import com.crankuptheamps.client.HAClient;
 import com.demo.amps.fix42.state.config.OrderStateProperties;
 import com.demo.amps.fix42.state.hooks.DeskStatusHook;
+import com.demo.amps.fix42.state.hooks.RejectStatusAtRequestTimeHook;
 import com.demo.amps.fix42.state.machine.OrderStateMachine;
 import com.demo.amps.fix42.state.machine.RecordWriter;
 import com.demo.amps.fix42.state.publish.AmpsPublishSink;
@@ -78,6 +79,13 @@ public class Fix42OrderStatePublisherApplication {
     @ConditionalOnProperty(name = "fix42-order-state.hooks.desk-status", havingValue = "true")
     public DeskStatusHook deskStatusHook() {
         return new DeskStatusHook();
+    }
+
+    /** For a venue whose rejects carry the request-time status (docs/11 F2); off unless asked for. */
+    @Bean
+    @ConditionalOnProperty(name = "fix42-order-state.hooks.reject-status-at-request-time", havingValue = "true")
+    public RejectStatusAtRequestTimeHook rejectStatusAtRequestTimeHook() {
+        return new RejectStatusAtRequestTimeHook();
     }
 
     /**

@@ -10,6 +10,7 @@ import com.demo.amps.fix42.state.fix.FixMessage;
 import com.demo.amps.fix42.state.fix.FixTags;
 import com.demo.amps.fix42.state.fix.FixWriter;
 import com.demo.amps.fix42.state.hooks.DeskStatusHook;
+import com.demo.amps.fix42.state.hooks.RejectStatusAtRequestTimeHook;
 import com.demo.amps.fix42.state.it.OrderStateConfigurations;
 import com.demo.amps.fix42.state.machine.OrderStateMachine;
 import com.demo.amps.fix42.state.machine.Outcome;
@@ -189,6 +190,26 @@ class OrderStatePublisherTest {
                 + "|60=20261031-10:00:03.000|");
         assertThat(vetoed.reason()).isEqualTo(IgnoreReason.HOOK);
         assertThat(publisher.machine().state("X").cumQty()).isEqualTo("0");
+    }
+
+    @Test
+    @DisplayName("docs/11 F2: the request-time reject hook feeds the machine 39=1; the rejects topic keeps 39=6")
+    void requestTimeRejectHook() throws Exception {
+        OrderStatePublisher publisher = publisher("demo", new RejectStatusAtRequestTimeHook());
+        send(publisher, "35=D|11=X|38=100|44=10|60=20261031-10:00:00.000|");
+        send(publisher, "35=8|150=0|39=0|11=X|37=O|17=E-1|14=0|151=100|6=0|60=20261031-10:00:01.000|");
+        send(publisher, "35=8|150=1|39=1|11=X|37=O|17=E-2|14=40|151=60|6=10|32=40|31=10|60=20261031-10:00:02.000|");
+        send(publisher, "35=F|11=X-2|41=X|60=20261031-10:00:03.000|");
+        send(publisher, "35=8|150=6|39=6|11=X-2|41=X|37=O|17=E-3|14=40|151=60|6=10|60=20261031-10:00:04.000|");
+        int before = sink.sent.size();
+        send(publisher, "35=9|11=X-2|41=X|37=O|434=1|39=6|60=20261031-10:00:05.000|");
+        assertThat(sink.sent).hasSize(before + 2);
+        assertThat(sink.sent.get(before).topic()).isEqualTo("sow/fix42/order_state");
+        assertThat(sink.sent.get(before).message().value(FixTags.ORD_STATUS)).isEqualTo("1");
+        assertThat(sink.last().topic()).isEqualTo("sow/fix42/rejects");
+        assertThat(sink.last().message().value(FixTags.ORD_STATUS)).as("the audit copy is the original").isEqualTo("6");
+        assertThat(publisher.machine().state("X").venueStatus()).isEqualTo("1");
+        assertThat(publisher.machine().state("X").pending()).isEmpty();
     }
 
     @Test

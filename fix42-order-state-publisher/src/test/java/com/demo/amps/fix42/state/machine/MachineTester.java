@@ -4,7 +4,11 @@ import com.demo.amps.fix42.state.fix.FixFrame;
 import com.demo.amps.fix42.state.fix.FixMessage;
 import com.demo.amps.fix42.state.fix.FixTags;
 import com.demo.amps.fix42.state.fix.FixWriter;
+import com.demo.amps.fix42.state.spi.Decision;
+import com.demo.amps.fix42.state.spi.OrderStateHook;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -28,6 +32,7 @@ final class MachineTester {
     private final FixWriter out = new FixWriter(512);
     private final FixFrame frame = new FixFrame();
     private final Map<String, Map<Integer, String>> sow = new LinkedHashMap<>();
+    private final List<OrderStateHook> hooks = new ArrayList<>();
     private FixMessage lastWire;
     private Outcome last;
 
@@ -40,6 +45,16 @@ final class MachineTester {
         this.writer = new RecordWriter(options);
     }
 
+    /**
+     * Runs {@code hook}'s {@code beforeApply} on every later message, before
+     * the plan, the way the publisher does (docs/07 §2); a normalised frame is
+     * what the machine plans and the writer passes through.
+     */
+    MachineTester withHook(OrderStateHook hook) {
+        hooks.add(hook);
+        return this;
+    }
+
     /** Plans, publishes and commits one message. */
     Outcome send(String spec) {
         return send(parse(spec));
@@ -49,9 +64,25 @@ final class MachineTester {
         source.clear();
         message.writeTo(source);
         frame.wrap(source);
-        last = machine.plan(frame);
+        FixFrame applied = frame;
+        boolean vetoed = false;
+        if (!hooks.isEmpty()) {
+            String key = machine.resolveKey(frame);
+            OrderState before = key == null ? null : machine.state(key);
+            for (OrderStateHook hook : hooks) {
+                Decision decision = hook.beforeApply(applied, before);
+                if (decision.ignored()) {
+                    vetoed = true;
+                    break;
+                }
+                if (decision.replacement() != null) {
+                    applied = decision.replacement();
+                }
+            }
+        }
+        last = vetoed ? machine.planVeto(frame, null) : machine.plan(applied);
         out.clear();
-        if (writer.write(last, frame, out)) {
+        if (writer.write(last, applied, out)) {
             lastWire = FixMessage.parse(out.asString());
             Map<Integer, String> record = sow.computeIfAbsent(last.key(), k -> new LinkedHashMap<>());
             if (last.publish() == Outcome.Publish.FULL) {

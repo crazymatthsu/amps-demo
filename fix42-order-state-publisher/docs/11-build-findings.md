@@ -71,11 +71,37 @@ requests in flight trivial. Options:
 | derive on the reject | when a reject removes the last request of the kind the record's pending 39 stands for, and its own 39 is not adopted, set 39 from the cumulative state: `0` if `14 = 0`, else `1` | the machine computes a status, which [03 §8](03-state-machine.md#8-what-the-machine-does-not-do) says it does not |
 | a `beforeApply` hook | the deployment that connects to such a venue rewrites the 9's 39 to the derived value ([07 §2](07-extension-points.md#2-tier-two-hooks)) | per venue |
 
-**Disposition: open, for the design owner.** Recommendation: the hook, since
-it is one venue convention and the hook SPI exists for exactly this; the
-derivation is the fallback if more than one venue does it. Pinned as a known
-divergence in `EdgeCaseFlowPropertyTest` (`KNOWN`), so a fix fails the entry
-and it is removed on purpose.
+**Disposition: the hook, built.** It is one venue convention, and the hook SPI
+exists for exactly this; deriving the status in the machine stays the fallback
+if more than one venue turns out to do it. `RejectStatusAtRequestTimeHook`
+ships with the module, off unless
+`fix42-order-state.hooks.reject-status-at-request-time: true`. Its
+`beforeApply` rewrites a `35=9`'s 39 to `0` (no fill) or `1` only in the shape
+above:
+- the 9's 39 is a pending status, `6` or `E`;
+- the record reads that same status;
+- no request of that kind is left once the one the 9 names by 11 is gone;
+- the order is not terminal.
+
+Every other reject reaches the machine as sent, and `sow/fix42/rejects` keeps
+the venue's 39 (R20c). It needs a `cancel-reject-status` that adopts a reject's
+39, so it does nothing under `NEVER`.
+
+The machine alone still does what the table's first row says. That stays pinned
+as a known divergence in `EdgeCaseFlowPropertyTest` (`KNOWN`), so a change to
+the machine fails the entry on purpose. The same test runs every dialect again
+with the hook on: under `reject-status-at-request-time-6` the F2 entries are
+gone, and nothing moves under any other dialect.
+
+Pinned by:
+- `RejectStatusAtRequestTimeHookTest`: a partly filled order, one with no fill,
+  a rejected replace, a second cancel still in flight, a record reading `E`, and
+  the shapes left alone;
+- `OrderStatePublisherTest.requestTimeRejectHook`;
+- `RequestTimeRejectIT`: E15 and E31 on AMPS, without and with the hook.
+
+A rebuild by replay (`recovery: JOURNAL`, not built) must run with the same
+hook on. The audit topics hold the venue's 39, not the rewritten one.
 
 ### F3 — Whole-second TransactTime keeps a same-second re-ack out
 

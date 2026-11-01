@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.demo.amps.fix42.state.fix.FixMessage;
 import com.demo.amps.fix42.state.fix.FixTags;
 import com.demo.amps.fix42.state.fix.Prices;
+import com.demo.amps.fix42.state.hooks.RejectStatusAtRequestTimeHook;
 import com.demo.amps.fix42.state.mock.EdgeCaseFlow;
 import com.demo.amps.fix42.state.mock.FixEvent;
 import com.demo.amps.fix42.state.mock.MockDialect;
@@ -36,9 +37,30 @@ class EdgeCaseFlowPropertyTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("dialects")
     void everyChainEndsWhereTheVenueSaysItIs(MockDialect.Named dialect) {
+        assertThat(divergences(dialect, new MachineTester()))
+                .as("chains whose record disagrees with the venue under %s", dialect)
+                .containsExactlyInAnyOrderElementsOf(KNOWN.getOrDefault(dialect.name(), List.of()));
+    }
+
+    /**
+     * docs/11 F2's fix, a hook for the venue that needs it: with it on, the F2
+     * entries are gone under that venue's dialect, and no other dialect --
+     * whose rejects carry the status after the reject -- moves at all.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("dialects")
+    void theRequestTimeRejectHookClosesF2AndMovesNothingElse(MockDialect.Named dialect) {
+        List<String> expected = new ArrayList<>(KNOWN.getOrDefault(dialect.name(), List.of()));
+        expected.removeAll(KNOWN.getOrDefault(F2_DIALECT, List.of()));
+        assertThat(divergences(dialect, new MachineTester().withHook(new RejectStatusAtRequestTimeHook())))
+                .as("chains whose record disagrees with the venue under %s, with the hook", dialect)
+                .containsExactlyInAnyOrderElementsOf(expected);
+    }
+
+    /** Every chain of the scripted flow and the edge cases under {@code dialect}, through ONE machine. */
+    private static List<String> divergences(MockDialect.Named dialect, MachineTester m) {
         List<OrderChain> chains = new ArrayList<>(MockFixFlow.chains());
         chains.addAll(EdgeCaseFlow.chains(dialect.dialect()));
-        MachineTester m = new MachineTester();
         for (OrderChain chain : chains) {
             for (FixEvent event : chain.events()) {
                 m.send(event.message());
@@ -63,24 +85,25 @@ class EdgeCaseFlowPropertyTest {
                     .as("%s: the cache agrees with the merged record", chain)
                     .isEqualTo(record.value(FixTags.CUM_QTY));
         }
-        assertThat(wrong)
-                .as("chains whose record disagrees with the venue under %s", dialect)
-                .containsExactlyInAnyOrderElementsOf(KNOWN.getOrDefault(dialect.name(), List.of()));
         // E58's G names another order's 37: the one conflict the flow scripts.
         assertThat(m.machine.counters().get(Counter.ID_CONFLICTS)).isEqualTo(1);
+        return wrong;
     }
+
+    private static final String F2_DIALECT = "reject-status-at-request-time-6";
 
     /**
      * Divergences the design accepts, each a finding of the build
      * (docs/11 F2, F3). Listed exactly, so a new one fails and a fix flags
-     * the entry as stale.
+     * the entry as stale. F2's entries are what the machine does on its own;
+     * the venue that sends such rejects runs {@link RejectStatusAtRequestTimeHook}.
      */
     private static final java.util.Map<String, List<String>> KNOWN = java.util.Map.of(
             // F2: a 150=6 set 39=6; the venue then rejects the cancel with its
             // request-time 39=6, which WHEN_NOT_TERMINAL rightly refuses -- and
             // nothing else restores the record's own 39, so it reads pending
             // cancel with nothing pending until the next report.
-            "reject-status-at-request-time-6", List.of(
+            F2_DIALECT, List.of(
                     "EC-E15 39=6 (venue: 1)",
                     "EC-E31 39=6 (venue: 1)"),
             // F3: the re-ack is 250ms after the erroneous cancel, the same

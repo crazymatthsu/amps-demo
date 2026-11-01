@@ -12,7 +12,9 @@ per matrix row) and phase 3 (the `fix42-order-state` server flow, an
 and integration suites against a real AMPS) and most of phase 4 (the cache
 rebuilt from the SOW at startup, the cache-miss lookups through the audit
 topics, eviction with tombstones). What building it found is
-[docs/11](docs/11-build-findings.md); what is left is at its end.
+[docs/11](docs/11-build-findings.md); what is left is at its end. Its F2 is
+closed for the venue that causes it by a shipped hook, switched on with
+`fix42-order-state.hooks.reject-status-at-request-time: true`.
 
 The stateful successor to [`fix42-publisher`](../fix42-publisher/README.md).
 Same FIX 4.2 drop-copy flow, same audit topics, same full publish on `35=D`

@@ -308,7 +308,7 @@ fix42-order-state-publisher/
               CancelRejectStatusPolicy  LateFillPolicy  NonFillAfterTerminalPolicy  FillUnderPendingIdPolicy
     machine/  OrderKeyIndex  OrderState  PendingRequest  OrderStateMachine  Outcome  RecordWriter
     spi/      OrderStateHook  OrderStateView  IndexView  Decision  RecordFields  IgnoreReason  FeedAdapter
-    hooks/    DeskStatusHook (the shipped example)
+    hooks/    DeskStatusHook (the shipped example)  RejectStatusAtRequestTimeHook (docs/11 F2)
     publish/  AuditRouter  OrderStatePublisher
     recovery/ SowCacheLoader  MissResolver  (JournalReplayer, later)
     feed/     QuickFixJFeedAdapter                                 phase 4

@@ -134,6 +134,15 @@ fix42-order-state:
       topics: ["fix42/unrouted"]
       apply-state: false
 
+  # The hooks shipped with the module (docs/07 §2), each off unless asked for.
+  hooks:
+    # A desk-level status in 9100, one word per order.
+    desk-status: false
+    # For a venue whose 35=9 carries the status at request time: a rejected
+    # cancel (replace) that a 150=6 (150=E) acknowledged reads 0 or 1 again,
+    # not 6 (E) with nothing pending. docs/11 F2.
+    reject-status-at-request-time: false
+
 ---
 # The demo: bootRun and the integration suites. A publish store on the heap
 # (nothing to clean up between runs) and strict mode (a missing rule fails the
