@@ -292,7 +292,61 @@ misses and a later OrderID would hit. Pinned by
 | E47/E48 `terminal-retention`, then a late bust and a late cancel | both find the record again, the cancel through `orders_audit` by its 41 | `TombstoneIT.eviction` |
 | E62 a record missing 9026; a record of schema 2 | loads with the default and counts `recoveredWithDefaults`; refuses the start | `TombstoneIT.schema` |
 
-Not built in phase 4, and listed for the next session: the QuickFIX/J
-`FeedAdapter` and the measured loss bound of a `MEMORY` store; the daily reset
-as a script (its `sow_delete` is pinned durable by `RestartIT`); `StoreCrashIT`
-for a `FILE` store; `recovery: JOURNAL`.
+## 4. Measurements (phase 5)
+
+The README's "What it costs" has the numbers, measured on 2026-11-01 against
+an emulated linux/amd64 AMPS 5.3.5.135 under podman on an Apple M4 Pro. Each
+is pinned under a ceiling about 25% above it:
+
+| what | measured | pinned by |
+| --- | --- | --- |
+| bytes allocated per message, through `onMessage` (desk-status hook, WARN) | 10,151 | `PublishPathAllocationTest` |
+| bytes allocated per message, the machine alone | 8,801 | `PublishPathAllocationTest` |
+| cache memory held by a typical order | 1,545 bytes | `ChainMemoryTest` |
+| cache memory held by a 1,000-ClOrdID chain | 102,888 bytes | `ChainMemoryTest` |
+| a fill's allocation, on a 1-id order vs the 1,000-id one | 3,840 vs 7,808 bytes | `ChainMemoryTest` |
+
+`OrderStateThroughputBenchmark` (`publishBenchmark`, not a test) gave the
+throughput figures. On `fix42-publisher`'s load, the state machine handles
+9,000 messages in 13 ms. A run to the flush takes 6.0 s with no publish store
+and 7.0 s with either store, against `fix42-publisher`'s 2.4 s on the same
+machine. Replaying this publisher's own 24,000 publishes through a bare AMPS
+`Client` takes the same 6.0 s, so the time is the server's, not the
+publisher's.
+
+### F9 — Every message copies its order's whole ClOrdID list
+
+[04 §6](04-recovery-and-operations.md#6-the-publish-path)'s two-phase apply
+plans each message on a copy of its order's cache entry. The copy includes
+`clOrdIds`, which holds every ClOrdID the chain has had: 9021 publishes only
+the newest 50, but the cache keeps all of them, and so does the index, so a
+report quoting any of them resolves ([03 §3](03-state-machine.md#3-identity)).
+On an order amended 999 times, each later fill allocates 7,808 bytes against
+3,840 on a fresh order: 4 bytes per id, per message. The entry holds about 103
+bytes per id (102,888 for the chain).
+
+At normal chain lengths, a handful of ids, this is noise. It matters only for
+a pathological chain: an algorithm that amends one order thousands of times
+in a day pays it on every report.
+
+| option | effect | cost |
+| --- | --- | --- |
+| **leave it** (current) | linear in chain length, per message | none; stated in the README |
+| a copy-on-write id list | the plan shares the list until a message adds an id | a list type of the machine's own; every rule that edits the list goes through it |
+| cap the entry's list, keep the index | the copy is bounded; the index still resolves any id | eviction unbinds an order's ids by walking its list, so it would need the index to enumerate by key instead |
+
+**Disposition: open, for the design owner.** Recommendation: leave it, unless
+a venue's flow shows chains in the thousands. Pinned by
+`ChainMemoryTest.thousandClOrdIdChain`, whose ceiling fails if the cost grows.
+
+## 5. Not built
+
+Listed for the next session:
+- the QuickFIX/J `FeedAdapter`, and the measured loss bound of a `MEMORY`
+  store;
+- the daily reset as a script (its `sow_delete` is pinned durable by
+  `RestartIT`);
+- `StoreCrashIT` for a `FILE` store;
+- `recovery: JOURNAL`;
+- phase 5's optional server-side index on `/37` for
+  `miss-lookup-by-order-id`, which today scans the blotter.

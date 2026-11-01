@@ -16,6 +16,7 @@ amps-demo/
 ├── utils/     operator tools: load a file, dump the SOW or journal, clear down
 ├── amps-cli/  dump a FIX SOW: snapshot, subscribe, or query; raw or NVFIX
 ├── fix42-publisher/  Spring Boot: FIX 4.2 delta publishing onto chained SOW keys
+├── fix42-order-state-publisher/  Spring Boot: the same flow with the order state kept by the publisher, so two cancels answered confirm-and-reject end canceled
 ├── cache-persistent-store/  a local Map cache with AMPS as its persistent store
 ├── hazelcast-persistent-store/  Hazelcast OSS persisting its IMaps in AMPS (MapStore SPI)
 ├── amps-test-harness/  starts a throwaway AMPS container for the integration suites
@@ -62,11 +63,12 @@ passes `--platform linux/amd64` for you.
 | **Native FIX / NVFIX** | `fix-native`, `nvfix-native` | raw SOH-separated payloads on MessageType `fix`/`nvfix` topics; keys and filters on tags and names |
 | **Journal sizing** | `journal-lab` | measures full-publish vs delta cost in the transaction log, on disk |
 | **Chained SOW keys** | `fix42-publisher` | a whole FIX cancel/replace chain collapses to ONE record, keyed by the server rather than the client |
+| **Publisher-kept order state** | `fix42-order-state-publisher` | the same blotter keyed by the publisher from a small per-order cache, so a reject cannot overwrite a confirmed cancel |
 
 `./gradlew :clients:run --args="list"` for the catalogue.
 
-The last row is a module rather than a demo, because it needs its own server
-flow and a Spring Boot application:
+The last two rows are modules rather than demos, because each needs its own
+server flow and a Spring Boot application:
 
 ```bash
 AMPS_FLOW=fix42-chaining ./server/scripts/amps.sh start
@@ -81,6 +83,22 @@ carrying the newest amend merged onto the original order's untouched terms,
 with no chain state in the publisher at all.
 -> [fix42-publisher/README.md](fix42-publisher/README.md), and
 [docs/fix42-view/](docs/fix42-view/README.md) for where that stops being enough.
+
+`fix42-order-state-publisher` is that next step:
+
+```bash
+AMPS_FLOW=fix42-order-state ./server/scripts/amps.sh start
+./gradlew :fix42-order-state-publisher:bootRun
+```
+
+It keys the blotter itself, from a cache of each order's ids, acknowledged
+terms, venue status, quantities and the set of requests still in flight. So
+two cancels for one order, one confirmed and one rejected, end canceled with
+nothing pending in either arrival order, as do the other cases in its coverage
+matrix. Its README states the cost as numbers measured on a real AMPS: the
+throughput against `fix42-publisher` and per publish store, the bytes
+allocated per message, and the cache memory per order.
+-> [fix42-order-state-publisher/README.md](fix42-order-state-publisher/README.md).
 
 `cache-persistent-store` is a module with its own flow too: a cache library
 whose local `java.util.Map` hydrates from an AMPS SOW at startup, writes
