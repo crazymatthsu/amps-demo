@@ -25,6 +25,9 @@ include("utils")
 include("docs")
 include("amps-test-harness")
 include("fix42-publisher")
+// The stateful successor to fix42-publisher: the blotter is keyed and merged by
+// the publisher from a small cache; see fix42-order-state-publisher/docs/.
+include("fix42-order-state-publisher")
 include("amps-cli")
 include("amps-quickfixj")
 include("cache-persistent-store")
