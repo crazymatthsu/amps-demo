@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # The JaCoCo coverage comment on the pull request.
+      pull-requests: write
 
     steps:
     - uses: actions/checkout@v4
@@ -35,6 +37,31 @@ jobs:
 
     - name: Build with Gradle Wrapper
       run: ./gradlew build
+
+    # Unit-test coverage (build.gradle.kts finalizes every module's `test` with
+    # `jacocoTestReport`). The HTML reports are uploaded even when the build fails, so
+    # whatever modules did get a report can still be browsed.
+    - name: Upload JaCoCo HTML reports
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: jacoco-html
+        path: '**/build/reports/jacoco/test/html/'
+
+    # The same numbers as a PR comment (updated in place on each push) and on the run's
+    # Summary page. Report only: both minimums are 0, and the action fails only on its own
+    # errors, never on a coverage figure.
+    - name: Report JaCoCo coverage
+      if: github.event_name == 'pull_request'
+      uses: madrapps/jacoco-report@v1.8.0
+      with:
+        paths: ${{ github.workspace }}/**/build/reports/jacoco/test/jacocoTestReport.xml
+        token: ${{ secrets.GITHUB_TOKEN }}
+        title: Unit-test coverage
+        update-comment: true
+        comment-type: both
+        min-coverage-overall: 0
+        min-coverage-changed-files: 0
 
     # NOTE: The Gradle Wrapper is the default and recommended way to run Gradle (https://docs.gradle.org/current/userguide/gradle_wrapper.html).
     # If your project does not have the Gradle Wrapper configured, you can use the following configuration to run Gradle with a specified version.
