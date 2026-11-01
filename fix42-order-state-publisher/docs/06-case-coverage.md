@@ -21,6 +21,8 @@ addressed, with the reason.
 
 Reading the record columns: 39 is the venue status, `pending` the set of
 unanswered requests (tag 9015), the rest as [02 §4](02-architecture.md#4-the-record).
+[10](10-case-frequency-and-priority.md) sorts every row here by how often a
+drop copy produces it and by the build slot it belongs in.
 
 ---
 
