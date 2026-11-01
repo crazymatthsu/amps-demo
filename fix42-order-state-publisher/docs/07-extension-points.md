@@ -24,7 +24,7 @@ venue-dialect knobs:
 | `transact-time-guard` | `true` (default), `false` | drop a non-reopening report with equal CumQty and an older TransactTime |
 | `exec-id-history` | integer, default 8 | depth of the per-order ExecID ring |
 | `order-term-tags` | a tag list | which order terms a `150=0/5/D` report refreshes |
-| `strip-tags` | a tag list | the session header and trailer tags removed from every payload the machine builds; 9010–9099 are always removed |
+| `strip-tags` | a tag list | the session header and trailer tags removed from every payload the machine builds; 9000–9099, 13xxx or 15xxx are always removed |
 | `chain-ids-published` | integer, default 50 | how many ClOrdIDs 9021 carries |
 | `terminal-retention` | duration, default never | when a terminal order leaves the cache |
 
@@ -89,8 +89,9 @@ Where:
   tag, say). **The audit topics always receive the original frame**; the
   normalised one feeds the machine only (R20c);
 - `RecordFields` is a sink for extra tags on the outgoing publish. Hooks write
-  in the user-defined range **9100 and above**; the machine owns 9000–9099
-  and `RecordFields` refuses a tag below 9100. A field written here is
+  in the user-defined range **9100–9999**; the machine owns 9000–9099,
+  13000–13999 (root values) and 15000–15999 (pending values), and
+  `RecordFields` refuses a tag outside 9100–9999. A field written here is
   delta-published with the rest, lands on the record, and — because it is on
   the record — survives a restart like everything else, though the machine
   does not read it back;
@@ -111,8 +112,8 @@ What the SPI is for, by example:
 
 What hooks must **not** do, and the machine enforces where it can:
 
-- **touch the fields the machine owns.** 9000–9099, 11/41/37, 38/44, 39,
-  14/151/6, 17/150. A hook that rewrites 39 after the fact reintroduces the
+- **touch the fields the machine owns.** 9000–9099, 13000–13999,
+  15000–15999, 11/41/37, 38/44, 39, 14/151/6, 17/150. A hook that rewrites 39 after the fact reintroduces the
   last-writer-wins problem this module exists to remove. `RecordFields`
   refuses tags in that range;
 - **keep state of their own.** A hook is a pure function of the message and

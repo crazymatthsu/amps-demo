@@ -33,10 +33,10 @@ suites, which every module in the repository already uses.
  │       │                                                                      │
  │       ▼  Outcome: CREATED (full record) | CHANGED (dirty fields) | IGNORED  │
  │   RecordWriter ──► publish        (35=D opens a chain)    sow/fix42/order_state
- │                ──► delta_publish  (everything else)       key /9020 OrderKey
+ │                ──► delta_publish  (everything else)       key /13011 OrderKey
  │       │                                                                      │
  │       ▼                                                                      │
- │   AuditRouter ──► publish (whole message + 9020 trailer) ─►  sow/fix42/orders_audit
+ │   AuditRouter ──► publish (whole message + 13011 trailer) ─►  sow/fix42/orders_audit
  │                     per route; key check per topic;          sow/fix42/execs_audit
  │                     catch-all in lenient mode                sow/fix42/execs
  │       │                                                      sow/fix42/rejects
@@ -50,7 +50,7 @@ suites, which every module in the repository already uses.
  └──────────────────────────────────────────────────────────────────────────────┘
         │
         ▼  AMPS, flow fix42-order-state (no modules)
-   sow/fix42/order_state          plain SOW, Key /9020, journalled      the blotter
+   sow/fix42/order_state          plain SOW, Key /13011, journalled      the blotter
    sow/fix42/orders_audit  /11    journalled                            system of record
    sow/fix42/execs_audit   /17    journalled                            system of record
    sow/fix42/rejects       /11    journalled                            system of record
@@ -76,16 +76,16 @@ never acknowledged never drains. The cost is the blotter's deltas, about
 200 MB for a million-message day, and a second copy of every report for
 `execs`, beside the audit topics' 300 MB, all under the same ageing policy. A
 deployment that does not want the second copy drops the `execs` route; the
-same question is answered by `execs_audit` filtered by `/9020` or `/37`.
+same question is answered by `execs_audit` filtered by `/13011` or `/37`.
 
 ## 2. Components
 
 | component | responsibility | state | where it comes from |
 | --- | --- | --- | --- |
-| `FixFrame` / `FixWriter` / `FixMessage` / `FixTags` / `Prices` | parse, index and render FIX; the tag vocabulary | none | copied from `fix42-publisher` into this module's package in phase 0; `FixTags` gains the 9015–9033 family |
+| `FixFrame` / `FixWriter` / `FixMessage` / `FixTags` / `Prices` | parse, index and render FIX; the tag vocabulary | none | copied from `fix42-publisher` into this module's package in phase 0; `FixTags` gains 13011, the 15011/15035/15038/15044 pending family and 9014–9033 |
 | `OrderChain` / `MockFixFlow` / `Instrument` / `FixEvent` / `OrderScope` | the deterministic mock venue | per chain, test only | copied in phase 0; extended in phase 1 with multi-request scenarios and venue-dialect switches |
 | `FeedAdapter` | hands each received message to the publisher and acknowledges it to the session only after `commit()` | none | new; `MockFlowRunner` implements it for the demo, a QuickFIX/J `fromApp` adapter in phase 4 |
-| `AuditRouter` | which pass-through topics a message goes to, whole, plus tag 9020; the per-payload key check; the lenient-mode catch-all | none | new, a simplified `PublishPlanner`: no projection, FULL by default |
+| `AuditRouter` | which pass-through topics a message goes to, whole, plus tag 13011; the per-payload key check; the lenient-mode catch-all | none | new, a simplified `PublishPlanner`: no projection, FULL by default |
 | `OrderKeyIndex` | two maps — ClOrdID → OrderKey and OrderID → OrderKey, never conflated ([03 §3.1](03-state-machine.md#31-resolution)); tombstones; answered ids | one map entry per id | new |
 | `OrderState` | the cache entry (§3) | one per order | new |
 | `PendingRequest` set | the in-flight D/G/F requests of one order, requested or inferred | inside `OrderState` | new |
@@ -160,7 +160,7 @@ and `0300` compare equal; the record keeps the venue's text as sent.
 - **The last fill's 31/32/30.** They go straight to the record on each fill;
   only the fill's ExecID and its latest correction's (9028, 9031) are kept, so
   a bust of the last fill can zero them.
-- **A history.** The audit topics are the history, filterable by 9020.
+- **A history.** The audit topics are the history, filterable by 13011.
 
 ### 3.3 Size
 
@@ -179,18 +179,18 @@ it. The figures are estimates to be measured in phase 5, not promises.
 ## 4. The record
 
 `sow/fix42/order_state`, `MessageType fix`, one record per order, keyed by
-tag 9020. Every field below is written by the machine; the record is the
+tag 13011. Every field below is written by the machine; the record is the
 machine's state made visible, which is also what makes it a sufficient
 checkpoint ([04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-checkpoint)).
 
 | tag | name | written when | value |
 | --- | --- | --- | --- |
-| **9020** | OrderKey | creation | the SOW key: the root ClOrdID of a D-opened chain, else the OrderID, else a request id — always one of the drop copy's own ids, unprefixed (decision 2) |
-| 9019 | KeyKind | creation | `C` (a ClOrdID) or `O` (an OrderID); metadata only, the key is never altered |
+| **13011** | RootClOrdID | the FULL publish of the `35=D` | the SOW key: the D's own tag 11, set once and never changed; for a chain first seen mid-stream, the ClOrdID closest to the root that its first message carries (41, else 11), and only when it carries neither, the OrderID — always one of the drop copy's own ids, unprefixed (decision 2) |
+| 9019 | KeyKind | creation | `C` (a ClOrdID, the normal case) or `O` (an OrderID, the degenerate one); metadata only, the key is never altered |
 | 9021 | ClOrdIDChain | each new 11 bound | the last `chain-ids-published` (default 50) ids, oldest first, comma-joined, `%`-escaped |
-| 9030 | ClOrdIDCount | each new 11 bound | how many ids the chain has used; when it exceeds 9021's length the rest are on `orders_audit` under this 9020 |
+| 9030 | ClOrdIDCount | each new 11 bound | how many ids the chain has used; when it exceeds 9021's length the rest are on `orders_audit` under this 13011 |
 | 9014 | WorkingClOrdID | a NEW or REPLACE is answered | the request id the venue last accepted — what the next request's 41 should be |
-| 11, 41 | ClOrdID, OrigClOrdID | every applied message | ids of the *last applied* message — not the chain's identity, which is 9020/9021 |
+| 11, 41 | ClOrdID, OrigClOrdID | every applied message | ids of the *last applied* message — not the chain's identity, which is 13011/9021 |
 | 37 | OrderID | every report carrying a real one | the latest non-`NONE` OrderID; `NONE` is never written |
 | 9027 | LinkedClOrdID | the D | a 41 carried on the D (a cancel-and-new OMS): lineage, not followed |
 | 60 | TransactTime | every applied message | the last applied message's — a request's is the client's clock, a report's the venue's |
@@ -200,7 +200,7 @@ checkpoint ([04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-check
 | 9025 | IgnoredCount | every ignored message | duplicates, stale, late and absorbed reports, duplicate and late requests; marked dirty so the next delta carries it |
 | 9026 | LateFills | a late execution applied | [03 §7.12](03-state-machine.md#712-cancel-confirmed-then-a-late-execution) |
 | 9024 | SchemaVersion | creation; bumped by a newer writer | `1`; the loader refuses an unknown major version |
-| 1, 55, 54, 40, 59, 15, 100, 21, 109, 110, 111, 47, 48, 22, 126 … | order terms | the D's FULL publish, less the stripped tags; `order-term-tags` again on `150 ∈ {0, 5, D}` | the D's whole message less the session header and trailer and less anything in 9010–9099 |
+| 1, 55, 54, 40, 59, 15, 100, 21, 109, 110, 111, 47, 48, 22, 126 … | order terms | the D's FULL publish, less the stripped tags; `order-term-tags` again on `150 ∈ {0, 5, D}` | the D's whole message less the session header and trailer and less anything in the machine's own tag ranges |
 | 38, 44 | OrderQty, Price | the D; then venue reports only — never a pending acknowledgement, never a `150=8` | **acked** terms; `44=0` once the order is a market order |
 | 39 | OrdStatus | `35=8` always; `35=9` per policy; `A` stamped at creation from a D; absent on a chain created from a request | venue truth |
 | 150 | ExecType | every applied `35=8` | what the last report was |
@@ -209,18 +209,26 @@ checkpoint ([04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-check
 | 32, 31, 30 | LastShares, LastPx, LastMkt | fills and corrects; `32=0 31=0` on a bust of the last fill | the most recent fill |
 | 9028 | LastFillExecID | fills and corrects | which execution 32/31 describe; kept after a bust zeroes them, so a reader sees why |
 | 9031 | BustedExecIDs | busts and corrects | the 19 of every bust and correct and the 17 of every correct, escaped like 9021; a bust or correct naming one again is a duplicate |
-| 9010, 9011 | PendingOrderQty, PendingPrice | pending set changes | the terms of the **newest pending REPLACE**, else 0 — even when a cancel is the newest request; also 0 while the REPLACE is only inferred, or for a term it did not propose (a replace to market has no price) |
-| 9012 | PendingClOrdID | pending set changes | the newest in-flight request's id, else `NONE` |
-| 9013 | PendingAction | pending set changes | `NONE` / `NEW` / `REPLACE` / `CANCEL` of the newest in-flight request |
+| 15038, 15044 | PendingOrderQty, PendingPrice (the pending 38 and 44) | pending set changes | the terms of the **newest pending REPLACE**, else 0 — even when a cancel is the newest request; also 0 while the REPLACE is only inferred, or for a term it did not propose (a replace to market has no price) |
+| 15011 | PendingClOrdID (the pending 11) | pending set changes | the newest in-flight request's id, else `NONE` |
+| 15035 | PendingAction (the pending 35) | pending set changes | `NONE` / `NEW` / `REPLACE` / `CANCEL` of the newest in-flight request |
 | 9015 | PendingRequests | pending set changes | every in-flight request, §4.1, or `NONE` |
 | 9016 | PendingCount | pending set changes | size of the set |
 | 9017 | Terminal | 39 changes | `Y` when 39 ∈ {2, 3, 4, 8, C}, else `N` |
 | 9018 | ChainOrigin | creation; a late D; a failed rebuild | `D`, `MIDSTREAM`, `D_LATE`, `UNRECOVERED` |
 | 9000 | ParentOrderID | the D | child slices only, as today |
-| 9100+ | — | hooks | reserved for deployment-specific fields written through the SPI ([07 §2](07-extension-points.md#2-tier-two-hooks)); the machine never writes or reads them |
+| 9100–9999 | — | hooks | reserved for deployment-specific fields written through the SPI ([07 §2](07-extension-points.md#2-tier-two-hooks)); the machine never writes or reads them |
 
-Tags 9032 and 9033 are not record tags: they wrap unparseable bytes on
-`fix42/malformed` ([03 §9](03-state-machine.md#9-unrouted-and-unparseable-messages)).
+**The tag scheme.** Three user-defined ranges, each with one meaning:
+**13xxx is the root value of standard tag xxx** (13011, the root ClOrdID);
+**15xxx is the pending value of standard tag xxx** (15011 the pending ClOrdID,
+15038 the pending OrderQty, 15044 the pending Price, 15035 the pending
+action — the message type of the request in flight); **9000–9099** is the
+machine's bookkeeping (9000 ParentOrderID is the one tag there a client
+supplies). A future staged term takes its number from the scheme — a pending
+TimeInForce would be 15059 — and hooks write in 9100–9999. Tags 9032 and 9033
+are not record tags: they wrap unparseable bytes on `fix42/malformed`
+([03 §9](03-state-machine.md#9-unrouted-and-unparseable-messages)).
 
 Three deliberate choices in that table:
 
@@ -236,13 +244,15 @@ only under the policy in [03 §4](03-state-machine.md#4-status-venue-truth-and-o
 and by nothing else. A request never moves it; the pending family says a
 request is in flight.
 
-**9010–9014 keep their old meaning**, so a consumer written against
-`fix42-publisher`'s blotter needs no change beyond the key field. 9015/9016
-are the full set for a consumer that wants it.
+**The pending family keeps the old blotter's meaning under new numbers.**
+`fix42-publisher` published it as 9010–9013; here it is 15038, 15044, 15011
+and 15035 (the deployment's scheme: 15xxx is the pending value of tag xxx),
+and 9014 is unchanged. A consumer of the old blotter changes four tag numbers
+and the key field. 9015/9016 are the full set for a consumer that wants it.
 
 ### 4.1 Several requests in flight: tag 9015
 
-The pending set is one tag holding every unanswered request, and 9010–9013
+The pending set is one tag holding every unanswered request, and 15038/15044/15011/15035
 are a summary of its newest member. Collected here because the question
 "what if more than one request is in flight?" is the question this module
 exists to answer.
@@ -268,8 +278,8 @@ After an amend and then a cancel on the same order
 ```
 9015=REPLACE:R:12000:185.75:A-2;CANCEL:R:::A-3
 9016=2
-9013=CANCEL  9012=A-3  9010=12000  9011=185.75   <- newest request is the cancel;
-                                                      9010/9011 still describe the pending amend
+15035=CANCEL  15011=A-3  15038=12000  15044=185.75   <- newest request is the cancel;
+                                                      15038/15044 still describe the pending amend
 ```
 
 When the `35=9` for A-3 arrives it is removed and the summary falls back to
@@ -278,7 +288,7 @@ what remains:
 ```
 9015=REPLACE:R:12000:185.75:A-2
 9016=1
-9013=REPLACE  9012=A-2  9010=12000  9011=185.75
+15035=REPLACE  15011=A-2  15038=12000  15044=185.75
 ```
 
 **A set, not a stack.** Each answering message removes the request whose
@@ -305,8 +315,8 @@ so no in-flight request is lost. A record whose 9015 or 9021 does not parse
 is loaded with an empty set, marked `9018=UNRECOVERED`, and counted; never
 silently.
 
-**Consumer caveat.** 9010–9013 describe the newest request only, kept so a
-reader of the old blotter needs no code change. A consumer that cares about
+**Consumer caveat.** 15038/15044/15011/15035 describe the newest request
+only, as the old blotter's 15038–15035 did. A consumer that cares about
 more than one in-flight request must read 9015.
 
 ## 5. Publish modes
@@ -314,7 +324,7 @@ more than one in-flight request must read 9015.
 | message | to the blotter | why |
 | --- | --- | --- |
 | `35=D` for an unknown chain, cache complete | **`publish`** of the whole record: the D's fields less the stripped tags, plus every state tag of §4 with its initial value; the payload is kept until AMPS acknowledges it | creates the record; every later delta relies on the terms being there, which is also why a rejected creation is re-sent whole rather than rebuilt from the cache ([04 §6](04-recovery-and-operations.md#6-the-publish-path)) |
-| `35=D` for an unknown chain, cache **incomplete** (`recovery: NONE`, a partial load) | a keyed `sow` by `9020 =` 11 first; a hit makes it the late-D or resent-D case below | a FULL publish over a record the cache merely did not know about would erase every delta since (R4c) |
+| `35=D` for an unknown chain, cache **incomplete** (`recovery: NONE`, a partial load) | a keyed `sow` by `13011 =` 11 first; a hit makes it the late-D or resent-D case below | a FULL publish over a record the cache merely did not know about would erase every delta since (R4c) |
 | any other message that changes the state | **`delta_publish`** of the **dirty fields only**: whatever the machine changed, plus the last-message bookkeeping (11, 41, 60, 9022, 9023) | the merge preserves everything else — **verified** by `Fix42DeltaPublishIT` |
 | a non-D for an unknown chain, after the miss lookups found nothing | `delta_publish` of the best-effort record, `9018=MIDSTREAM` | if a record exists the merge enriches it; if none exists AMPS stores the delta as the record — **verify on build**, with a `publish` fallback ([04 §3](04-recovery-and-operations.md#3-cache-misses)) |
 | a `35=D` for a chain that already exists (late D after a mid-stream report, or a resent D) | `delta_publish` of the D's descriptive terms, never 39/14/151/6, and 38/44 only when the record has neither and no report has been seen; or nothing for a resend | [03 §6.1](03-state-machine.md#61-35d-newordersingle) |
@@ -328,7 +338,7 @@ roughly a dozen tags on the wire and a pending ack (`150=6`) five.
 
 **Order of operations, once:** `plan` (including any miss lookup) → the
 blotter publish → the audit publishes → `commit`. The audit publishes come
-after `plan` because their 9020 trailer needs the resolved key (S20), and
+after `plan` because their 13011 trailer needs the resolved key (S20), and
 after the blotter publish because that is the one that must not be lost; the
 audit copies are keyed, so a redelivery after a failure between the two
 overwrites them idempotently (two journal entries, one SOW record). The
@@ -337,14 +347,14 @@ such a redelivery; stated in [04 §8](04-recovery-and-operations.md#8-failure-ma
 not prevented (S14).
 
 The pass-through topics receive the message **whole** (`publish`) **plus tag
-9020** appended as a trailer, after any tag 10 the message carries, so a
+13011** appended as a trailer, after any tag 10 the message carries, so a
 framed message's BodyLength and CheckSum stay valid for the bytes they cover
-(decision 3, [08 §7.1](08-review-findings.md#71-tag-9020-on-the-audit-publishes)).
+(decision 3, [08 §7.1](08-review-findings.md#71-tag-13011-on-the-audit-publishes)).
 The trailer is omitted when the message resolved to no chain (an unmatched
-`35=9`, an unrouted type). A message that already carries 9020 is published
+`35=9`, an unrouted type). A message that already carries 13011 is published
 as it is and `auditKeyTagConflict` counts. The audit topics thereby hold the message as
 received, filed under the key the machine gave it: one `sow` with
-`/9020 = '<key>'` per audit topic is the order's complete history, and a
+`/13011 = '<key>'` per audit topic is the order's complete history, and a
 keyed read of `orders_audit` by any ClOrdID is the cheap cache-miss lookup
 of [04 §3](04-recovery-and-operations.md#3-cache-misses). `AuditRouter` keeps
 the stateless planner's per-payload key check, **per topic**: a message that
@@ -384,7 +394,7 @@ fix42-order-state:
 
   order-state:
     topic: sow/fix42/order_state
-    key-tag: 9020
+    key-tag: 13011                 # RootClOrdID; 13xxx = the root value of tag xxx
     schema-version: 1
     # What a 35=9's tag 39 may do to the record. docs/03 §4.
     cancel-reject-status: WHEN_NOT_TERMINAL          # NEVER | ALWAYS
@@ -405,7 +415,7 @@ fix42-order-state:
     # Order-term tags adopted from a 150=0/5/D report when present.
     order-term-tags: [18, 40, 44, 59, 99, 100, 110, 111, 126]
     # Session header/trailer tags removed from the D's FULL publish; the
-    # machine's own range 9010-9099 is always removed. docs/03 §6.1.
+    # machine's own ranges 9000–9099, 13000–13999 and 15000–15999 are always removed. docs/03 §6.1.
     strip-tags: [8, 9, 10, 34, 43, 49, 50, 52, 56, 57, 97, 115, 116, 122, 128, 129]
     # How many ClOrdIDs 9021 carries; 9030 has the count. docs/02 §4.
     chain-ids-published: 50
@@ -414,7 +424,7 @@ fix42-order-state:
     # Rebuild the cache at startup: SOW (default), NONE, later JOURNAL. docs/04 §2.
     recovery: SOW
     # Keep a cache body only for open orders; terminal records yield a
-    # tombstone (every 37 -> 9020) instead. docs/04 §2.1.
+    # tombstone (every 37 -> 13011) instead. docs/04 §2.1.
     load-open-orders-only: false
     # Let recovery NONE start against a non-empty blotter.
     allow-incomplete-cache: false
@@ -436,10 +446,10 @@ fix42-order-state:
   audit:
     # Appended to every pass-through publish as a trailer; 0 disables; must
     # equal order-state.key-tag or validate() refuses to boot. docs/02 §5.
-    key-tag: 9020
+    key-tag: 13011
 
   topic-keys:
-    "[sow/fix42/order_state]": [9020]
+    "[sow/fix42/order_state]": [13011]
     "[sow/fix42/orders_audit]": [11]
     "[sow/fix42/execs]": [37]
     "[sow/fix42/execs_audit]": [17]
@@ -531,7 +541,7 @@ the late request merges into it; the machine does not reorder.
 Three tiers, in [07](07-extension-points.md): the policy knobs above, bundled
 per venue as a `VenueDialect`; an `OrderStateHook` SPI called before and after
 each apply, which may veto or normalise a message and add record fields in the
-9100+ range but never touch the machine's own; and constructor-injected
+9100–9999 range but never touch the machine's own; and constructor-injected
 components (`AuditRouter`, `RecordWriter`, `SowCacheLoader`, `MissResolver`,
 `OrderKeyIndex`, `FeedAdapter`) a deployment can replace. Hooks are stateless
 by contract and fail fast, so every recovery path in
@@ -541,16 +551,16 @@ by contract and fail fast, so every recovery path in
 
 | on `sow/fix42/orders` | on `sow/fix42/order_state` |
 | --- | --- |
-| key: the chaining module's generated key, read with `getSowKey()`, opaque | key: tag 9020, one of the drop copy's own ids, also in the payload |
+| key: the chaining module's generated key, read with `getSowKey()`, opaque | key: tag 13011 RootClOrdID, the chain's root ClOrdID (one of the drop copy's own ids), also in the payload |
 | tag 35 = last message's type | no tag 35; 9022. FIX-dictionary tooling fed the record will flag the missing 35 and the user-defined tags |
 | tag 39 = venue's last status, but **absent** until the first report and **untouched** by pending acks | 39 = `A` from creation on a D-opened chain; follows every report including 6/E/A; never written by a request; a `35=9` writes it only under the policy, and a terminal value from a 9 zeroes 151 |
-| 9010–9014: one in-flight request | same tags, same meaning for the **newest** request; 9010/9011 describe the newest pending *amend*; 9015/9016 for the set |
-| a request on a terminal order sets 9013 | the same, and 39 stays terminal |
+| 9010–9014: one in-flight request | 15038/15044/15011/15035 and 9014: the same meaning for the **newest** request, under the deployment's tag scheme; 15038/15044 describe the newest pending *amend*; 9015/9016 for the set |
+| a request on a terminal order sets 9013 | the same, in 15035, and 39 stays terminal |
 | duplicate or stale reports regress the record | ignored; 9025 counts them; an old status report is caught by its TransactTime |
 | a fill after a cancel confirm overwrites 39/151 with the fill's | the economics land, 39/151 stay terminal, 9026 counts (default policy) |
 | 60 = the last message's TransactTime | the same; 9029 is the latest *report's*, monotonic |
 | 32/31 keep the last fill's values after a bust of that fill | `32=0 31=0`; 9028 says which execution they described; 9031 lists what was busted |
 | 44 is the last price any message carried | 44 is the acked limit price, and `44=0` once the order became a market order (`40=1`) |
-| `sow/fix42/orders_audit` holds the tags each route selected | holds the message as received plus 9020 as a trailer |
+| `sow/fix42/orders_audit` holds the tags each route selected | holds the message as received plus 13011 as a trailer |
 | the `{scope}` placeholder needs 9000 on every venue message | 9000 remembered from the D; a report without it still routes |
 | exposure and recon views over `sow/fix42/orders` | the same four views, declared over `sow/fix42/order_state`; same fields, same filters (`/9000 IS NULL`); a `/9018 = 'MIDSTREAM'` record contributes what its reports carried |

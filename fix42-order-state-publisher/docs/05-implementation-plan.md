@@ -30,7 +30,7 @@ would drag a second Spring Boot application onto the classpath.
   `com.demo.amps.fix42.state.fix` and `com.demo.amps.fix42.state.mock`, with
   their unit tests (`FixFrameTest`, `FixMessageTest`, `FixWriterTest`,
   `PricesTest`, `FillArithmeticTest`, `MockFixFlowTest`); `FixTags` gains the
-  9015–9033 constants, and nothing else changes in the copy;
+  constants for 13011, the 15011/15035/15038/15044 pending family and 9014–9033, and nothing else changes in the copy;
 - a `ScriptedFlowPinTest` recording a hash of `MockFixFlow`'s rendered
   messages as a literal, taken from `fix42-publisher`'s flow at copy time.
   This is what keeps the two mock venues producing the **same scripted flow**
@@ -79,7 +79,7 @@ has to be able to speak more than one.
   `lateNewOrder()`, `pendingAckBeforeRequest()`, `newOrderLinkedTo(id)` (a D
   carrying 41), `amendNamingAnotherOrder(id)` (a G whose 37 and 41 disagree),
   `amendToMarket()` (`40=1`, no 44, `110=0`), `redeliverBust(ordinal)`, ids
-  containing `:`, `;`, `,` and `%`, a D carrying tags in 9010–9099 and FIX
+  containing `:`, `;`, `,` and `%`, a D carrying tags in 9000–9099, 13xxx or 15xxx and FIX
   header tags, `thousandAmends()`, and a second chain whose OrderID equals the
   first chain's root ClOrdID;
 - `EdgeCaseFlow` in the new module: one chain per walkthrough in
@@ -164,7 +164,7 @@ dependency in the package.
 - `OrderStateProperties` (+ `validate()`, including `apply-state`, the
   `mode`, `audit.key-tag = order-state.key-tag`, and the refusal of
   `recovery: NONE` against a non-empty blotter), `AuditRouter` (whole message
-  plus 9020 as a trailer when resolved, the **per-topic** key check that
+  plus 13011 as a trailer when resolved, the **per-topic** key check that
   skips one topic rather than the message, the `key-guard` lists, the
   lenient-mode catch-all) *(changed, decisions 3 and 5, S10)*,
   `OrderStatePublisher` (plan → blotter publish → audit publishes → commit;
@@ -182,13 +182,13 @@ dependency in the package.
 **Integration tests** (each starts its own instance, as the existing suites do)
 
 - `TwoCancelsIT`: publish [03 §7.1](03-state-machine.md#71-two-cancels-confirm-then-reject-the-motivating-case)
-  and §7.2, read `sow/fix42/order_state` back, assert `39=4 151=0 9013=NONE
+  and §7.2, read `sow/fix42/order_state` back, assert `39=4 151=0 15035=NONE
   9016=0` for both orders. The headline test;
 - `OrderStateEndStateIT`: the ten scripted chains plus every edge-case chain
   under the default dialect; one record per order; venue-sourced fields equal
   each `OrderChain`'s final state; the merged record still carries the D's
   terms; `sow/fix42/orders_audit` holds one whole message per ClOrdID, each
-  with 9020; the blotter writer always carries 9020;
+  with 13011; the blotter writer always carries 13011;
 - `DialectIT` *(added)*: the edge-case chains under each venue-dialect
   switch, with the matching policy knob;
 - `PendingStateIT` counterpart: stop mid-amend and mid-cancel; both truths on
@@ -332,18 +332,18 @@ review are marked (decision n); the rest were settled in the documents.
 | decision | choice | why / where |
 | --- | --- | --- |
 | how the new module gets the FIX layer | **copy**; no shared module, no dependency | each publisher stands alone and can be extracted; the pin test keeps the two mock flows identical |
-| audit topics receive | **the whole message plus 9020** as a trailer (decision 3) | an audit trail filed under its key: one query per order's history, cheap cache-miss lookups, a cap on 9021 — [02 §5](02-architecture.md#5-publish-modes) |
+| audit topics receive | **the whole message plus 13011** as a trailer (decision 3) | an audit trail filed under its key: one query per order's history, cheap cache-miss lookups, a cap on 9021 — [02 §5](02-architecture.md#5-publish-modes) |
 | `35=9`'s tag 39 | **`WHEN_NOT_TERMINAL`**, excluding `8` and stale pending statuses; a terminal value zeroes 151 | [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) |
 | a fill after a terminal report | **`APPLY_ECONOMICS`** | a trade is money; the status is the venue's to reopen — [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) |
 | a non-fill report after a terminal report | **`ADOPT_VENUE_IF_LATER`**, TransactTime as the tiebreak (decision 1): newer by a whole second when either timestamp lacks milliseconds, or answering a pending request; never an IOC/FOK that answers nothing | a venue saying the order is working is believed when its statement is newer or answers this side's request — [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision), S4 |
 | a fill carrying a pending amend's id | **`IGNORE`**: not an answer | the FIX matrices' shape; `ANSWERS_REPLACE_IF_TERMS_MATCH` for a venue that never sends `150=5` — [03 §6.4](03-state-machine.md#64-358-executionreport) |
 | which report answers which request | **by ExecType**, matched on tag 11; a NEW by any non-pending-ack report | [03 §1](03-state-machine.md#1-vocabulary), R1 |
 | duplicate detection | ring, depth 8, plus the CumQty stale guard and the TransactTime late guard | the cache stays small; status-only resends are caught by time — [03 §5](03-state-machine.md#5-arbitration-on-execution-reports) |
-| key tag and format | **9020, one of the drop copy's own ids, unprefixed** (decision 2); a **typed index** (ClOrdIDs and OrderIDs in separate maps) so an OrderID equal to another order's ClOrdID cannot resolve to it; collisions detected at mint time; 9019 says the kind | [03 §3.1–3.2](03-state-machine.md#31-resolution), S1 |
+| key tag and format | **13011, one of the drop copy's own ids, unprefixed** (decision 2); a **typed index** (ClOrdIDs and OrderIDs in separate maps) so an OrderID equal to another order's ClOrdID cannot resolve to it; collisions detected at mint time; 9019 says the kind | [03 §3.1–3.2](03-state-machine.md#31-resolution), S1 |
 | AMPS client | **`HAClient` with a publish store** (decision 4), `FILE` in production, `MEMORY` for demo and tests; `FailedWriteHandler`; two-phase plan/commit; the blotter topic journalled | [04 §6](04-recovery-and-operations.md#6-the-publish-path) |
 | unrouted and unparseable messages | **a mode** (decision 5): `strict` for tests, `lenient` for production with `fix42/unrouted` and `fix42/malformed` | [03 §9](03-state-machine.md#9-unrouted-and-unparseable-messages) |
 | 32/31 after a bust of the last fill | **zeroed**, with 9028 naming the fill (decision 6) | [03 §6.4](03-state-machine.md#64-358-executionreport) |
-| custom logic | hooks SPI, stateless, fail-fast, own tag range 9100+ | [07](07-extension-points.md) |
+| custom logic | hooks SPI, stateless, fail-fast, own tag range 9100–9999 | [07](07-extension-points.md) |
 | cache misses | keyed lookups through the audit topics, on by default | [04 §3](04-recovery-and-operations.md#3-cache-misses) |
 | keep `sow/fix42/execs` | keep, guarded against `37=NONE` | existing tooling reads it |
 | eviction default | never; tombstones hold every 37 | [04 §4](04-recovery-and-operations.md#4-eviction) |
@@ -368,7 +368,7 @@ building after phase 4's measurements.
 | the mock venue's dialect switches disturb the scripted flow | the pin test from phase 0; the default dialect is the one the chain already spoke |
 | the two copies of the FIX layer and the mock venue drift apart | by design they are allowed to; the pin test guards the scripted flow; a fix found in one `FixFrame` is ported by hand |
 | a venue dialect matches none of the policies | the policy enums are behind one switch each, and a `beforeApply` hook can normalise the message; 9025/9016/counters make the symptom visible first |
-| a venue uses tags in 9010–9099 or 9020 for its own purposes | stripped from the D's FULL publish and counted; the audit key tag is configurable and skipped when present |
+| a venue uses tags in 9000–9099, 13xxx or 15xxx or 13011 for its own purposes | stripped from the D's FULL publish and counted; the audit key tag is configurable and skipped when present |
 
 ## Follow-ups, deliberately out of scope
 

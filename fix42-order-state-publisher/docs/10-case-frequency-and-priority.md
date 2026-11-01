@@ -128,7 +128,7 @@ rule references are to [03](03-state-machine.md).
 | E56 | `recovery: NONE` against a non-empty blotter | operator error | P2 — a startup refusal, trivial |
 | E57 | a numeric OrderID equal to another order's ClOrdID | a coincidence of id schemes | **P1** — the typed index; rare, catastrophic, cheap |
 | E58 | a G whose 37 and 41 disagree; a D carrying 41 | operator error or a cancel-and-new OMS | P1 — resolution order and no-rebind are core |
-| E60 (venue half) | venue custom tags in 9010–9099 on a D | a collision of tag ranges | P1 — same strip list as the header half |
+| E60 (venue half) | venue custom tags in 9000–9099, 13xxx or 15xxx on a D | a collision of tag ranges | P1 — same strip list as the header half |
 | E70, E70a, E70b | AMPS rejects a delta, a creation, an audit publish | a payload bug or a missing key | P2 — the `FailedWriteHandler` and repair queue |
 | E70c | a publish throwing after another was stored | a client fault mid-message | P3 — documented, no code |
 | E72 | a publisher crash after the FIX engine acknowledged | process crashes are rare; the consequence is the reason for the file store | P2 — `publish-store: FILE` |

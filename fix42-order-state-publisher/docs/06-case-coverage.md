@@ -32,7 +32,7 @@ drop copy produces it and by the build slot it belongs in.
 | --- | --- | --- | --- | --- |
 | N1 | D, ack, partial, full fill | `39=2 14=38 151=0 6=vwap 9017=Y pending={}` | [03 §6.4](03-state-machine.md#64-358-executionreport) | handled |
 | N2 | D, ack, partial, F, `150=6`, `150=4` | `39=4 151=0 9017=Y pending={}`; 39 reads `6` between the pending ack and the confirm | 6.3, 6.4 | handled |
-| N3 | D, ack, G, `150=E`, `150=5`, fills | 38/44 move only on the `150=5`; 9014 rotates to the G's id; 9010/9011 hold the proposal until then | 6.2, 6.4 | handled |
+| N3 | D, ack, G, `150=E`, `150=5`, fills | 38/44 move only on the `150=5`; 9014 rotates to the G's id; 15038/15044 hold the proposal until then | 6.2, 6.4 | handled |
 | N4 | D, ack, partial, G, `35=9 434=2` | 38/44 untouched, `pending={}`, 39 from the 9 if not terminal, not `8`, not a pending status with nothing pending; a terminal 39 forces `151=0` | 6.5, [§4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision) | policy: `cancel-reject-status`, default `WHEN_NOT_TERMINAL` **(revised, R6)** |
 | N5 | D, ack, F, `35=9 434=1` (too late / unknown) | order keeps working: `pending={}`, 39 per policy; `39=6` on the 9 is **not** adopted once no cancel is pending | 6.5 | policy, as N4 **(revised, R6)** |
 | N6 | D, `150=8 39=8` | `39=8 151=0 9017=Y pending={}` | 6.4: `150=8` names the NEW | handled |
@@ -57,7 +57,7 @@ drop copy produces it and by the build slot it belongs in.
 | E1 | two F, confirm for #1, reject for #2 | `39=4 pending={}` | 6.4 match by 11; §4 terminal guard on the 9 | handled — [03 §7.1](03-state-machine.md#71-two-cancels-confirm-then-reject-the-motivating-case) |
 | E2 | two F, reject for #2, confirm for #1 | same record as E1 | same | handled — §7.2 |
 | E3 | F after `150=4`, then its 9 | `39=4` throughout; `pending` shows the request until the 9 | §4: requests never move 39 | handled — §7.3 |
-| E4 | G then F in flight; 9 for the F; `150=5` for the G | the amend survives the cancel's reject and is adopted; 9010/9011 describe it throughout | 6.5, 6.4 | handled — §7.4 |
+| E4 | G then F in flight; 9 for the F; `150=5` for the G | the amend survives the cancel's reject and is adopted; 15038/15044 describe it throughout | 6.5, 6.4 | handled — §7.4 |
 | E5 | two G in flight (G2's 41 = X-1 or = G1's id); venue answers each | each answered by its own 11; the second `150=5`'s terms win, being later | 6.2, 6.4 | handled; with only G2's `150=5` arriving, G1 stays pending until its own answer, 9014 = G2; a `150=5` naming neither removes nothing (two pending) |
 | E6 | `150=5` arrives **before** its G (two sessions merged on a tap) | the 5 resolves via 41, adopts terms, binds the G's id; the late G is an answered id → ignored | 3.1, 6.2 | handled |
 | E7 | F's `150=4` arrives before the F | as E6 | 6.2/6.3 | handled |
@@ -106,7 +106,7 @@ drop copy produces it and by the build slot it belongs in.
 
 | # | sequence | record at the end | rule | verdict |
 | --- | --- | --- | --- | --- |
-| E40 | first message is a report | `9018=MIDSTREAM 9019=O`, key = OrderID, terms as far as reports carry them | 3.2 | handled — §7.7 |
+| E40 | first message is a report | `9018=MIDSTREAM 9019=C`, key = the report's 41 or 11 (the OrderID only if it carries neither), terms as far as reports carry them | 3.2 | handled — §7.7 |
 | E41 | the D arrives after reports | `9018=D_LATE`; descriptive terms filled; 39/14/151/6 untouched; 38/44 untouched once a report has stated them (filled only on a request-created chain with no report yet); no NEW added, an inferred NEW becomes requested | 6.1 | handled — §7.7 **(revised, S7)** |
 | E42 | the D is resent while the cache knows the chain | ignored | 6.1 | handled |
 | E43 | a report whose 11 and 41 are unknown but 37 is known (an intermediate replace missed) | resolved via 37; the new id bound | 3.1 | handled |
@@ -119,15 +119,15 @@ drop copy produces it and by the build slot it belongs in.
 | E50 | `35=Q` DontKnowTrade | lenient: recorded whole on `fix42/unrouted`, `IGNORED(unrouted)`; strict: raise | [03 §9](03-state-machine.md#9-unrouted-and-unparseable-messages) | out of scope for the blotter, **recorded** for a later version; no order-level change is needed, so nothing on the blotter is wrong without it **(revised, R13)** |
 | E51 | GTC order carried across a day boundary, `150=3` then working again | `150=3` is terminal here and forces `151=0`; a deployment that resets daily keeps the open (`9017='N'`) records, but a `150=3` order is terminal and is removed — its next-day reports then create a `MIDSTREAM` record under its old key via the audit lookup | §4, [04 §9](04-recovery-and-operations.md#9-the-daily-reset) | out of scope, as the contract — with two acknowledged consequences: a GTC's `150=3` zeroes its exposure overnight, and across a reset it continues as a `MIDSTREAM` record (S8) |
 | E52 | multi-leg or list orders, allocations | — | — | out of scope, as the contract |
-| E53 **(new)** | a report for an order the cache lacks under `recovery: NONE` or a partial load, for a **D-opened** order | `miss-lookup`: `orders_audit` by 41 or 11 returns the audit record and its 9020; the entry is rebuilt from the SOW record and the report merges into it | 04 §3 | handled (R4a) |
+| E53 **(new)** | a report for an order the cache lacks under `recovery: NONE` or a partial load, for a **D-opened** order | `miss-lookup`: `orders_audit` by 41 or 11 returns the audit record and its 13011; the entry is rebuilt from the SOW record and the report merges into it | 04 §3 | handled (R4a) |
 | E54 **(new)** | a late bust for a terminal order the partial load did not keep | the partial load built a tombstone from every record, so 37 resolves | 04 §4 | handled (R4b) |
-| E55 **(new)** | a D resent, or a day replayed, against a populated SOW with an empty cache | the keyed `sow` by `9020 = 11` finds the record; the D is handled as a resend, never a FULL publish | 6.1 second row | handled (R4c) |
+| E55 **(new)** | a D resent, or a day replayed, against a populated SOW with an empty cache | the keyed `sow` by `13011 = 11` finds the record; the D is handled as a resend, never a FULL publish | 6.1 second row | handled (R4c) |
 | E56 **(new)** | `recovery: NONE` started against a non-empty `sow/fix42/order_state` | refused unless `allow-incomplete-cache: true` | 04 §2 | handled (R4) |
-| E57 **(new)** | a numeric ClOrdID equal to another order's numeric OrderID | the OrderID is looked up in the OrderID map only, so it does not resolve to the ClOrdID's chain; at mint time the candidate equals an existing key and is skipped, `keyCollisions` counts, 9019 says which kind | 3.1, 3.2 — [03 §7.21](03-state-machine.md#721-an-orderid-that-equals-another-orders-clordid) | handled (R12, decision 2) **(revised, S1: the first version checked only at mint time, after a single map had already resolved the report to the wrong chain)** |
+| E57 **(new)** | a numeric ClOrdID equal to another order's numeric OrderID | the OrderID is looked up in the OrderID map only, so it does not resolve to the ClOrdID's chain; the new chain is keyed by its own ClOrdID, and only a message with no ClOrdID at all reaches the OrderID candidate, where the collision check skips it and `keyCollisions` counts | 3.1, 3.2 — [03 §7.21](03-state-machine.md#721-an-orderid-that-equals-another-orders-clordid) | handled (R12, decision 2) **(revised, S1: the first version checked only at mint time, after a single map had already resolved the report to the wrong chain)** |
 | E58 **(new)** | a G whose 37 and 41 name different orders; a D carrying 41 | the G resolves by **41** first (03 §3.1), so it lands on 41's order; its 37 is already bound to the other and is not rebound, `idConflicts` counts. The D opens its own chain; its 41 becomes 9027 | 3.1, 3.3 | handled (R10) **(revised, round-2 sweep item 1)** |
 | E59 **(new)** | ClOrdIDs containing `:`, `;`, `,` or `%` | escaped in 9015 and 9021; a record that fails to parse on rebuild is `9018=UNRECOVERED` and counted | [02 §4.1](02-architecture.md#41-several-requests-in-flight-tag-9015) | handled (R11) |
-| E60 **(new)** | a D carrying venue custom tags in 9010–9099, or FIX header tags | stripped from the FULL publish; `strippedTags` counts | 6.1 | handled (R20e) |
-| E61 **(new)** | a pegged algo child with a thousand amends in a day | 9021 holds the last 50 ids and 9030 the count; the full history is `orders_audit` filtered by 9020 | 3.3, [04 §3](04-recovery-and-operations.md#3-cache-misses) | handled (R19, decision 3) |
+| E60 **(new)** | a D carrying venue custom tags in 9000–9099, 13xxx or 15xxx, or FIX header tags | stripped from the FULL publish; `strippedTags` counts | 6.1 | handled (R20e) |
+| E61 **(new)** | a pegged algo child with a thousand amends in a day | 9021 holds the last 50 ids and 9030 the count; the full history is `orders_audit` filtered by 13011 | 3.3, [04 §3](04-recovery-and-operations.md#3-cache-misses) | handled (R19, decision 3) |
 | E62 **(new)** | a SOW written by an older publisher version loaded by a newer one | 9024 is read; missing tags take defaults and `recoveredWithDefaults` counts; an unknown major version refuses to start | 04 §2 | handled (R17) |
 
 ## 5. Durability and operations
