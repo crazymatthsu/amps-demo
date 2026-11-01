@@ -3,11 +3,11 @@ package com.demo.amps.fix42.state.spi;
 /** Why the machine left the record alone (docs/03 §2). */
 public enum IgnoreReason {
 
-    /** An ExecID already applied, or a bust/correct whose 19 is already in 9031. */
+    /** An ExecID already applied, or a bust/correct whose 19 is already in 12031. */
     DUPLICATE,
     /** A non-reopening report whose CumQty went backwards. */
     STALE,
-    /** Overtaken: an older TransactTime than 9029, or a non-fill after a terminal report that does not reopen. */
+    /** Overtaken: an older TransactTime than 12029, or a non-fill after a terminal report that does not reopen. */
     LATE,
     /** A pending acknowledgement on an order the venue has since closed. */
     ABSORBED,

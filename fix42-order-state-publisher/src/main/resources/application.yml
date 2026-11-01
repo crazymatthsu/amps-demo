@@ -40,7 +40,8 @@ fix42-order-state:
   order-state:
     topic: sow/fix42/order_state
     key-tag: 13011                 # RootClOrdID; 13xxx = the root value of tag xxx
-    schema-version: 1
+    # 2 since the record moved from 9xxx to 12000-12999 (docs/11 §6).
+    schema-version: 2
     # What a 35=9's tag 39 may do to the record. docs/03 §4.
     cancel-reject-status: WHEN_NOT_TERMINAL          # NEVER | ALWAYS
     # A fill with higher CumQty after a terminal report. docs/03 §4, §7.12.
@@ -61,9 +62,9 @@ fix42-order-state:
     # Order-term tags adopted from a 150=0/5/D report when present.
     order-term-tags: [18, 40, 44, 59, 99, 100, 110, 111, 126]
     # Session header/trailer tags never copied onto the record; the machine's
-    # own ranges 9001-9099, 13000-13999 and 15000-15999 are always removed.
+    # internal ranges 12000-12999, 13000-13999 and 15000-15999 are always removed.
     strip-tags: [8, 9, 10, 34, 43, 49, 50, 52, 56, 57, 97, 115, 116, 122, 128, 129]
-    # How many ClOrdIDs 9021 carries; 9030 has the count. docs/02 §4.
+    # How many ClOrdIDs 12021 carries; 12030 has the count. docs/02 §4.
     chain-ids-published: 50
     # Evict terminal orders from the cache after this long; PT0S = never.
     # An evicted order keeps a tombstone (about 276 bytes) until restart.
@@ -83,7 +84,7 @@ fix42-order-state:
     # creating a MIDSTREAM entry. docs/04 §3.
     miss-lookup: true
     miss-lookup-by-order-id: false
-    # Publish 9025 at once for messages the machine ignored.
+    # Publish 12025 at once for messages the machine ignored.
     publish-unchanged: false
     # Named bundles of the policy knobs above, one per venue. docs/07 §1.
     dialect: default
@@ -141,7 +142,7 @@ fix42-order-state:
 
   # The hooks shipped with the module (docs/07 §2), each off unless asked for.
   hooks:
-    # A desk-level status in 9100, one word per order.
+    # A desk-level status in 12100, one word per order.
     desk-status: false
     # For a venue whose 35=9 carries the status at request time: a rejected
     # cancel (replace) that a 150=6 (150=E) acknowledged reads 0 or 1 again,
@@ -161,6 +162,6 @@ fix42-order-state:
   amps:
     publish-store: MEMORY
   mode: strict
-  # The shipped example hook: a desk status in 9100 (docs/07 §2).
+  # The shipped example hook: a desk status in 12100 (docs/07 §2).
   hooks:
     desk-status: true

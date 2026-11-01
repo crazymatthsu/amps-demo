@@ -149,18 +149,31 @@ class OrderStatePublisherTest {
     }
 
     @Test
-    @DisplayName("the shipped hook writes a desk status in 9100 on every published change")
+    @DisplayName("the shipped hook writes a desk status in 12100 on every published change")
     void deskStatusHook() throws Exception {
         OrderStatePublisher publisher = publisher("demo", new DeskStatusHook());
         send(publisher, "35=D|11=X|38=100|44=10|60=20261031-10:00:00.000|");
-        assertThat(sink.last().message().value(9100)).as("the audit copy carries no 9100").isEmpty();
-        assertThat(sink.sent.getFirst().message().value(9100)).isEqualTo("NEW");
+        assertThat(sink.last().message().value(12100)).as("the audit copy carries no 12100").isEmpty();
+        assertThat(sink.sent.getFirst().message().value(12100)).isEqualTo("NEW");
         send(publisher, "35=8|150=0|39=0|11=X|37=O|17=E-1|14=0|151=100|6=0|60=20261031-10:00:01.000|");
-        assertThat(sink.sent.get(2).message().value(9100)).isEqualTo("WORKING");
+        assertThat(sink.sent.get(2).message().value(12100)).isEqualTo("WORKING");
         send(publisher, "35=F|11=X-2|41=X|60=20261031-10:00:02.000|");
-        assertThat(sink.sent.get(5).message().value(9100)).isEqualTo("PENDING");
+        assertThat(sink.sent.get(5).message().value(12100)).isEqualTo("PENDING");
         send(publisher, "35=8|150=4|39=4|11=X-2|41=X|37=O|17=E-2|14=0|151=0|6=0|60=20261031-10:00:03.000|");
-        assertThat(sink.sent.get(7).message().value(9100)).isEqualTo("CLOSED");
+        assertThat(sink.sent.get(7).message().value(12100)).isEqualTo("CLOSED");
+    }
+
+    @Test
+    @DisplayName("an upstream tag in the hooks' range is stripped, so a hook's 12100 is the only one on the record")
+    void upstreamTagInTheHooksRangeIsStripped() throws Exception {
+        OrderStatePublisher publisher = publisher("demo", new DeskStatusHook());
+        send(publisher, "35=D|11=X|38=100|44=10|12100=UPSTREAM|12500=OTHER|9100=DESK|60=20261031-10:00:00.000|");
+        FixMessage blotter = sink.sent.getFirst().message();
+        assertThat(blotter.value(12100)).as("the hook's desk status, not the upstream value").isEqualTo("NEW");
+        assertThat(blotter.has(12500)).as("nothing upstream lands in 12000-12999").isFalse();
+        assertThat(blotter.value(9100)).as("the upstream system's 9xxx passes through").isEqualTo("DESK");
+        assertThat(sink.last().topic()).isEqualTo("sow/fix42/orders_audit");
+        assertThat(sink.last().message().value(12100)).as("the audit copy is the message whole").isEqualTo("UPSTREAM");
     }
 
     @Test
@@ -237,10 +250,10 @@ class OrderStatePublisherTest {
     void recordFieldsRange() {
         RecordFields fields = new RecordFields();
         assertThatThrownBy(() -> fields.put(39, "4")).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> fields.put(9017, "Y")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> fields.put(12017, "Y")).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> fields.put(15035, "NONE")).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> fields.put(9100, "")).isInstanceOf(IllegalArgumentException.class);
-        assertThat(fields.put(9100, "OK").get(9100)).isEqualTo("OK");
+        assertThatThrownBy(() -> fields.put(12100, "")).isInstanceOf(IllegalArgumentException.class);
+        assertThat(fields.put(12100, "OK").get(12100)).isEqualTo("OK");
     }
 
     private static byte[] bytes(FixMessage message) {

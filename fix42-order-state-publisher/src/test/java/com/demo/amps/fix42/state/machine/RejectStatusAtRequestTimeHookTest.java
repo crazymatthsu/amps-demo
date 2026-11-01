@@ -38,7 +38,7 @@ class RejectStatusAtRequestTimeHookTest {
         m.send("F 11=X-2 41=X-1 60=" + t(3));
         m.send("8 150=6 39=6 11=X-2 41=X-1 37=ORD 17=E-3 14=" + filled + " 151=" + (1000 - filled)
                 + " 6=50 60=" + t(4));
-        m.expect("X-1", "39=6 15035=CANCEL 9016=1");
+        m.expect("X-1", "39=6 15035=CANCEL 12016=1");
         m.send("9 11=X-2 41=X-1 37=ORD 434=1 39=6 102=0 58=too-late 60=" + t(5));
     }
 
@@ -47,7 +47,7 @@ class RejectStatusAtRequestTimeHookTest {
     void withoutTheHookTheRecordContradictsItself() {
         MachineTester m = order(new MachineTester(), 300);
         cancelAckedThenRejected(m, 300);
-        m.expect("X-1", "39=6 14=300 151=700 15035=NONE 15011=NONE 9015=NONE 9016=0 9017=N");
+        m.expect("X-1", "39=6 14=300 151=700 15035=NONE 15011=NONE 12015=NONE 12016=0 12017=N");
     }
 
     @Test
@@ -55,7 +55,7 @@ class RejectStatusAtRequestTimeHookTest {
     void partlyFilledReadsPartiallyFilled() {
         MachineTester m = order(new MachineTester().withHook(HOOK), 300);
         cancelAckedThenRejected(m, 300);
-        m.expect("X-1", "39=1 14=300 151=700 15035=NONE 15011=NONE 9015=NONE 9016=0 9017=N 9022=9");
+        m.expect("X-1", "39=1 14=300 151=700 15035=NONE 15011=NONE 12015=NONE 12016=0 12017=N 12022=9");
         m.expectWire(39);
     }
 
@@ -64,7 +64,7 @@ class RejectStatusAtRequestTimeHookTest {
     void nothingFilledReadsNew() {
         MachineTester m = order(new MachineTester().withHook(HOOK), 0);
         cancelAckedThenRejected(m, 0);
-        m.expect("X-1", "39=0 14=0 151=1000 15035=NONE 9016=0 9017=N");
+        m.expect("X-1", "39=0 14=0 151=1000 15035=NONE 12016=0 12017=N");
     }
 
     @Test
@@ -73,9 +73,9 @@ class RejectStatusAtRequestTimeHookTest {
         MachineTester m = order(new MachineTester().withHook(HOOK), 300);
         m.send("G 11=X-2 41=X-1 38=1200 44=50.5 60=" + t(3));
         m.send("8 150=E 39=E 11=X-2 41=X-1 37=ORD 17=E-3 14=300 151=700 6=50 60=" + t(4));
-        m.expect("X-1", "39=E 15035=REPLACE 9016=1");
+        m.expect("X-1", "39=E 15035=REPLACE 12016=1");
         m.send("9 11=X-2 41=X-1 37=ORD 434=2 39=E 60=" + t(5));
-        m.expect("X-1", "39=1 38=1000 44=50 15035=NONE 15038=0 15044=0 9016=0");
+        m.expect("X-1", "39=1 38=1000 44=50 15035=NONE 15038=0 15044=0 12016=0");
     }
 
     @Test
@@ -86,10 +86,10 @@ class RejectStatusAtRequestTimeHookTest {
         m.send("F 11=X-3 41=X-1 60=" + t(4));
         m.send("8 150=6 39=6 11=X-2 41=X-1 37=ORD 17=E-3 14=300 151=700 6=50 60=" + t(5));
         m.send("9 11=X-2 41=X-1 37=ORD 434=1 39=6 60=" + t(6));
-        m.expect("X-1", "39=6 15035=CANCEL 15011=X-3 9016=1");
+        m.expect("X-1", "39=6 15035=CANCEL 15011=X-3 12016=1");
         // The last cancel's reject is the one that retires the 6.
         m.send("9 11=X-3 41=X-1 37=ORD 434=1 39=6 60=" + t(7));
-        m.expect("X-1", "39=1 15035=NONE 9016=0");
+        m.expect("X-1", "39=1 15035=NONE 12016=0");
     }
 
     @Test
@@ -100,7 +100,7 @@ class RejectStatusAtRequestTimeHookTest {
         m.send("8 150=E 39=E 11=X-2 41=X-1 37=ORD 17=E-3 14=300 151=700 6=50 60=" + t(4));
         m.send("F 11=X-3 41=X-2 60=" + t(5));
         m.send("9 11=X-3 41=X-2 37=ORD 434=1 39=6 60=" + t(6));
-        m.expect("X-1", "39=E 15035=REPLACE 15011=X-2 9016=1");
+        m.expect("X-1", "39=E 15035=REPLACE 15011=X-2 12016=1");
     }
 
     @Test

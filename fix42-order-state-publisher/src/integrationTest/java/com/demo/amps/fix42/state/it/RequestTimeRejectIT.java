@@ -59,7 +59,7 @@ class RequestTimeRejectIT {
         for (String row : ROWS) {
             FixMessage record = record("EC6-" + row + "-1");
             assertThat(record.value(FixTags.ORD_STATUS)).as("%s 39", row).isEqualTo("6");
-            assertThat(record.value(FixTags.Record.PENDING_COUNT)).as("%s 9016", row).isEqualTo("0");
+            assertThat(record.value(FixTags.Record.PENDING_COUNT)).as("%s 12016", row).isEqualTo("0");
             assertThat(record.value(FixTags.Record.PENDING_ACTION)).as("%s 15035", row).isEqualTo("NONE");
         }
     }
@@ -73,8 +73,8 @@ class RequestTimeRejectIT {
             assertThat(record.value(FixTags.ORD_STATUS)).as("%s 39", row).isEqualTo(chain.ordStatus()).isEqualTo("1");
             assertThat(record.value(FixTags.CUM_QTY)).as("%s 14", row).isEqualTo(Long.toString(chain.cumQty()));
             assertThat(record.value(FixTags.LEAVES_QTY)).as("%s 151", row).isEqualTo(Long.toString(chain.leavesQty()));
-            assertThat(record.value(FixTags.Record.PENDING_COUNT)).as("%s 9016", row).isEqualTo("0");
-            assertThat(record.value(FixTags.Record.TERMINAL)).as("%s 9017", row).isEqualTo("N");
+            assertThat(record.value(FixTags.Record.PENDING_COUNT)).as("%s 12016", row).isEqualTo("0");
+            assertThat(record.value(FixTags.Record.TERMINAL)).as("%s 12017", row).isEqualTo("N");
         }
         assertThat(fixture.publisher.publishStoreDepth()).isZero();
     }

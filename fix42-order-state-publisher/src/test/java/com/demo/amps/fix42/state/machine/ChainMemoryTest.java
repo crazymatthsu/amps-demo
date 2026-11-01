@@ -21,7 +21,7 @@ import org.openjdk.jol.info.GraphLayout;
  * docs/05 phase 5: what the cache holds per order, and what a long chain
  * costs, measured with JOL rather than estimated.
  *
- * <p>The record publishes at most 50 ClOrdIDs in 9021, but the cache keeps
+ * <p>The record publishes at most 50 ClOrdIDs in 12021, but the cache keeps
  * every one: the entry's id list and one index binding per id, so a lookup by
  * any of them resolves (docs/03 §3). And every message plans on a copy of
  * its order's entry (the two-phase apply, docs/04 §6), id list included, so a

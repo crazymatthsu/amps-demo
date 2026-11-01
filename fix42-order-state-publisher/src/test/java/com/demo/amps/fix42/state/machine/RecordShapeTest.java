@@ -48,11 +48,11 @@ class RecordShapeTest {
                         continue;
                     }
                     OrderState state = m.state(outcome.key());
-                    RecordReader.Result read = RecordReader.read(m.cached(outcome.key()), 1);
+                    RecordReader.Result read = RecordReader.read(m.cached(outcome.key()), 2);
                     assertThat(read.unrecovered()).as("%s %s", chain, event.description()).isFalse();
                     OrderState rebuilt = read.state();
                     if (state.clOrdIds().size() > m.machine.options().chainIdsPublished()) {
-                        // 9021 is capped; the rest are on orders_audit under 13011.
+                        // 12021 is capped; the rest are on orders_audit under 13011.
                         assertThat(rebuilt.clOrdIds()).hasSize(m.machine.options().chainIdsPublished());
                         continue;
                     }
@@ -67,10 +67,10 @@ class RecordShapeTest {
         }
 
         @Test
-        @DisplayName("a record whose 9015 does not parse loads empty, UNRECOVERED, and counted as such")
+        @DisplayName("a record whose 12015 does not parse loads empty, UNRECOVERED, and counted as such")
         void unparseablePendingSet() {
-            FixMessage record = FixMessage.parse("13011=K\u00019015=CANCEL:R:X-2\u00019024=1\u0001");
-            RecordReader.Result read = RecordReader.read(record, 1);
+            FixMessage record = FixMessage.parse("13011=K\u000112015=CANCEL:R:X-2\u000112024=2\u0001");
+            RecordReader.Result read = RecordReader.read(record, 2);
             assertThat(read.unrecovered()).isTrue();
             assertThat(read.state().origin()).isEqualTo(Origin.UNRECOVERED);
             assertThat(read.state().pending()).isEmpty();
@@ -79,18 +79,29 @@ class RecordShapeTest {
         @Test
         @DisplayName("a record without 13011, or of a newer schema, refuses the load (R17)")
         void refusals() {
-            assertThatThrownBy(() -> RecordReader.read(FixMessage.parse("11=X\u0001"), 1))
+            assertThatThrownBy(() -> RecordReader.read(FixMessage.parse("11=X\u0001"), 2))
                     .hasMessageContaining("13011");
-            assertThatThrownBy(() -> RecordReader.read(FixMessage.parse("13011=K\u00019024=2\u0001"), 1))
-                    .hasMessageContaining("schema 2");
+            assertThatThrownBy(() -> RecordReader.read(FixMessage.parse("13011=K\u000112024=3\u0001"), 2))
+                    .hasMessageContaining("schema 3");
         }
 
         @Test
-        @DisplayName("a record missing 9026 takes the default and says so")
+        @DisplayName("docs/11 §6: a record of the 9xxx scheme (schema 1) refuses the load instead of losing its state")
+        void legacyTagScheme() {
+            FixMessage legacy = FixMessage.parse(("13011=K|9024=1|9015=CANCEL:R:::K-2|9016=1|9021=K,K-2|9030=2"
+                    + "|9023=4|39=6|").replace('|', '\u0001'));
+            assertThatThrownBy(() -> RecordReader.read(legacy, 2))
+                    .hasMessageContaining("9xxx tags of schema 1")
+                    .hasMessageContaining("9024=1")
+                    .hasMessageContaining("docs/11 §6");
+        }
+
+        @Test
+        @DisplayName("a record missing 12026 takes the default and says so")
         void defaults() {
             RecordReader.Result read = RecordReader.read(
-                    FixMessage.parse("13011=K\u00019024=1\u00019015=NONE\u00019023=3\u00019025=0\u00019018=D\u0001"
-                            + "9019=C\u0001"), 1);
+                    FixMessage.parse("13011=K\u000112024=2\u000112015=NONE\u000112023=3\u000112025=0\u000112018=D\u0001"
+                            + "12019=C\u0001"), 2);
             assertThat(read.defaulted()).isTrue();
             assertThat(read.state().lateFills()).isZero();
         }
@@ -117,7 +128,7 @@ class RecordShapeTest {
         }
 
         @Test
-        @DisplayName("an ignored message publishes nothing; 9025 rides on the next delta")
+        @DisplayName("an ignored message publishes nothing; 12025 rides on the next delta")
         void ignoredIsCarried() {
             MachineTester m = new MachineTester();
             m.send("D 11=X 38=100 44=10 60=" + t(0));
@@ -125,25 +136,25 @@ class RecordShapeTest {
             assertThat(m.send("8 150=0 39=0 11=X 37=O 17=E-1 14=0 151=100 6=0 60=" + t(1)).publish())
                     .isEqualTo(Outcome.Publish.NONE);
             m.send("F 11=X-2 41=X 60=" + t(2));
-            m.expectWire(9025);
-            m.expect("X", "9025=1");
+            m.expectWire(12025);
+            m.expect("X", "12025=1");
         }
 
         @Test
-        @DisplayName("publish-unchanged: 9025 at once, and 9021/9030 when an id was bound; never 9023 or 60")
+        @DisplayName("publish-unchanged: 12025 at once, and 12021/12030 when an id was bound; never 12023 or 60")
         void publishUnchanged() {
             MachineTester m = new MachineTester(MachineOptions.defaults().withPublishUnchanged(true));
             m.send("D 11=X 38=100 44=10 60=" + t(0));
             m.send("8 150=0 39=0 11=X 37=O 17=E-1 14=0 151=100 6=0 60=" + t(1));
             m.send("8 150=0 39=0 11=X 37=O 17=E-1 14=0 151=100 6=0 60=" + t(1));
-            m.expectWire(13011, 9025, -9023, -60, -9021);
+            m.expectWire(13011, 12025, -12023, -60, -12021);
             // A duplicate that binds a new 41 publishes the chain whatever the policy.
             MachineTester plain = new MachineTester();
             plain.send("D 11=Y 38=100 44=10 60=" + t(0));
             plain.send("8 150=0 39=0 11=Y 37=O 17=E-1 14=0 151=100 6=0 60=" + t(1));
             Outcome duplicate = plain.send("8 150=0 39=0 11=Y 41=Y-0 37=O 17=E-1 14=0 151=100 6=0 60=" + t(1));
             assertThat(duplicate.reason()).isEqualTo(IgnoreReason.DUPLICATE);
-            plain.expectWire(9021, 9030, 9025, -9023, -60);
+            plain.expectWire(12021, 12030, 12025, -12023, -60);
         }
 
         @Test
@@ -257,7 +268,7 @@ class RecordShapeTest {
     class Codecs {
 
         @Test
-        @DisplayName("hostile ids round-trip through 9015 and 9021")
+        @DisplayName("hostile ids round-trip through 12015 and 12021")
         void escaping() {
             List<PendingRequest> pending = List.of(
                     PendingRequest.requested("a:b;c,d%e", PendingAction.REPLACE, "12000", null),

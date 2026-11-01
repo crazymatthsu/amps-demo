@@ -84,12 +84,12 @@ class AuditRouterTest {
     }
 
     @Test
-    @DisplayName("malformed bytes wrap as 9032 base64 and 9033 reason")
+    @DisplayName("malformed bytes wrap as 12032 base64 and 12033 reason")
     void malformed() {
         byte[] junk = "not=fix|=".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
         AuditRouter.Publish wrapped = AuditRouter.malformed("fix42/malformed", junk, 0, junk.length, "no tag");
         FixMessage message = FixMessage.parse(wrapped.payload(), 0, wrapped.length());
-        assertThat(java.util.Base64.getDecoder().decode(message.value(9032))).isEqualTo(junk);
-        assertThat(message.value(9033)).isEqualTo("no tag");
+        assertThat(java.util.Base64.getDecoder().decode(message.value(12032))).isEqualTo(junk);
+        assertThat(message.value(12033)).isEqualTo("no tag");
     }
 }

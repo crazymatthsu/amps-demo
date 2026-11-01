@@ -7,7 +7,7 @@ import com.demo.amps.fix42.state.spi.OrderStateView;
 import com.demo.amps.fix42.state.spi.RecordFields;
 
 /**
- * The shipped example hook (docs/07 §2): a desk-level status in tag 9100,
+ * The shipped example hook (docs/07 §2): a desk-level status in tag 12100,
  * derived from the venue's 39 and the pending set, for a blotter screen that
  * wants one word per order.
  *
@@ -17,7 +17,7 @@ import com.demo.amps.fix42.state.spi.RecordFields;
  *   PENDING   accepted, with a request in flight
  *   CLOSED    terminal, nothing in flight
  *   STUCK     terminal with a request still unanswered -- the venue never
- *             rejected it (the /9016 > 0 AND /9017 = 'Y' case, docs/04 §7)
+ *             rejected it (the /12016 > 0 AND /12017 = 'Y' case, docs/04 §7)
  * </pre>
  *
  * <p>Stateless and non-blocking, as every hook must be: a pure function of
@@ -27,7 +27,7 @@ import com.demo.amps.fix42.state.spi.RecordFields;
 public final class DeskStatusHook implements OrderStateHook {
 
     /** The tag this hook writes. */
-    public static final int DESK_STATUS = 9100;
+    public static final int DESK_STATUS = 12100;
 
     @Override
     public void afterApply(FixFrame message, OrderStateView before, OrderStateView after, Outcome outcome,

@@ -8,7 +8,7 @@ public enum NonFillAfterTerminalPolicy {
 
     /**
      * A venue-asserted reopen when the report answers a pending request, or
-     * is newer than 9029 -- by a whole second when either timestamp lacks
+     * is newer than 12029 -- by a whole second when either timestamp lacks
      * milliseconds; never for an IOC/FOK that answers nothing. The default.
      */
     ADOPT_VENUE_IF_LATER,

@@ -24,8 +24,8 @@ venue-dialect knobs:
 | `transact-time-guard` | `true` (default), `false` | drop a non-reopening report with equal CumQty and an older TransactTime |
 | `exec-id-history` | integer, default 8 | depth of the per-order ExecID ring |
 | `order-term-tags` | a tag list | which order terms a `150=0/5/D` report refreshes |
-| `strip-tags` | a tag list | the session header and trailer tags removed from every payload the machine builds; 9000–9099, 13xxx or 15xxx are always removed |
-| `chain-ids-published` | integer, default 50 | how many ClOrdIDs 9021 carries |
+| `strip-tags` | a tag list | the session header and trailer tags removed from every payload the machine builds; 12000–12999, 13xxx or 15xxx are always removed |
+| `chain-ids-published` | integer, default 50 | how many ClOrdIDs 12021 carries |
 | `terminal-retention` | duration, default never | when a terminal order leaves the cache |
 
 The remaining knobs are operations rather than dialect, all in
@@ -89,9 +89,9 @@ Where:
   tag, say). **The audit topics always receive the original frame**; the
   normalised one feeds the machine only (R20c);
 - `RecordFields` is a sink for extra tags on the outgoing publish. Hooks write
-  in the user-defined range **9100–9999**; the machine owns 9000–9099,
+  in the hooks' range **12100–12999**; the machine owns 12000–12099,
   13000–13999 (root values) and 15000–15999 (pending values), and
-  `RecordFields` refuses a tag outside 9100–9999. A field written here is
+  `RecordFields` refuses a tag outside 12100–12999. A field written here is
   delta-published with the rest, lands on the record, and — because it is on
   the record — survives a restart like everything else, though the machine
   does not read it back;
@@ -104,15 +104,15 @@ What the SPI is for, by example:
 | a venue that reports a replace as cancel-then-new, and should not read as canceled even for one message | `beforeApply` on a `150=4` whose 11 is the working id while a REPLACE is pending: `ignore("replace cancel leg")` |
 | a venue that answers a TIF-only amend with `150=D` | `beforeApply`: `proceedWith` the frame with `150=5` |
 | a venue whose `35=9` semantics match none of the three policies | `beforeApply` on `35=9`: rewrite or remove tag 39. One ships: `RejectStatusAtRequestTimeHook`, for rejects that carry the request-time `39=6`/`E` after a pending ack ([11 F2](11-build-findings.md#f2--a-pending-acknowledgements-39-outlives-the-request-it-acknowledged)) |
-| a desk-specific status (`WORKING`, `CLOSED`, `BROKEN`) derived from 39 and the pending set | `afterApply`: write it to 9100. One ships: `DeskStatusHook` |
-| mark an order whose reports are inconsistent (`38 ≠ 14 + 151`) | `afterApply`: write 9101=`Y` when the machine's `inconsistentReports` moved |
+| a desk-specific status (`WORKING`, `CLOSED`, `BROKEN`) derived from 39 and the pending set | `afterApply`: write it to 12100. One ships: `DeskStatusHook` |
+| mark an order whose reports are inconsistent (`38 ≠ 14 + 151`) | `afterApply`: write 12101=`Y` when the machine's `inconsistentReports` moved |
 | ignore a test-flow account entirely | `beforeApply`: `ignore("test account")` on `1 = 'TEST'` |
-| alert on a late execution or a venue-asserted reopen | `afterApply`: if 9026 moved, or `reopenedByVenue` did, call out |
+| alert on a late execution or a venue-asserted reopen | `afterApply`: if 12026 moved, or `reopenedByVenue` did, call out |
 | record every ignored message for a desk | `onIgnored`: write the reason to a queue a *separate* thread publishes to `sow/fix42/ignored` |
 
 What hooks must **not** do, and the machine enforces where it can:
 
-- **touch the fields the machine owns.** 9000–9099, 13000–13999,
+- **touch the fields the machine owns.** 12000–12099, 13000–13999,
   15000–15999, 11/41/37, 38/44, 39, 14/151/6, 17/150. A hook that rewrites 39 after the fact reintroduces the
   last-writer-wins problem this module exists to remove. `RecordFields`
   refuses tags in that range;

@@ -246,7 +246,7 @@ public final class OrderStateMachine {
 
     /**
      * Loads an entry rebuilt from its SOW record (docs/04 §2): the ClOrdID map
-     * from 9021, the OrderID map from 37. Used by the cache loader before the
+     * from 12021, the OrderID map from 37. Used by the cache loader before the
      * first message. A terminal entry is scheduled for eviction one retention
      * after it is loaded, as if it had just gone terminal: without that, a
      * restart would keep every order finished before it for the rest of the
@@ -794,7 +794,7 @@ public final class OrderStateMachine {
         }
         if (bust && !execRef.isEmpty()
                 && (execRef.equals(s.lastFillExecId) || execRef.equals(s.lastFillCorrectionExecId))) {
-            // Decision 6: 32/31 describe a trade that never happened. 9028
+            // Decision 6: 32/31 describe a trade that never happened. 12028
             // keeps the busted ExecID so a reader can see why they are zero.
             a.zeroFillDetail = true;
         }
@@ -901,7 +901,7 @@ public final class OrderStateMachine {
                         removePending(a, named);
                         setWorking(a, clOrdId);
                     }
-                    // No match: 9014 is untouched -- a venue that re-acks
+                    // No match: 12014 is untouched -- a venue that re-acks
                     // after a replace must not drag it back (S15).
                 }
                 default -> {
@@ -1436,7 +1436,7 @@ public final class OrderStateMachine {
             }
         }
 
-        /** 11, 41, 60 and 9022 become the message's; 41 only when the message's 41 is about this order. */
+        /** 11, 41, 60 and 12022 become the message's; 41 only when the message's 41 is about this order. */
         void bookkeeping(boolean takeOrigClOrdId) {
             String clOrdId = orNull(FixTags.CL_ORD_ID);
             if (clOrdId != null) {
@@ -1458,7 +1458,7 @@ public final class OrderStateMachine {
             mark(RecordField.MSG_COUNT);
         }
 
-        /** An applied message on an existing chain: bookkeeping, 9023 + 1. */
+        /** An applied message on an existing chain: bookkeeping, 12023 + 1. */
         void applied(boolean takeOrigClOrdId) {
             bookkeeping(takeOrigClOrdId);
             s.msgCount++;
@@ -1466,7 +1466,7 @@ public final class OrderStateMachine {
             count(Counter.CHANGED);
         }
 
-        /** Ignored on a resolved chain: 9025 + 1, carried to the next delta. */
+        /** Ignored on a resolved chain: 12025 + 1, carried to the next delta. */
         void ignore(IgnoreReason why) {
             kind = Outcome.Kind.IGNORED;
             reason = why;
@@ -1486,7 +1486,7 @@ public final class OrderStateMachine {
         /**
          * Binds the message's ids to this chain (docs/03 §3.3): positive tags
          * into the ClOrdID map, {@link FixTags#ORDER_ID} into the OrderID map.
-         * A new ClOrdID joins the chain list (9021, 9030), whatever the
+         * A new ClOrdID joins the chain list (12021, 12030), whatever the
          * outcome; an id bound elsewhere is left there and counted.
          */
         void stage(int... tags) {

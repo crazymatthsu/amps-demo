@@ -192,12 +192,12 @@ class CacheMissTest {
         Outcome bust = m.send("8 20=1 19=E-2 17=E-5 150=4 39=4 11=X-2 41=X-1 37=ORD 14=0 151=0 6=0 60=" + t(5));
         assertThat(bust.kind()).isEqualTo(Outcome.Kind.CREATED);
         assertThat(bust.key()).isEqualTo("X-1");
-        m.expect("X-1", "9018=MIDSTREAM 39=4 14=0");
+        m.expect("X-1", "12018=MIDSTREAM 39=4 14=0");
         assertThat(m.count(Counter.MISS_LOOKUP_ORPHANS)).isEqualTo(1);
     }
 
     @Test
-    @DisplayName("E47: an evicted order's late bust lands on its record via the tombstone, 9021/9023 intact (S9)")
+    @DisplayName("E47: an evicted order's late bust lands on its record via the tombstone, 12021/12023 intact (S9)")
     void evictionAndTheTombstone() {
         AtomicLong now = new AtomicLong(1_000);
         MachineTester m = new MachineTester();
@@ -216,7 +216,7 @@ class CacheMissTest {
 
         lookup.blotter.put("X-1", m.record("X-1"));
         m.send("8 20=1 19=E-2 17=E-5 150=4 39=4 11=X-2 41=X-1 37=ORD 14=0 151=0 6=0 60=" + t(5));
-        m.expect("X-1", "14=0 39=4 9021=X-1,X-2 9030=2 9023=6 9018=D 55=SYM");
+        m.expect("X-1", "14=0 39=4 12021=X-1,X-2 12030=2 12023=6 12018=D 55=SYM");
         assertThat(m.count(Counter.EVICTIONS)).isEqualTo(1);
         assertThat(m.count(Counter.REBUILT_FROM_RECORD)).isEqualTo(1);
     }
@@ -235,8 +235,8 @@ class CacheMissTest {
         AtomicLong now = new AtomicLong(10_000);
         MachineTester m = new MachineTester();
         m.machine.setTerminalRetention(Duration.ofSeconds(1), now::get);
-        m.machine.load(RecordReader.read(first.record("X-1"), 1).state());
-        m.machine.load(RecordReader.read(first.record("Y-1"), 1).state());
+        m.machine.load(RecordReader.read(first.record("X-1"), 2).state());
+        m.machine.load(RecordReader.read(first.record("Y-1"), 2).state());
 
         now.addAndGet(500);
         assertThat(m.machine.evictExpired()).as("not before its retention has run").isZero();
@@ -266,7 +266,7 @@ class CacheMissTest {
         lookup.audit.put("X-2", "X-1");
         Outcome late = m.send("F 11=X-9 41=X-2 60=" + t(6));
         assertThat(late.key()).isEqualTo("X-1");
-        m.expect("X-1", "39=4 9016=1 15011=X-9 9021=X-1,X-2,X-9");
+        m.expect("X-1", "39=4 12016=1 15011=X-9 12021=X-1,X-2,X-9");
         assertThat(m.count(Counter.MIDSTREAM_CHAINS)).isZero();
     }
 

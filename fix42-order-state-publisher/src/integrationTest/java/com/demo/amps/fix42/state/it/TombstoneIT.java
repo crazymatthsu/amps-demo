@@ -141,11 +141,11 @@ class TombstoneIT {
     }
 
     @Test
-    @DisplayName("E62: a record missing 9026 loads with its default; a newer schema refuses the start")
+    @DisplayName("E62: a record missing 12026 loads with its default; a newer schema refuses the start")
     void schema() throws Exception {
         fixture = OrderStateFixture.start("fix42os-schema", "demo");
-        fixture.publisher.publishRaw("OLD-1", true, bytes("13011=OLD-1|9024=1|9019=C|9021=OLD-1|9030=1|39=0"
-                + "|14=0|151=10|6=0|9015=NONE|9016=0|9017=N|9018=D|9023=2|9025=0|55=OLD|"));
+        fixture.publisher.publishRaw("OLD-1", true, bytes("13011=OLD-1|12024=2|12019=C|12021=OLD-1|12030=1|39=0"
+                + "|14=0|151=10|6=0|12015=NONE|12016=0|12017=N|12018=D|12023=2|12025=0|55=OLD|"));
         fixture.flush();
         fixture.disconnectPublisher();
         fixture.connect(List.of());
@@ -153,10 +153,10 @@ class TombstoneIT {
         assertThat(fixture.publisher.machine().state("OLD-1").lateFills()).isZero();
         assertThat(fixture.publisher.machine().counters().get(Counter.RECOVERED_WITH_DEFAULTS)).isEqualTo(1);
 
-        fixture.publisher.publishRaw("NEW-1", true, bytes("13011=NEW-1|9024=2|39=0|"));
+        fixture.publisher.publishRaw("NEW-1", true, bytes("13011=NEW-1|12024=3|39=0|"));
         fixture.flush();
         fixture.disconnectPublisher();
-        assertThatThrownBy(() -> fixture.connect(List.of())).hasMessageContaining("schema 2");
+        assertThatThrownBy(() -> fixture.connect(List.of())).hasMessageContaining("schema 3");
     }
 
     private static byte[] bytes(String raw) {

@@ -86,7 +86,7 @@ class OrderStateEndStateIT {
     }
 
     @Test
-    @DisplayName("the merged record keeps the D's terms; no record carries 35; every one carries 13011 and 9024")
+    @DisplayName("the merged record keeps the D's terms; no record carries 35; every one carries 13011 and 12024")
     void dsTermsSurviveEveryDelta() {
         for (OrderChain chain : MockFixFlow.chains()) {
             FixMessage record = blotter.get(chain.rootClOrdId());
@@ -97,12 +97,12 @@ class OrderStateEndStateIT {
         }
         for (FixMessage record : blotter.values()) {
             assertThat(record.has(FixTags.MSG_TYPE)).as(record.printable()).isFalse();
-            assertThat(record.value(FixTags.Record.SCHEMA_VERSION)).as(record.printable()).isEqualTo("1");
+            assertThat(record.value(FixTags.Record.SCHEMA_VERSION)).as(record.printable()).isEqualTo("2");
         }
     }
 
     @Test
-    @DisplayName("AAPL: the amended terms as the venue stated them, 9014 rotated, three ids in 9021")
+    @DisplayName("AAPL: the amended terms as the venue stated them, 12014 rotated, three ids in 12021")
     void appleAmended() {
         FixMessage apple = blotter.get("PARENT-AAPL-1");
         assertThat(apple.value(FixTags.ORDER_QTY)).isEqualTo("12000");

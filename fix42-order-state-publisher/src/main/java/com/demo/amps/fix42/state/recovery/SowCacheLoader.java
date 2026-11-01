@@ -18,7 +18,7 @@ import org.slf4j.LoggerFactory;
  *
  * <p>The SOW record is the checkpoint: every field of a cache entry is on it,
  * so one {@code sow} over the blotter rebuilds the entries, the ClOrdID map
- * from 9021 and the OrderID map from 37. What is not recovered is the ExecID
+ * from 12021 and the OrderID map from 37. What is not recovered is the ExecID
  * ring behind the last ExecID, so duplicate detection is depth one for the
  * first reports after a restart; the stale and late guards still hold.
  *

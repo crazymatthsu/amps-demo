@@ -46,7 +46,7 @@ class CoverageMatrixTest {
         MachineTester m = acked("N1", "1000");
         partial(m, "N1", "N1", "400", "600", "N1-E2", 2);
         m.send("8 150=2 39=2 11=N1 37=ORD-N1 17=N1-E3 14=1000 151=0 6=50.1 32=600 31=50.2 60=" + t(3));
-        m.expect("N1", "39=2 14=1000 151=0 6=50.1 9017=Y 9016=0");
+        m.expect("N1", "39=2 14=1000 151=0 6=50.1 12017=Y 12016=0");
     }
 
     @Test
@@ -56,21 +56,21 @@ class CoverageMatrixTest {
         partial(m, "N2", "N2", "300", "700", "N2-E2", 2);
         m.send("F 11=N2-2 41=N2 60=" + t(3));
         m.send("8 150=6 39=6 11=N2-2 41=N2 37=ORD-N2 17=N2-E3 14=300 151=700 6=50 60=" + t(4));
-        m.expect("N2", "39=6 9016=1");
+        m.expect("N2", "39=6 12016=1");
         m.send("8 150=4 39=4 11=N2-2 41=N2 37=ORD-N2 17=N2-E4 14=300 151=0 6=50 60=" + t(5));
-        m.expect("N2", "39=4 151=0 9017=Y 9016=0");
+        m.expect("N2", "39=4 151=0 12017=Y 12016=0");
     }
 
     @Test
-    @DisplayName("N3 G, 150=E, 150=5, fills: 38/44 move only on the 150=5; 9014 rotates")
+    @DisplayName("N3 G, 150=E, 150=5, fills: 38/44 move only on the 150=5; 12014 rotates")
     void n3() {
         MachineTester m = acked("N3", "1000");
         m.send("G 11=N3-2 41=N3 38=1200 44=50.5 60=" + t(2));
         m.send("8 150=E 39=E 11=N3-2 41=N3 37=ORD-N3 17=N3-E2 38=1200 44=50.5 14=0 151=1000 6=0 60=" + t(3));
         // A pending ack may echo the proposed terms; they are not the acked terms.
-        m.expect("N3", "39=E 38=1000 44=50 15038=1200 15044=50.5 9014=N3");
+        m.expect("N3", "39=E 38=1000 44=50 15038=1200 15044=50.5 12014=N3");
         m.send("8 150=5 39=0 11=N3-2 41=N3 37=ORD-N3 17=N3-E3 38=1200 44=50.5 14=0 151=1200 6=0 60=" + t(4));
-        m.expect("N3", "39=0 38=1200 44=50.5 15038=0 15044=0 9014=N3-2 9016=0");
+        m.expect("N3", "39=0 38=1200 44=50.5 15038=0 15044=0 12014=N3-2 12016=0");
     }
 
     @ParameterizedTest(name = "N4/N5 {0}")
@@ -84,14 +84,14 @@ class CoverageMatrixTest {
         m.send("9 11=N4-2 41=N4 434=1 39=6 60=" + t(5));
         // 39=6 on the 9 is not adopted once no cancel is pending -- except ALWAYS.
         // And under every policy the record's own 6 from the pending ack stays (docs/11 F2).
-        m.expect("N4", "39=6 9016=0");
+        m.expect("N4", "39=6 12016=0");
         m.send("G 11=N4-3 41=N4 38=900 60=" + t(6));
         m.send("9 11=N4-3 41=N4 434=2 39=1 60=" + t(7));
-        m.expect("N4", "39=" + (policy == CancelRejectStatusPolicy.NEVER ? "6" : "1") + " 38=1000 9016=0");
+        m.expect("N4", "39=" + (policy == CancelRejectStatusPolicy.NEVER ? "6" : "1") + " 38=1000 12016=0");
         m.send("F 11=N4-4 41=N4 60=" + t(8));
         m.send("9 11=N4-4 41=N4 434=1 39=8 60=" + t(9));
         m.expect("N4", policy == CancelRejectStatusPolicy.ALWAYS
-                ? "39=8 151=0 9017=Y" : "39=" + (policy == CancelRejectStatusPolicy.NEVER ? "6" : "1") + " 9017=N");
+                ? "39=8 151=0 12017=Y" : "39=" + (policy == CancelRejectStatusPolicy.NEVER ? "6" : "1") + " 12017=N");
     }
 
     @Test
@@ -101,7 +101,7 @@ class CoverageMatrixTest {
             MachineTester m = acked("N7", "1000");
             partial(m, "N7", "N7", "400", "600", "N7-E2", 2);
             m.send("8 150=" + execType + " 39=" + execType + " 11=N7 37=ORD-N7 17=N7-E3 14=400 6=50 60=" + t(3));
-            m.expect("N7", "39=" + execType + " 14=400 151=0 9017=Y");
+            m.expect("N7", "39=" + execType + " 14=400 151=0 12017=Y");
         }
     }
 
@@ -112,7 +112,7 @@ class CoverageMatrixTest {
         partial(m, "N9", "N9", "1000", "1500", "N9-E2", 2);
         m.send("F 11=N9-2 41=N9 60=" + t(3));
         m.send("8 150=D 39=1 378=5 11=N9 37=ORD-N9 17=N9-E3 38=2000 14=1000 151=1000 6=50 60=" + t(4));
-        m.expect("N9", "38=2000 151=1000 39=1 9016=1 15035=CANCEL 378=-");
+        m.expect("N9", "38=2000 151=1000 39=1 12016=1 15035=CANCEL 378=-");
     }
 
     @Test
@@ -122,17 +122,17 @@ class CoverageMatrixTest {
         partial(m, "N10", "N10", "200", "800", "N10-E2", 2);
         m.send("8 150=1 39=1 11=N10 37=ORD-N10 17=N10-E3 14=300 151=700 6=50.03 32=100 31=50.1 60=" + t(3));
         m.send("8 20=1 19=N10-E2 17=N10-E4 150=1 39=1 11=N10 37=ORD-N10 14=100 151=900 6=50.1 60=" + t(4));
-        m.expect("N10", "14=100 151=900 6=50.1 32=100 31=50.1 9028=N10-E3 9031=N10-E2");
+        m.expect("N10", "14=100 151=900 6=50.1 32=100 31=50.1 12028=N10-E3 12031=N10-E2");
     }
 
     @Test
-    @DisplayName("N11 a correct: restated 14/151/6, the correcting 32/31; 9028 = the correct's 17")
+    @DisplayName("N11 a correct: restated 14/151/6, the correcting 32/31; 12028 = the correct's 17")
     void n11() {
         MachineTester m = acked("N11", "1000");
         partial(m, "N11", "N11", "100", "900", "N11-E2", 2);
         m.send("8 20=2 19=N11-E2 17=N11-E3 150=1 39=1 11=N11 37=ORD-N11 14=100 151=900 6=49.9 32=100 31=49.9 60="
                 + t(3));
-        m.expect("N11", "6=49.9 32=100 31=49.9 9028=N11-E3 9031=N11-E2,N11-E3");
+        m.expect("N11", "6=49.9 32=100 31=49.9 12028=N11-E3 12031=N11-E2,N11-E3");
     }
 
     @Test
@@ -150,7 +150,7 @@ class CoverageMatrixTest {
     void n13() {
         MachineTester m = acked("N13", "1000");
         m.send("8 150=4 39=4 11=N13 37=ORD-N13 17=N13-E2 14=0 151=0 6=0 60=" + t(2));
-        m.expect("N13", "39=4 151=0 9017=Y 9016=0");
+        m.expect("N13", "39=4 151=0 12017=Y 12016=0");
     }
 
     @Test
@@ -159,19 +159,19 @@ class CoverageMatrixTest {
         MachineTester m = new MachineTester();
         m.send("D 11=N16 38=100 44=10 60=" + t(0));
         m.send("8 150=A 39=A 11=N16 37=ORD 17=E-1 14=0 151=100 6=0 60=" + t(1));
-        m.expect("N16", "39=A 9016=1 15035=NEW");
+        m.expect("N16", "39=A 12016=1 15035=NEW");
         assertThat(m.count(Counter.INFERRED_REQUESTS)).isZero();
         m.send("8 150=0 39=0 11=N16 37=ORD 17=E-2 14=0 151=100 6=0 60=" + t(2));
-        m.expect("N16", "39=0 9016=0");
+        m.expect("N16", "39=0 12016=0");
     }
 
     @Test
-    @DisplayName("N18 a 150=I status response: absolutes adopted, pending and 9014 untouched")
+    @DisplayName("N18 a 150=I status response: absolutes adopted, pending and 12014 untouched")
     void n18() {
         MachineTester m = acked("N18", "1000");
         m.send("F 11=N18-2 41=N18 60=" + t(2));
         m.send("8 150=I 39=1 11=N18 37=ORD-N18 17=N18-E2 14=300 151=700 6=50 60=" + t(3));
-        m.expect("N18", "39=1 14=300 9016=1 9014=N18");
+        m.expect("N18", "39=1 14=300 12016=1 12014=N18");
     }
 
     @Test
@@ -194,9 +194,9 @@ class CoverageMatrixTest {
         m.send("G 11=E5-2 41=E5 38=1100 44=51 60=" + t(2));
         m.send("G 11=E5-3 41=E5-2 38=1200 44=52 60=" + t(3));
         m.send("8 150=5 39=0 11=E5-3 41=E5-2 37=ORD-E5 17=E5-E2 38=1200 44=52 14=0 151=1200 6=0 60=" + t(4));
-        m.expect("E5", "38=1200 44=52 9014=E5-3 9016=1 15011=E5-2 15038=1100");
+        m.expect("E5", "38=1200 44=52 12014=E5-3 12016=1 15011=E5-2 15038=1100");
         m.send("8 150=5 39=0 11=E5-2 41=E5 37=ORD-E5 17=E5-E3 38=1100 44=51 14=0 151=1100 6=0 60=" + t(5));
-        m.expect("E5", "9016=0");
+        m.expect("E5", "12016=0");
     }
 
     @Test
@@ -205,12 +205,12 @@ class CoverageMatrixTest {
         MachineTester m = acked("E6", "1000");
         m.send("8 150=5 39=0 11=E6-2 41=E6 37=ORD-E6 17=E6-E2 38=1200 44=51 14=0 151=1200 6=0 60=" + t(3));
         assertThat(m.send("G 11=E6-2 41=E6 38=1200 44=51 60=" + t(2)).reason()).isEqualTo(IgnoreReason.LATE_REQUEST);
-        m.expect("E6", "38=1200 9016=0 9014=E6-2");
+        m.expect("E6", "38=1200 12016=0 12014=E6-2");
 
         MachineTester c = acked("E7", "1000");
         c.send("8 150=4 39=4 11=E7-2 41=E7 37=ORD-E7 17=E7-E2 14=0 151=0 6=0 60=" + t(3));
         assertThat(c.send("F 11=E7-2 41=E7 60=" + t(2)).reason()).isEqualTo(IgnoreReason.LATE_REQUEST);
-        c.expect("E7", "39=4 9016=0");
+        c.expect("E7", "39=4 12016=0");
     }
 
     @ParameterizedTest(name = "E8 {0}")
@@ -221,7 +221,7 @@ class CoverageMatrixTest {
         m.send("G 11=E8-2 41=E8 38=1200 44=51 60=" + t(2));
         m.send("8 150=1 39=1 11=E8-2 41=E8 37=ORD-E8 17=E8-E2 38=1200 44=51 14=100 151=1100 6=51 32=100 31=51 "
                 + "60=" + t(3));
-        m.expect("E8", policy == FillUnderPendingIdPolicy.IGNORE ? "9016=1 9014=E8" : "9016=0 9014=E8-2");
+        m.expect("E8", policy == FillUnderPendingIdPolicy.IGNORE ? "12016=1 12014=E8" : "12016=0 12014=E8-2");
     }
 
     @Test
@@ -231,7 +231,7 @@ class CoverageMatrixTest {
         m.send("F 11=E9-2 41=E9 60=" + t(2));
         m.send("F 11=E9-3 41=E9 60=" + t(3));
         m.send("8 150=4 39=4 11=E9 37=ORD-E9 17=E9-E2 14=0 151=0 6=0 60=" + t(4));
-        m.expect("E9", "39=4 9016=0");
+        m.expect("E9", "39=4 12016=0");
     }
 
     @Test
@@ -239,7 +239,7 @@ class CoverageMatrixTest {
     void e11() {
         MachineTester m = acked("E11", "1000");
         m.send("9 11=E11-2 41=E11 434=1 39=0 60=" + t(2));
-        m.expect("E11", "39=0 9016=0");
+        m.expect("E11", "39=0 12016=0");
         assertThat(m.count(Counter.UNMATCHED_REJECTS)).isEqualTo(1);
         Outcome orphan = m.send("9 11=ZZ-2 41=ZZ-1 434=1 39=0 60=" + t(3));
         assertThat(orphan.reason()).isEqualTo(IgnoreReason.UNMATCHED);
@@ -253,10 +253,10 @@ class CoverageMatrixTest {
         MachineTester m = acked("E13", "1000");
         m.send("8 150=2 39=2 11=E13 37=ORD-E13 17=E13-E2 14=1000 151=0 6=50 32=1000 31=50 60=" + t(2));
         m.send("G 11=E13-2 41=E13 38=1200 60=" + t(3));
-        m.expect("E13", "39=2 9017=Y 9016=1 15035=REPLACE");
+        m.expect("E13", "39=2 12017=Y 12016=1 15035=REPLACE");
         assertThat(m.machine.pendingOnTerminal()).isEqualTo(1);
         m.send("9 11=E13-2 41=E13 434=2 39=2 60=" + t(4));
-        m.expect("E13", "39=2 9016=0");
+        m.expect("E13", "39=2 12016=0");
         assertThat(m.machine.pendingOnTerminal()).isZero();
     }
 
@@ -272,8 +272,8 @@ class CoverageMatrixTest {
         Outcome late = m.send("8 150=1 39=1 11=E20 37=ORD-E20 17=E20-E4 14=500 151=500 6=50.02 32=200 31=50.05 60="
                 + t(4));
         switch (policy) {
-            case APPLY_ECONOMICS -> m.expect("E20", "39=4 14=500 151=0 9017=Y 9026=1 32=200");
-            case ADOPT_VENUE -> m.expect("E20", "39=1 14=500 151=500 9017=N 9026=0");
+            case APPLY_ECONOMICS -> m.expect("E20", "39=4 14=500 151=0 12017=Y 12026=1 32=200");
+            case ADOPT_VENUE -> m.expect("E20", "39=1 14=500 151=500 12017=N 12026=0");
             case IGNORE -> {
                 assertThat(late.reason()).isEqualTo(IgnoreReason.LATE_FILL);
                 m.expect("E20", "39=4 14=300 151=0");
@@ -290,7 +290,7 @@ class CoverageMatrixTest {
                 .isEqualTo(IgnoreReason.ABSORBED);
         assertThat(m.send("8 150=6 39=6 11=E23-3 41=E23 37=ORD-E23 17=E23-E4 14=900 151=100 60=" + t(5)).reason())
                 .isEqualTo(IgnoreReason.ABSORBED);
-        m.expect("E23", "39=4 14=300 9016=0");
+        m.expect("E23", "39=4 14=300 12016=0");
     }
 
     @Test
@@ -300,7 +300,7 @@ class CoverageMatrixTest {
         m.send("8 150=2 39=2 11=E25 37=ORD-E25 17=E25-E2 14=1000 151=0 6=50 32=1000 31=50 60=" + t(2));
         m.send("8 20=2 19=E25-E2 17=E25-E3 150=2 39=2 11=E25 37=ORD-E25 14=1000 151=0 6=49.9 32=1000 31=49.9 60="
                 + t(3));
-        m.expect("E25", "39=2 14=1000 6=49.9 9017=Y");
+        m.expect("E25", "39=2 14=1000 6=49.9 12017=Y");
     }
 
     @Test
@@ -309,19 +309,19 @@ class CoverageMatrixTest {
         MachineTester m = acked("E28", "1000");
         m.send("8 150=4 39=4 11=E28 37=ORD-E28 17=E28-E2 14=0 151=0 6=0 60=" + t(2));
         m.send("8 150=3 39=3 11=E28 37=ORD-E28 17=E28-E3 14=0 151=0 6=0 60=" + t(3));
-        m.expect("E28", "39=3 9017=Y");
+        m.expect("E28", "39=3 12017=Y");
         m.send("8 150=D 39=4 11=E28 37=ORD-E28 17=E28-E4 38=900 14=0 151=0 6=0 60=" + t(4));
         m.expect("E28", "39=4 38=900");
     }
 
     @Test
-    @DisplayName("E31a a redelivered bust: older than 9029, or its 19 already in 9031")
+    @DisplayName("E31a a redelivered bust: older than 12029, or its 19 already in 12031")
     void e31a() {
         MachineTester m = acked("E31a", "1000");
         partial(m, "E31a", "E31a", "100", "900", "B-E2", 2);
         partial(m, "E31a", "E31a", "200", "800", "B-E3", 3);
         m.send("8 20=1 19=B-E2 17=B-E4 150=1 39=1 11=E31a 37=ORD-E31a 14=100 151=900 6=50 60=" + t(4));
-        // A redelivery under a NEW ExecID, at a later time: only 9031 can tell.
+        // A redelivery under a NEW ExecID, at a later time: only 12031 can tell.
         assertThat(m.send("8 20=1 19=B-E2 17=B-E9 150=1 39=1 11=E31a 37=ORD-E31a 14=100 151=900 6=50 60=" + t(9))
                 .reason()).isEqualTo(IgnoreReason.DUPLICATE);
         // An old bust redelivered past the ring: its time.
@@ -338,7 +338,7 @@ class CoverageMatrixTest {
         m.send("8 20=3 150=0 39=0 11=E33 37=ORD-E33 17=0 14=0 151=1000 6=0 60=" + t(3));
         m.send("8 20=3 150=0 39=0 11=E33 37=ORD-E33 14=0 151=1000 6=0 60=" + t(4));
         assertThat(m.count(Counter.IGNORED_DUPLICATE)).isZero();
-        m.expect("E33", "9023=5 17=E33-E1");
+        m.expect("E33", "12023=5 17=E33-E1");
     }
 
     @Test
@@ -357,7 +357,7 @@ class CoverageMatrixTest {
         MachineTester m = acked("E36", "1000", MachineOptions.defaults().withNonFillAfterTerminal(policy));
         m.send("8 150=4 39=4 11=E36 37=ORD-E36 17=E36-E2 14=0 151=0 6=0 60=" + t(3));
         m.send("8 150=0 39=0 11=E36 37=ORD-E36 17=E36-E3 14=0 151=1000 6=0 60=" + t(4));
-        m.expect("E36", policy == NonFillAfterTerminalPolicy.IGNORE ? "39=4 151=0" : "39=0 151=1000 9017=N");
+        m.expect("E36", policy == NonFillAfterTerminalPolicy.IGNORE ? "39=4 151=0" : "39=0 151=1000 12017=N");
         // An OLDER re-ack with equal CumQty is caught by §5's late guard before
         // the after-terminal table runs, under every policy (docs/11 F1) ...
         MachineTester old = acked("E36", "1000", MachineOptions.defaults().withNonFillAfterTerminal(policy));
@@ -420,7 +420,7 @@ class CoverageMatrixTest {
     void e43e44() {
         MachineTester m = acked("E43", "1000");
         m.send("8 150=5 39=0 11=E43-3 41=E43-2 37=ORD-E43 17=E43-E2 38=1200 14=0 151=1200 6=0 60=" + t(2));
-        m.expect("E43", "38=1200 9021=E43,E43-2,E43-3");
+        m.expect("E43", "38=1200 12021=E43,E43-2,E43-3");
 
         MachineTester r = acked("E44", "1000");
         r.send("G 11=E44-2 41=E44 38=1200 60=" + t(2));
@@ -437,42 +437,44 @@ class CoverageMatrixTest {
         m.send("D 11=B 38=100 44=10 60=" + t(2));
         m.send("8 150=0 39=0 11=B 37=ORD-B 17=B-E1 14=0 151=100 6=0 60=" + t(3));
         m.send("G 11=A-2 41=A 37=ORD-B 38=1200 60=" + t(4));
-        m.expect("A", "9016=1 15011=A-2");
-        m.expect("B", "9016=0");
+        m.expect("A", "12016=1 15011=A-2");
+        m.expect("B", "12016=0");
         assertThat(m.count(Counter.ID_CONFLICTS)).isEqualTo(1);
 
         m.send("D 11=C 41=A 38=300 44=10 60=" + t(5));
-        m.expect("C", "9027=A 41=-");
+        m.expect("C", "12027=A 41=-");
         assertThat(m.machine.keyForClOrdId("A")).isEqualTo("A");
     }
 
     @Test
-    @DisplayName("E59 ClOrdIDs with : ; , % are escaped in 9015 and 9021, and parse back")
+    @DisplayName("E59 ClOrdIDs with : ; , % are escaped in 12015 and 12021, and parse back")
     void e59() {
         MachineTester m = new MachineTester();
         String root = "20261031:DESK7;A,B%1";
         m.send("D 11=" + root + " 38=100 44=10 60=" + t(0));
         m.send("F 11=" + root + "-2 41=" + root + " 60=" + t(1));
-        m.expect(root, "9021=20261031%3ADESK7%3BA%2CB%251,20261031%3ADESK7%3BA%2CB%251-2 "
-                + "9015=NEW:R:::20261031%3ADESK7%3BA%2CB%251;CANCEL:R:::20261031%3ADESK7%3BA%2CB%251-2");
-        OrderState rebuilt = RecordReader.read(m.cached(root), 1).state();
+        m.expect(root, "12021=20261031%3ADESK7%3BA%2CB%251,20261031%3ADESK7%3BA%2CB%251-2 "
+                + "12015=NEW:R:::20261031%3ADESK7%3BA%2CB%251;CANCEL:R:::20261031%3ADESK7%3BA%2CB%251-2");
+        OrderState rebuilt = RecordReader.read(m.cached(root), 2).state();
         assertThat(rebuilt.sameRecordAs(m.state(root))).isTrue();
         assertThat(rebuilt.clOrdIds()).containsExactly(root, root + "-2");
     }
 
     @Test
-    @DisplayName("E60 a D's header tags and tags in the machine's ranges are stripped and counted")
+    @DisplayName("E60 a D's header tags and tags in the internal ranges are stripped and counted; 9xxx passes")
     void e60() {
         MachineTester m = new MachineTester();
         m.send("D 8=FIX.4.2 9=120 34=17 49=OMS 56=VENUE 52=20261031-10:00:00 11=E60 38=100 44=10 55=SYM "
-                + "9015=NONE 9050=venue 9000=PARENT 13011=BOGUS 15038=1 9100=hook 10=123 60=" + t(0));
-        m.expect("E60", "13011=E60 9015=NEW:R:::E60 15038=0 9000=PARENT 55=SYM 9050=- 8=- 9=- 34=- 49=- 56=- "
-                + "52=- 10=- 9100=hook");
-        assertThat(m.count(Counter.STRIPPED_TAGS)).isEqualTo(11);
+                + "12015=NONE 12050=venue 9050=desk 9000=PARENT 13011=BOGUS 15038=1 12100=hook 10=123 60=" + t(0));
+        // 9001-9999 is the upstream system's since the publisher moved to 12000-12999: it passes
+        // through. Anything upstream in 12000-12999, the hooks' 12100 included, does not.
+        m.expect("E60", "13011=E60 12015=NEW:R:::E60 15038=0 9000=PARENT 55=SYM 12050=- 9050=desk 8=- 9=- 34=- "
+                + "49=- 56=- 52=- 10=- 12100=-");
+        assertThat(m.count(Counter.STRIPPED_TAGS)).isEqualTo(12);
     }
 
     @Test
-    @DisplayName("E61 a thousand amends: 9021 carries the last 50, 9030 the count")
+    @DisplayName("E61 a thousand amends: 12021 carries the last 50, 12030 the count")
     void e61() {
         MachineTester m = acked("E61", "1000");
         String previous = "E61";
@@ -483,8 +485,8 @@ class CoverageMatrixTest {
                     + " 38=1000 14=0 151=1000 6=0 60=" + t(2));
             previous = id;
         }
-        m.expect("E61", "9030=1001 9014=E61-1001");
-        assertThat(m.value("E61", 9021).split(",")).hasSize(50).startsWith("E61-952").endsWith("E61-1001");
+        m.expect("E61", "12030=1001 12014=E61-1001");
+        assertThat(m.value("E61", 12021).split(",")).hasSize(50).startsWith("E61-952").endsWith("E61-1001");
         assertThat(m.machine.keyForClOrdId("E61-500")).isEqualTo("E61");
     }
 
@@ -494,7 +496,7 @@ class CoverageMatrixTest {
         MachineTester m = acked("E76b", "1000");
         m.send("F 11=E76b-2 41=E76b 60=" + t(2));
         m.send("8 150=F 39=1 11=E76b-2 41=E76b 37=ORD-E76b 17=E76b-E2 14=100 151=900 6=50 32=100 31=50 60=" + t(3));
-        m.expect("E76b", "39=1 14=100 9016=1 32=100");
+        m.expect("E76b", "39=1 14=100 12016=1 32=100");
         assertThat(m.machine.counters().byExecType()).containsEntry("F", 1L);
     }
 
@@ -506,6 +508,6 @@ class CoverageMatrixTest {
         assertThat(status.reason()).isEqualTo(IgnoreReason.UNROUTED);
         assertThat(status.key()).isEqualTo("H");
         assertThat(status.publish()).isEqualTo(Outcome.Publish.NONE);
-        m.expect("H", "9025=0 9023=2");
+        m.expect("H", "12025=0 12023=2");
     }
 }
