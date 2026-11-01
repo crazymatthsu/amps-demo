@@ -7,7 +7,10 @@ the FIX layer and the mock venue, pinned to `fix42-publisher`'s scripted flow)
 phase 1 (a mock venue with several requests in flight, fourteen dialect
 variants, and `EdgeCaseFlow`: the docs/06 rows as scripts) and phase 2 (the
 state machine, `RecordWriter`/`RecordReader`, and a test per walkthrough and
-per matrix row). What building it found is [docs/11](docs/11-build-findings.md).
+per matrix row) and phase 3 (the `fix42-order-state` server flow, an
+`HAClient` with a publish store, the audit router, the publisher, the hook SPI,
+and integration suites against a real AMPS). What building it found is
+[docs/11](docs/11-build-findings.md).
 
 The stateful successor to [`fix42-publisher`](../fix42-publisher/README.md).
 Same FIX 4.2 drop-copy flow, same audit topics, same full publish on `35=D`
@@ -23,10 +26,10 @@ whichever answer arrives first
 ([docs/01](docs/01-problem-the-two-cancels.md), [docs/03 §7.1](docs/03-state-machine.md#71-two-cancels-confirm-then-reject-the-motivating-case)).
 
 ```bash
-# once built, per docs/05:
 export AMPS_IMAGE=localhost/amps-demo:5.3.5.135
 AMPS_FLOW=fix42-order-state ./server/scripts/amps.sh start
-./gradlew :fix42-order-state-publisher:bootRun
+./gradlew :fix42-order-state-publisher:bootRun        # the demo profile: strict, memory store
+./gradlew :fix42-order-state-publisher:integrationTest  # each suite starts its own instance
 ```
 
 | document | what it covers |
@@ -41,4 +44,4 @@ AMPS_FLOW=fix42-order-state ./server/scripts/amps.sh start
 | [docs/08](docs/08-review-findings.md) | round-1 review findings, the six decisions taken on them, where each landed |
 | [docs/09](docs/09-review-round-2.md) | round-2 review of the revised docs: round-1 dispositions verified, twenty-two new findings and where each landed |
 | [docs/10](docs/10-case-frequency-and-priority.md) | every case sorted by frequency (normal, sometimes, rare) and build slot, for implementation order |
-| [docs/11](docs/11-build-findings.md) | what the build found: three findings on the rules, and the verify-on-build answers |
+| [docs/11](docs/11-build-findings.md) | what the build found: six findings (three on the rules, three on AMPS 5.3.5.135), and the verify-on-build answers |

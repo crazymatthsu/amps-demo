@@ -1,5 +1,6 @@
 package com.demo.amps.fix42.state.machine;
 
+import com.demo.amps.fix42.state.spi.IndexView;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -21,7 +22,7 @@ import java.util.Set;
  * conflict ({@code idConflicts}, R10). The OrderID map doubles as the
  * tombstone of an evicted order (phase 4): its ClOrdIDs go, its OrderIDs stay.
  */
-public final class OrderKeyIndex {
+public final class OrderKeyIndex implements IndexView {
 
     private final Map<String, String> byClOrdId = new HashMap<>();
     private final Map<String, String> byOrderId = new HashMap<>();

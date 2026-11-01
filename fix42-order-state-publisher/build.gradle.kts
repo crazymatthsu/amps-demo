@@ -107,6 +107,9 @@ tasks.named<Jar>("jar") {
 
 tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
     workingDir = rootProject.projectDir
+    // The demo profile (docs/04 §10): a memory publish store and strict mode.
+    // -Dspring.profiles.active=... on the command line wins.
+    systemProperty("spring.profiles.active", System.getProperty("spring.profiles.active") ?: "demo")
     // Point the publisher somewhere else without editing YAML:
     //   ./gradlew :fix42-order-state-publisher:bootRun -Dfix42-order-state.amps.uri=tcp://host:9007/amps/fix
     systemProperties(

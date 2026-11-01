@@ -87,6 +87,26 @@ class WalkthroughTest {
     }
 
     @Nested
+    @DisplayName("docs/11 F4: a confirm overtaken by a later-stamped reject, on a tap merging sessions")
+    class ConfirmOvertakenByReject {
+
+        @Test
+        void theConfirmIsDroppedAsLateAndTheOrderStaysLive() {
+            // The venue confirmed X-2 at T5 and rejected X-3 at T6; the tap
+            // delivered the reject first. The reject's 60 moved 9029 (S19), so
+            // the confirm -- equal CumQty, older 60 -- is IGNORED(late) at §5
+            // step 4, before the after-terminal table could see it.
+            MachineTester m = partiallyFilledX();
+            m.send("F 11=X-2 41=X-1 60=" + t(3));
+            m.send("F 11=X-3 41=X-1 60=" + t(4));
+            m.send("9 11=X-3 41=X-1 37=ORD 434=1 39=6 60=" + t(6));
+            assertThat(m.send("8 150=4 39=4 11=X-2 41=X-1 37=ORD 17=E-3 14=300 151=0 6=50 60=" + t(5)).reason())
+                    .isEqualTo(IgnoreReason.LATE);
+            m.expect("X-1", "39=6 151=700 9017=N 9016=1 15011=X-2");
+        }
+    }
+
+    @Nested
     @DisplayName("7.3 a third cancel after the order is canceled")
     class ThirdCancel {
 

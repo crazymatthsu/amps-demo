@@ -1,0 +1,152 @@
+# FIX 4.2 order-state publisher (docs/02 §6).
+#
+# Nothing here selects which tags reach the blotter: that is the state
+# machine's, in code (docs/03). What is here is the connection, the policy
+# knobs a venue dialect bundles (docs/07 §1), and the pass-through routing of
+# the audit topics. OrderStateProperties.validate() refuses to boot on a
+# configuration that would fail later at the server.
+#
+# The defaults below are PRODUCTION's. The `demo` profile at the end of this
+# file (bootRun, the integration tests) switches to an in-memory publish store
+# and strict mode.
+
+spring:
+  main:
+    banner-mode: off
+
+logging:
+  level:
+    com.demo.amps.fix42.state: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level %-24logger{0} %msg%n"
+
+fix42-order-state:
+
+  amps:
+    uri: tcp://127.0.0.1:9007/amps/fix       # must end /fix: every topic is fix-typed
+    client-name: fix42-order-state-publisher  # stable: a store replay is de-duplicated by it
+    timeout-ms: 10000
+    # The HAClient's publish store: FILE (production), MEMORY (demo, tests),
+    # NONE (the stateless publisher's at-most-once). docs/04 §6.
+    publish-store: FILE
+    publish-store-dir: build/client-state/fix42-order-state
+    reconnect-delay-ms: 1000
+
+  # strict: an unrouted or unparseable message raises (tests, development).
+  # lenient: it is recorded on fix42/unrouted or fix42/malformed and the feed
+  # continues (production). docs/03 §9.
+  mode: lenient
+
+  order-state:
+    topic: sow/fix42/order_state
+    key-tag: 13011                 # RootClOrdID; 13xxx = the root value of tag xxx
+    schema-version: 1
+    # What a 35=9's tag 39 may do to the record. docs/03 §4.
+    cancel-reject-status: WHEN_NOT_TERMINAL          # NEVER | ALWAYS
+    # A fill with higher CumQty after a terminal report. docs/03 §4, §7.12.
+    late-fill-after-terminal: APPLY_ECONOMICS        # ADOPT_VENUE | IGNORE
+    # A non-fill report with a non-terminal 39 after a terminal report: a
+    # venue-asserted reopen if it answers a request or is newer. docs/03 §4.
+    non-fill-after-terminal: ADOPT_VENUE_IF_LATER    # ADOPT_VENUE | IGNORE
+    # A fill carrying a pending amend's ClOrdID. docs/03 §6.4.
+    fill-under-pending-id: IGNORE                    # ANSWERS_REPLACE_IF_TERMS_MATCH
+    # Drop a non-reopening report whose CumQty went backwards.
+    stale-guard: true
+    # Drop a non-reopening report with equal CumQty and an older TransactTime
+    # than the last applied report's. docs/03 §5; and docs/11 F1 for the two
+    # after-terminal rows it runs before.
+    transact-time-guard: true
+    # Depth of the per-order ExecID ring used for duplicate detection.
+    exec-id-history: 8
+    # Order-term tags adopted from a 150=0/5/D report when present.
+    order-term-tags: [18, 40, 44, 59, 99, 100, 110, 111, 126]
+    # Session header/trailer tags never copied onto the record; the machine's
+    # own ranges 9001-9099, 13000-13999 and 15000-15999 are always removed.
+    strip-tags: [8, 9, 10, 34, 43, 49, 50, 52, 56, 57, 97, 115, 116, 122, 128, 129]
+    # How many ClOrdIDs 9021 carries; 9030 has the count. docs/02 §4.
+    chain-ids-published: 50
+    # Evict terminal orders from the cache after this long; PT0S = never.
+    terminal-retention: PT0S
+    # Rebuild the cache at startup: SOW (default) or NONE. docs/04 §2.
+    recovery: SOW
+    # Keep a cache body only for open orders; terminal records yield a
+    # tombstone (every 37 -> 13011) instead. docs/04 §2.1.
+    load-open-orders-only: false
+    # Let recovery NONE start against a non-empty blotter.
+    allow-incomplete-cache: false
+    # On a cache miss, look the order up through the audit topics before
+    # creating a MIDSTREAM entry. docs/04 §3.
+    miss-lookup: true
+    miss-lookup-by-order-id: false
+    # Publish 9025 at once for messages the machine ignored.
+    publish-unchanged: false
+    # Named bundles of the policy knobs above, one per venue. docs/07 §1.
+    dialect: default
+    dialects:
+      venue-z:
+        cancel-reject-status: NEVER
+        late-fill-after-terminal: ADOPT_VENUE
+        fill-under-pending-id: ANSWERS_REPLACE_IF_TERMS_MATCH
+
+  audit:
+    # Appended to every pass-through publish as a trailer; 0 disables; must
+    # equal order-state.key-tag. docs/02 §5.
+    key-tag: 13011
+
+  # The SOW key of every topic, mirroring server/config/flows/fix42-order-state.
+  topic-keys:
+    "[sow/fix42/order_state]": [13011]
+    "[sow/fix42/orders_audit]": [11]
+    "[sow/fix42/execs]": [37]
+    "[sow/fix42/execs_audit]": [17]
+    "[sow/fix42/rejects]": [11]
+    "[fix42/unrouted]": []          # not a SOW topic: no key
+    "[fix42/malformed]": []
+
+  # Pass-through routing: matched in order, first match wins. Each message goes
+  # WHOLE to its route's topics, plus 13011 as a trailer when it resolved to a
+  # chain. A topic whose key the message lacks (a 20=3 with no 17) is skipped
+  # and the message goes to fix42/unrouted instead; the blotter still gets it.
+  routes:
+    - name: new-order
+      msg-types: ["D"]
+      topics: ["sow/fix42/orders_audit"]
+    - name: amend
+      msg-types: ["G"]
+      topics: ["sow/fix42/orders_audit"]
+    - name: cancel-request
+      msg-types: ["F"]
+      topics: ["sow/fix42/orders_audit"]
+    - name: execution-report
+      msg-types: ["8"]
+      topics: ["sow/fix42/execs", "sow/fix42/execs_audit"]
+      # A report whose key tag holds a sentinel skips the topic keyed by it:
+      # 37=NONE would collapse execs onto one record, 17=0 execs_audit.
+      key-guard:
+        "[sow/fix42/execs]": { "37": ["NONE"] }
+        "[sow/fix42/execs_audit]": { "17": ["0", "NONE"] }
+    - name: cancel-reject
+      msg-types: ["9"]
+      topics: ["sow/fix42/rejects"]
+    # Lenient mode only; strict mode raises before reaching it.
+    - name: unrouted
+      msg-types: ["*"]
+      topics: ["fix42/unrouted"]
+      apply-state: false
+
+---
+# The demo: bootRun and the integration suites. A publish store on the heap
+# (nothing to clean up between runs) and strict mode (a missing rule fails the
+# first run that hits it).
+spring:
+  config:
+    activate:
+      on-profile: demo
+
+fix42-order-state:
+  amps:
+    publish-store: MEMORY
+  mode: strict
+  # The shipped example hook: a desk status in 9100 (docs/07 §2).
+  hooks:
+    desk-status: true

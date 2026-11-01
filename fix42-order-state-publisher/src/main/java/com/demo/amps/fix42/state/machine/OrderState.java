@@ -1,6 +1,7 @@
 package com.demo.amps.fix42.state.machine;
 
 import com.demo.amps.fix42.state.fix.FixTags;
+import com.demo.amps.fix42.state.spi.OrderStateView;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -19,7 +20,7 @@ import java.util.Objects;
  * <p>Mutable, and owned by the machine's thread. {@code plan} works on a
  * {@link #copy()} so the cached entry is untouched until {@code commit}.
  */
-public final class OrderState {
+public final class OrderState implements OrderStateView {
 
     String orderKey;
     char keyKind = 'C';

@@ -53,6 +53,8 @@ public final class OrderStateMachine {
     private final MachineCounters counters = new MachineCounters();
     private long planned;
     private long committed;
+    /** A hook's {@code resolveKey} answer for the message being planned, or null. */
+    private String keyOverride;
 
     public OrderStateMachine(MachineOptions options) {
         this.options = options;
@@ -70,6 +72,56 @@ public final class OrderStateMachine {
      * outcome.
      */
     public Outcome plan(FixFrame message) {
+        return plan(message, null);
+    }
+
+    /**
+     * {@link #plan(FixFrame)}, with identity overridden by a hook: when
+     * {@code key} names an existing chain the message resolves to it whatever
+     * its ids say (docs/07 §2). A key the machine does not know is ignored and
+     * resolution runs as usual.
+     */
+    public Outcome plan(FixFrame message, String key) {
+        keyOverride = key != null && entries.containsKey(key) ? key : null;
+        try {
+            return planResolved(message);
+        } finally {
+            keyOverride = null;
+        }
+    }
+
+    /** A message a hook vetoed: counted on its chain as {@link IgnoreReason#HOOK}, applied to nothing. */
+    public Outcome planVeto(FixFrame message, String key) {
+        Apply a = new Apply(message, ++planned);
+        String resolved = key != null && entries.containsKey(key) ? key : resolveKey(message);
+        if (resolved != null && entries.containsKey(resolved)) {
+            a.attach(resolved);
+            a.ignore(IgnoreReason.HOOK);
+        } else {
+            a.key = resolved;
+            a.ignoreWithoutChain(IgnoreReason.HOOK);
+        }
+        return a.outcome();
+    }
+
+    /**
+     * The key {@code message} resolves to by its type's resolution order
+     * (docs/03 §3.1), or null; stages nothing. What the hooks' before-view and
+     * a pass-through-only route's audit trailer are looked up by.
+     */
+    public String resolveKey(FixFrame message) {
+        Apply a = new Apply(message, planned);
+        return switch (a.msgType) {
+            case FixTags.MsgType.NEW_ORDER_SINGLE -> index.keyForClOrdId(a.v(FixTags.CL_ORD_ID));
+            case FixTags.MsgType.ORDER_CANCEL_REPLACE_REQUEST, FixTags.MsgType.ORDER_CANCEL_REQUEST ->
+                    resolve(a, FixTags.ORIG_CL_ORD_ID, -FixTags.ORDER_ID, FixTags.CL_ORD_ID);
+            case FixTags.MsgType.EXECUTION_REPORT -> resolve(a, -FixTags.ORDER_ID, FixTags.CL_ORD_ID,
+                    FixTags.ORIG_CL_ORD_ID);
+            default -> resolve(a, FixTags.CL_ORD_ID, FixTags.ORIG_CL_ORD_ID, -FixTags.ORDER_ID);
+        };
+    }
+
+    private Outcome planResolved(FixFrame message) {
         Apply a = new Apply(message, ++planned);
         switch (a.msgType) {
             case FixTags.MsgType.NEW_ORDER_SINGLE -> planNewOrder(a);
@@ -172,7 +224,7 @@ public final class OrderStateMachine {
             a.ignoreWithoutChain(IgnoreReason.NO_ID);
             return;
         }
-        String key = index.keyForClOrdId(id);
+        String key = keyOverride != null ? keyOverride : index.keyForClOrdId(id);
         if (key == null) {
             if (index.isKey(id)) {
                 a.count(Counter.KEY_COLLISIONS);
@@ -873,6 +925,9 @@ public final class OrderStateMachine {
      * other way round (S1). {@code 37=NONE} is skipped.
      */
     private String resolve(Apply a, int... tags) {
+        if (keyOverride != null) {
+            return keyOverride;
+        }
         for (int tag : tags) {
             String id = a.v(Math.abs(tag));
             if (id.isEmpty()) {

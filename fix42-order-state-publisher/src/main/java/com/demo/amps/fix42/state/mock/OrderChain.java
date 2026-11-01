@@ -334,10 +334,18 @@ public final class OrderChain {
 
     // ---- venue responses ----------------------------------------------------
 
-    /** 35=8 with 150=A/39=A -- the venue has the order and has not yet accepted it. */
+    /**
+     * 35=8 with 150=A/39=A -- the venue has the order and has not yet accepted
+     * it. OrderID is a required field of a 4.2 report; a venue that has not
+     * assigned one yet sends {@code 37=NONE}.
+     */
     public OrderChain pendingNew() {
-        return record("pending new", execution(FixTags.ExecType.PENDING_NEW,
-                FixTags.OrdStatus.PENDING_NEW, currentClOrdId()).build());
+        FixMessage.Builder message = execution(FixTags.ExecType.PENDING_NEW, FixTags.OrdStatus.PENDING_NEW,
+                currentClOrdId());
+        if (orderId.isEmpty()) {
+            message.set(FixTags.ORDER_ID, "NONE");
+        }
+        return record("pending new", message.build());
     }
 
     /** 35=8 with 150=0/39=0 -- the venue accepts the order and assigns tag 37. */
@@ -805,15 +813,23 @@ public final class OrderChain {
     }
 
     /**
-     * The {@code reportOrdinal}-th report redelivered as a {@code 20=3} status
-     * snapshot with no ExecID: an old status, outside any ExecID ring (06 E31).
+     * The {@code reportOrdinal}-th report's state restated as a {@code 20=3}
+     * status snapshot with its old TransactTime: an old status, outside any
+     * ExecID ring (06 E31). Its tag 17 is what the dialect's status reports
+     * carry -- a fresh ExecID by default, {@code 0} or none under
+     * {@link MockDialect#statusReportExecId()}.
      */
     public OrderChain redeliverAsStatus(int reportOrdinal) {
         FixEvent old = report(reportOrdinal);
+        String execId = dialect.statusReportExecId();
+        if (execId == null) {
+            execSeq++;
+            execId = lastExecId();
+        }
         FixMessage message = FixMessage.ofType(FixTags.MsgType.EXECUTION_REPORT)
                 .setAll(old.message())
                 .set(FixTags.EXEC_TRANS_TYPE, FixTags.ExecTransType.STATUS)
-                .set(FixTags.EXEC_ID, null)
+                .set(FixTags.EXEC_ID, execId)
                 .set(FixTags.LAST_SHARES, null)
                 .set(FixTags.LAST_PX, null)
                 .set(FixTags.LAST_MKT, null)
@@ -848,6 +864,24 @@ public final class OrderChain {
 
     public OrderScope scope() {
         return scope;
+    }
+
+    /** Tag 1, 55, 54: what the exposure views group by. */
+    public String account() {
+        return account;
+    }
+
+    public String symbol() {
+        return instrument.symbol();
+    }
+
+    public String side() {
+        return side;
+    }
+
+    /** The parent's ClOrdID (tag 9000) for a child slice, else null. */
+    public String parentClOrdId() {
+        return parentClOrdId;
     }
 
     /** The D's ClOrdID. */
