@@ -100,6 +100,10 @@ build has recorded in [08](08-exposure-views.md).
 The chained blotter's remaining limit — a merge cannot apply a message
 *conditionally* — has a concrete production shape: two cancels for one order,
 one confirmed and one rejected, leave the record reading as the reject. The
-design for the stateful successor, `fix42-order-state-publisher`, which keeps
-everything above except the module and adds a small per-order cache, is in
+stateful successor, `fix42-order-state-publisher`, keeps everything above
+except the module and adds a small per-order cache. It is built, and that case
+ends canceled with nothing pending in both arrival orders. Its README says what
+it fixes and what it costs, with numbers from a run:
+[fix42-order-state-publisher/README.md](../../fix42-order-state-publisher/README.md).
+The design is in
 [fix42-order-state-publisher/docs/](../../fix42-order-state-publisher/docs/README.md).

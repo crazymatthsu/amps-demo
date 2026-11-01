@@ -34,6 +34,13 @@ dependencies {
     testImplementation(platform(libs.spring.boot.bom))
     testImplementation(libs.spring.boot.starter.test)
     testImplementation(libs.awaitility)
+    testImplementation(libs.jol.core)
+}
+
+// ChainMemoryTest sizes the cache with JOL, which on JDK 21 reads a record's
+// field offsets only this way (the cache holds records: options, pending requests).
+tasks.test {
+    systemProperty("jol.magicFieldOffset", "true")
 }
 
 /**
@@ -95,6 +102,69 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
 // `check` runs it; the suite itself opts out when no AMPS image is configured.
 tasks.named("check") {
     dependsOn(integrationTestTask)
+}
+
+/**
+ * The README and the design notes carry relative links, into each other and
+ * into the code; a link to a file that does not exist is the rot the docs
+ * module already refuses. The same check fix-pub-seqno runs, for this module.
+ */
+val checkModuleDocs = tasks.register("checkModuleDocs") {
+    group = "verification"
+    description = "Verify the relative links in this module's markdown resolve."
+
+    val moduleDir = layout.projectDirectory.asFile
+    inputs.dir(layout.projectDirectory.dir("docs"))
+    inputs.file(layout.projectDirectory.file("README.md"))
+    outputs.upToDateWhen { false }
+
+    doLast {
+        val linkPattern = Regex("""\[[^]]*]\((?!https?://|#)([^)#]+)(?:#[^)]*)?\)""")
+        val documents = listOf(File(moduleDir, "README.md")) +
+            File(moduleDir, "docs").listFiles { file -> file.extension == "md" }.orEmpty().sorted()
+        val problems = mutableListOf<String>()
+        documents.forEach { document ->
+            linkPattern.findAll(document.readText()).forEach { match ->
+                val target = match.groupValues[1].trim()
+                if (!File(document.parentFile, target).exists()) {
+                    problems += "${document.name}: broken link -> $target"
+                }
+            }
+        }
+        if (problems.isNotEmpty()) {
+            throw GradleException("documentation problems:\n  " + problems.joinToString("\n  "))
+        }
+        logger.lifecycle("fix42-order-state-publisher: ${documents.size} documents, links resolve")
+    }
+}
+
+tasks.named("check") {
+    dependsOn(checkModuleDocs)
+}
+
+/**
+ * What the cache and the publish store cost, measured rather than argued:
+ * `./gradlew :fix42-order-state-publisher:publishBenchmark`.
+ *
+ * Starts its own AMPS container and times fix42-publisher's benchmark load
+ * through the machine alone and through the publisher with each publish-store
+ * value; `./gradlew :fix42-publisher:publishBenchmark` on the same machine is
+ * the comparison. Not a test: it asserts nothing, so integrationTest excludes
+ * it and a normal build still reports zero skipped.
+ */
+tasks.register<Test>("publishBenchmark") {
+    group = "verification"
+    description = "Measure throughput through the machine and per publish store against a real AMPS instance."
+    testClassesDirs = integrationTest.output.classesDirs
+    classpath = integrationTest.runtimeClasspath
+    workingDir = rootProject.projectDir
+    filter { includeTestsMatching("*Benchmark") }
+    systemProperty("fix42-order-state.benchmark", "true")
+    outputs.upToDateWhen { false }
+    testLogging { showStandardStreams = true }
+    harnessEnvironment.forEach { name ->
+        providers.environmentVariable(name).orNull?.let { environment(name, it) }
+    }
 }
 
 // The demo entry point is bootRun; nothing consumes a runnable jar.
