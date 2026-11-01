@@ -199,7 +199,7 @@ checkpoint ([04 §1](04-recovery-and-operations.md#1-the-sow-record-is-the-check
 | 12023 | MsgCount | every applied message | messages applied to this order |
 | 12025 | IgnoredCount | every ignored message | duplicates, stale, late and absorbed reports, duplicate and late requests; marked dirty so the next delta carries it |
 | 12026 | LateFills | a late execution applied | [03 §7.12](03-state-machine.md#712-cancel-confirmed-then-a-late-execution) |
-| 12024 | SchemaVersion | creation; bumped by a newer writer | `1`; the loader refuses an unknown major version |
+| 12024 | SchemaVersion | creation; bumped by a newer writer | `2`, since the move from 9xxx to 12000–12999 ([11 §6](11-build-findings.md#6-renumbering-the-machines-tags-move-to-1200012999-schema-2)); the loader refuses an unknown major version, and a record of the 9xxx scheme |
 | 1, 55, 54, 40, 59, 15, 100, 21, 109, 110, 111, 47, 48, 22, 126 … | order terms | the D's FULL publish, less the stripped tags; `order-term-tags` again on `150 ∈ {0, 5, D}` | the D's whole message less the session header and trailer and less anything in the machine's own tag ranges |
 | 38, 44 | OrderQty, Price | the D; then venue reports only — never a pending acknowledgement, never a `150=8` | **acked** terms; `44=0` once the order is a market order |
 | 39 | OrdStatus | `35=8` always; `35=9` per policy; `A` stamped at creation from a D; absent on a chain created from a request | venue truth |
@@ -399,7 +399,7 @@ fix42-order-state:
   order-state:
     topic: sow/fix42/order_state
     key-tag: 13011                 # RootClOrdID; 13xxx = the root value of tag xxx
-    schema-version: 1
+    schema-version: 2              # 12024; 2 since the record left 9xxx (docs/11 §6)
     # What a 35=9's tag 39 may do to the record. docs/03 §4.
     cancel-reject-status: WHEN_NOT_TERMINAL          # NEVER | ALWAYS
     # A fill with higher CumQty after a terminal report. docs/03 §4, §7.12.

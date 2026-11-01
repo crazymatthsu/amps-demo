@@ -83,10 +83,17 @@ the last report is still caught. Older ids past the 12021 cap are not in the
 index either; a message under one of them takes the §3 lookup and finds its
 record through `orders_audit`.
 
-**Schema.** 12024 is the record's schema version. A missing tag of the current
-schema takes its default and `recoveredWithDefaults` counts; a record with an
-unknown major version, or without 13011 at all (the publisher pointed at the
-wrong topic), refuses the start (R17).
+**Schema.** 12024 is the record's schema version, `2` since the record's own
+tags moved from 9xxx to 12000–12999. A missing tag of the current schema takes
+its default and `recoveredWithDefaults` counts. Three kinds of record refuse
+the start (R17):
+- one with an unknown major version;
+- one without 13011 at all, because the publisher is pointed at the wrong
+  topic;
+- one of the 9xxx scheme, which carries 9024 and no 12024. Loading it would
+  find none of its fields and lose its pending set, chain and counters, so the
+  blotter must be emptied at a daily reset before this version first starts
+  ([11 §6](11-build-findings.md#6-renumbering-the-machines-tags-move-to-1200012999-schema-2)).
 
 **What a restart does not cover:** messages the feed delivered while the
 publisher was down. That is the FIX session's problem — a resend request on
