@@ -229,7 +229,7 @@ To measure on your own JVM and ids:
 | a late message costs a round trip | the publishing thread waits for every publish in flight to be acknowledged, then for the query, so a burst of busts after eviction stalls the feed for as long as those round trips take (not measured under load) | keep the retention longer than your venues' usual delay for busts and corrections |
 | the rebuilt entry has lost its ExecID ring | duplicate detection is one deep for the first reports after a rebuild; the CumQty and TransactTime guards still apply, and busted ExecIDs (9031) are recovered from the record | nothing; stated for completeness |
 | eviction needs `miss-lookup: true` ([docs/11 F11](docs/11-build-findings.md)) | without the lookup the record can't be read back, so a late venue report would build a mid-stream record from itself and delta-publish it over the real one, overwriting the chain list (9021, 9030), the message count (9023) and the origin (9018) | refused at startup: `terminal-retention` above zero, or `load-open-orders-only: true`, with `miss-lookup: false` does not boot |
-| orders loaded at startup are never scheduled ([docs/11 F12](docs/11-build-findings.md)) | with `recovery: SOW` and `load-open-orders-only: false`, a restart puts every finished order back in the cache in full, and none of them is evicted | with eviction on, set `load-open-orders-only: true`, which loads finished orders as tombstones |
+| orders loaded at startup are scheduled from the restart ([docs/11 F12](docs/11-build-findings.md)) | with `recovery: SOW` and `load-open-orders-only: false`, a restart puts every finished order back in the cache in full, and each is evicted one retention after the restart, not one retention after it finished | for a lower peak right after a restart, set `load-open-orders-only: true`: finished orders then load as tombstones at once |
 
 ## Run it
 
@@ -302,7 +302,7 @@ Not built yet:
 - a server-side index on `/37`, so `miss-lookup-by-order-id` stops scanning
   the blotter.
 
-Open for the design owner: F4, F6, F9, F10 and F12 in
+Open for the design owner: F4, F6, F9 and F10 in
 [docs/11](docs/11-build-findings.md).
 
 ## Documents

@@ -222,6 +222,34 @@ class CacheMissTest {
     }
 
     @Test
+    @DisplayName("docs/11 F12: an order loaded finished at startup is evicted one retention after the load")
+    void loadedTerminalOrdersAreEvicted() {
+        MachineTester first = new MachineTester();
+        for (String message : FILLED_THEN_CANCELED) {
+            first.send(message);
+        }
+        first.send("D 11=Y-1 38=500 44=20 55=SYM 60=" + t(0));
+        first.send("8 150=0 39=0 11=Y-1 37=ORD-Y 17=Y-E1 38=500 44=20 14=0 151=500 6=0 60=" + t(1));
+
+        // A restart: the cache rebuilt from the two records, as SowCacheLoader does.
+        AtomicLong now = new AtomicLong(10_000);
+        MachineTester m = new MachineTester();
+        m.machine.setTerminalRetention(Duration.ofSeconds(1), now::get);
+        m.machine.load(RecordReader.read(first.record("X-1"), 1).state());
+        m.machine.load(RecordReader.read(first.record("Y-1"), 1).state());
+
+        now.addAndGet(500);
+        assertThat(m.machine.evictExpired()).as("not before its retention has run").isZero();
+        now.addAndGet(600);
+        assertThat(m.machine.evictExpired()).as("the finished order, and only it").isEqualTo(1);
+        assertThat(m.state("X-1")).isNull();
+        assertThat(m.state("Y-1")).as("an open order is never evicted").isNotNull();
+        assertThat(m.machine.keyForClOrdId("X-2")).as("its ClOrdIDs leave the index").isNull();
+        assertThat(m.machine.index().keyForOrderId("ORD")).as("its OrderID is the tombstone").isEqualTo("X-1");
+        assertThat(m.count(Counter.EVICTIONS)).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("E48: a late request under a new ClOrdID for an evicted order resolves through orders_audit")
     void lateRequestAfterEviction() {
         AtomicLong now = new AtomicLong(1_000);

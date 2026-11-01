@@ -198,6 +198,10 @@ overwrite the record's with them (S9). A late *request* under a new ClOrdID
 carries no 37, and its 41 resolves through the `orders_audit` lookup of §3
 instead.
 
+A terminal entry loaded by a full `recovery: SOW` load is scheduled at load,
+one retention after the restart, since the record does not say when the order
+went terminal ([11 F12](11-build-findings.md#f12--orders-loaded-at-startup-are-never-scheduled-for-eviction)).
+
 An order with requests still unanswered when it goes terminal (the venue
 never sent the 9) is evicted like any other; its record keeps `9016 > 0`,
 which is the right place for the fact to live.
