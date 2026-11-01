@@ -24,7 +24,7 @@ produces; the changes are marked where they land and summarised in
 
 | term | meaning |
 | --- | --- |
-| **OrderKey** | the SOW key of one order's record, tag 9020. One of the drop copy's own ids, minted once, never changed |
+| **OrderKey** | the SOW key of one order's record, tag 13011 **RootClOrdID**: the `35=D`'s own tag 11, written in the D's FULL publish and never changed — the root ClOrdID in all but the degenerate case |
 | **chain** | every message that resolves to one OrderKey |
 | **root** | the ClOrdID of the chain's `35=D`, when the chain opened with one |
 | **request** | a `35=D`, `35=G` or `35=F`: something the client asked for, identified by its own tag 11 |
@@ -88,8 +88,8 @@ two maps it misses, and creation (§3.2) sees that `123456` is already a key.
 | first message of the chain | OrderKey | `9019` | `9018` | initial state |
 | --- | --- | --- | --- | --- |
 | `35=D` | its tag 11 | `C` | `D` | terms from the D (less the stripped tags, §6.1); venue status `A`; CumQty 0, LeavesQty = 38, AvgPx 0; pending `{11: NEW, requested}` |
-| a report or a pending acknowledgement | 37 if present and not `NONE`, else 41, else 11 | `O` or `C` | `MIDSTREAM` | 39/150/14/151/6/38/44 and any term tags the report carries; for a pending acknowledgement, an **inferred** pending entry for its 11 (`A` → NEW, `6` → CANCEL, `E` → REPLACE) |
-| a `35=G` or `35=F` | 37 if present and not `NONE`, else 41, else 11 | `O` or `C` | `MIDSTREAM` | **only** the pending entry `{11: REPLACE/CANCEL, requested}` and 9010/9011 for a G. **No 38/44, no 39** (R7): a request's terms are proposals and the order's status is unknown; `9017=N` |
+| a report or a pending acknowledgement | 41 if present, else 11, else 37 (not `NONE`) | `C`, or `O` only when the message carried no ClOrdID | `MIDSTREAM` | 39/150/14/151/6/38/44 and any term tags the report carries; for a pending acknowledgement, an **inferred** pending entry for its 11 (`A` → NEW, `6` → CANCEL, `E` → REPLACE) |
+| a `35=G` or `35=F` | 41 if present, else 11, else 37 (not `NONE`) | `C`, or `O` only when the message carried no ClOrdID | `MIDSTREAM` | **only** the pending entry `{11: REPLACE/CANCEL, requested}` and 15038/15044 for a G. **No 38/44, no 39** (R7): a request's terms are proposals and the order's status is unknown; `9017=N` |
 | a `35=9` | — | — | — | **never creates a chain.** It goes to `sow/fix42/rejects` whole, counts `unmatchedRejects`, and is `IGNORED(unmatched)` (08 §4 item 9) |
 
 **Collisions (decision 2).** The key is always one of the drop copy's own
@@ -97,15 +97,23 @@ ids, unprefixed. A candidate that is already **another chain's key** — the set
 of keys spans both kinds of id — is skipped for the next candidate,
 `keyCollisions` counts it, and 9019 says which kind of id the key is. If every
 candidate collides the message is `IGNORED(keyConflict)` and logged with both
-keys (R12). The typed maps of §3.1 are what make this reachable: resolution
-cannot land on the wrong chain first. A venue that sets OrderID equal to the
+keys (R12). With ClOrdIDs preferred as keys a collision is nearly always a
+genuine reuse of a ClOrdID; the OrderID fallback is where an unrelated order's
+number could equal a root ClOrdID. The typed maps of §3.1 are what make the
+check reachable at all: resolution cannot land on the wrong chain first. A venue that sets OrderID equal to the
 order's own ClOrdID is not a collision — the report resolves through 11 before
 37 is bound, and 37 then goes into the OrderID map harmlessly
 ([7.21](#721-an-orderid-that-equals-another-orders-clordid)).
 
 A D's own ClOrdID is the key because it exists before the venue has said
-anything. For a mid-stream chain the OrderID is the most stable id available;
-41 is preferred to 11 because on a request it is closer to the root.
+anything, and because the tag that carries the key is named for it: 13011 is
+the **root ClOrdID**, set in the D's FULL publish from the D's tag 11. For a
+chain first seen mid-stream the message's 41 is the ClOrdID closest to the
+root it names (the predecessor of a request, the original of a report after
+an amend), then its 11; the OrderID is the key only for a message carrying
+neither, which no request and almost no report does. Stability is not a
+reason to prefer the OrderID: once minted, the key is reached through the
+typed index by every id the order ever uses.
 
 ### 3.3 Binding
 
@@ -237,17 +245,18 @@ late guards treat an absent 14 as equal.
 
 | situation | effect |
 | --- | --- |
-| 11 unknown, cache complete | **create** (§3.2). `CREATED` → FULL publish: the D's fields less the **stripped tags**, plus every state tag with its initial value (`39=A`, `9013=NEW`, `9012=`11, `9010=0`, `9011=0`, `9014=`11, `9015=`NEW:R:::11, `9016=1`, `9017=N`, `9018=D`, `9019=C`, `9020`, `9021`, `9022=D`, `9023=1`, `9024=1`, `9025=0`, `9026=0`, `9030=1`, `14=0`, `151=`38, `6=0`; `9027=`41 if the D carried one; `9000` if it carried one) |
-| 11 unknown, cache **incomplete** (`recovery: NONE` or a partial load, [04 §3](04-recovery-and-operations.md#3-cache-misses)) | a keyed `sow` on `sow/fix42/order_state` by `9020 =` 11 first. A record found → the entry is rebuilt from it and the D is handled as the next row says; none → create as above. Never a FULL publish over a record the cache merely did not know about (R4c) |
+| 11 unknown, cache complete | **create** (§3.2). `CREATED` → FULL publish: the D's fields less the **stripped tags**, plus every state tag with its initial value (`39=A`, `15035=NEW`, `15011=`11, `15038=0`, `15044=0`, `9014=`11, `9015=`NEW:R:::11, `9016=1`, `9017=N`, `9018=D`, `9019=C`, `13011`, `9021`, `9022=D`, `9023=1`, `9024=1`, `9025=0`, `9026=0`, `9030=1`, `14=0`, `151=`38, `6=0`; `9027=`41 if the D carried one; `9000` if it carried one) |
+| 11 unknown, cache **incomplete** (`recovery: NONE` or a partial load, [04 §3](04-recovery-and-operations.md#3-cache-misses)) | a keyed `sow` on `sow/fix42/order_state` by `13011 =` 11 first. A record found → the entry is rebuilt from it and the D is handled as the next row says; none → create as above. Never a FULL publish over a record the cache merely did not know about (R4c) |
 | 11 bound, origin `MIDSTREAM` (a late D) | the D's **descriptive** terms are applied — its message less the stripped tags, less 38/44; 38/44 too only when the record has neither and no report has been seen. `9018=D_LATE`. **Never adds a NEW** to the pending set: the venue has evidently seen the order; an **inferred** NEW already in the set (from a `150=A`) becomes requested (S7). Bookkeeping as for every applied message (§6.6). `CHANGED` |
 | 11 bound, origin `D` or `D_LATE` (a resent D) | `IGNORED(duplicate request)` — a FULL publish here would erase every delta since the original |
 
 **Stripped tags.** Every payload the machine builds from a message — the
 FULL publish, the late-D delta, a `MIDSTREAM` creation from a report — omits
 the FIX session header and trailer (`strip-tags`, default 8, 9, 10, 34, 43,
-49, 50, 52, 56, 57, 97, 115, 116, 122, 128, 129) and **every tag in
-9010–9099** the message carries, because that range is the machine's own and
-a venue or OMS custom tag there would overwrite state (R20e, S18). 9000 is
+49, 50, 52, 56, 57, 97, 115, 116, 122, 128, 129) and **every tag in the
+machine's own ranges** — 9000–9099 except 9000, 13000–13999 and 15000–15999 —
+that the message carries, because a venue or OMS custom tag there would
+overwrite state (R20e, S18). 9000 is
 kept. The audit publishes strip nothing. `strippedTags` counts.
 
 ### 6.2 `35=G` OrderCancelReplaceRequest
@@ -259,13 +268,13 @@ kept. The audit publishes strip nothing. `strippedTags` counts.
 | 11 is in the pending set as **requested** | `IGNORED(duplicate request)` |
 | 41 is in the pending set as an **inferred** entry of the same action — the venue's acknowledgement named the *working* id rather than the request's, a common 4.2 shape | the entry is re-keyed to this 11, becomes **requested**, and takes the G's proposed terms (S7). `CHANGED` |
 | 11 is bound but not pending — an **answered id** (its `150=5` or `35=9` overtook it) | `IGNORED(late request)`. Adding it would leave pending a request the venue has already answered |
-| otherwise | add `{11: REPLACE, requested, qty=38, px=44}`; bind 11. `CHANGED`: 11, 41, 60, 9021, 9030, 9010 (=38), 9011 (=44), 9012 (=11), 9013=`REPLACE`, 9015, 9016, 9022, 9023 |
+| otherwise | add `{11: REPLACE, requested, qty=38, px=44}`; bind 11. `CHANGED`: 11, 41, 60, 9021, 9030, 15038 (=38), 15044 (=44), 15011 (=11), 15035=`REPLACE`, 9015, 9016, 9022, 9023 |
 | 38/44 on the record | **untouched** — they are the acked terms |
 | 39 | untouched |
 
 ### 6.3 `35=F` OrderCancelRequest
 
-As 6.2 with action `CANCEL` and no proposed terms. 9010/9011 are **not** reset
+As 6.2 with action `CANCEL` and no proposed terms. 15038/15044 are **not** reset
 to 0 by a cancel: they describe the newest pending REPLACE, if any (08 §4
 item 3).
 
@@ -295,7 +304,7 @@ After §5's arbitration:
 | — a fill naming a pending CANCEL | nothing. A fill never answers a cancel |
 | — pending acknowledgements | never remove. A `150=6`/`E`/`A` whose 11 is **not** pending and not an answered id adds an **inferred** entry (`6` → CANCEL, `E` → REPLACE, `A` → NEW), so a request whose acknowledgement overtook it is not lost (R9). The entry's id is the acknowledgement's 11, which some venues set to the *working* id rather than the request's; §6.2 re-keys it when the request arrives naming it in 41 (S7). On a D-opened chain a `150=A` for the root finds the NEW already pending and adds nothing |
 | — status restatements, `150=3`, `150=C`, `150=D`, busts, corrects, reports with an unknown 150 | never touch REPLACE or CANCEL entries or 9014; a pending NEW is answered by any of them (above) |
-| 9010–9013, 9015, 9016 | recomputed from the set when it changed |
+| the pending family, 9015, 9016 | recomputed from the set when it changed |
 
 Matching by the report's **own** tag 11 is what distinguishes the two cancels:
 the confirm names X-2, so X-3 stays in the set; the reject then names X-3.
@@ -307,7 +316,7 @@ carries a pending request's id ([7.14](#714-a-fill-while-a-cancel-is-pending-und
 | step | effect |
 | --- | --- |
 | resolve (11 → 41 → 37); unknown → `IGNORED(unmatched)`, `unmatchedRejects`; no chain is created | |
-| remove the pending request named by 11, whatever its action; cross-check 434 (`1` → CANCEL, `2` → REPLACE) and log a warning on a mismatch | 9010–9013, 9015, 9016 recomputed |
+| remove the pending request named by 11, whatever its action; cross-check 434 (`1` → CANCEL, `2` → REPLACE) and log a warning on a mismatch | the pending family, 9015, 9016 recomputed |
 | no such request (already answered, or never seen) | `unmatchedRejects`, nothing removed |
 | 39 | per `cancel-reject-status` (§4); a terminal value adopted forces `151=0`, `9017=Y` |
 | 38, 44 | **untouched** — nothing to revert, because a G never wrote them |
@@ -328,7 +337,7 @@ ordering logic compares the two, and 9029 holds only reports' times.
 ## 7. Walkthroughs
 
 Each table is the `sow/fix42/order_state` record after the message, showing
-only the fields that move. `pending` is the set; the `9013/9012` columns are
+only the fields that move. `pending` is the set; the `15035/15011` columns are
 what a consumer of the old blotter reads. "wire" is what the delta carries
 beyond the always-sent bookkeeping (11, 41, 60, 9022, 9023). Pending entries
 are shown as `id:ACTION`, with `~` for an inferred one.
@@ -337,17 +346,17 @@ are shown as `id:ACTION`, with `~` for an inferred one.
 
 Order `X`, 1000 @ 50.00, partially filled 300.
 
-| message | pending | 39 | 151 | 9017 | 9013 | 9012 | 9016 | wire |
+| message | pending | 39 | 151 | 9017 | 15035 | 15011 | 9016 | wire |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `D 11=X-1` | {X-1:NEW} | A | 1000 | N | NEW | X-1 | 1 | **publish**, whole record |
-| `8 150=0 39=0 11=X-1 37=ORD` | {} | 0 | 1000 | N | NONE | NONE | 0 | 37 17 150 39 38 44 14 151 6 9014=X-1 9010–9016 9029 |
+| `8 150=0 39=0 11=X-1 37=ORD` | {} | 0 | 1000 | N | NONE | NONE | 0 | 37 17 150 39 38 44 14 151 6 9014=X-1 pending family 9015 9016 9029 |
 | `8 150=1 39=1 11=X-1 14=300 151=700` | {} | 1 | 700 | N | NONE | NONE | 0 | 17 150 39 38 44 14 151 6 32 31 30 9028 9029 |
-| `F 11=X-2 41=X-1` | {X-2:CANCEL} | 1 | 700 | N | CANCEL | X-2 | 1 | 9021 9030 9012 9013 9015=`CANCEL:R:::X-2` 9016 |
-| `F 11=X-3 41=X-1` | {X-2, X-3} | 1 | 700 | N | CANCEL | X-3 | 2 | 9021 9030 9012 9013 9015=`CANCEL:R:::X-2;CANCEL:R:::X-3` 9016 |
-| `8 150=4 39=4 11=X-2 41=X-1` | {X-3} | **4** | **0** | **Y** | CANCEL | X-3 | 1 | 17 150 39 38 44 14 151=0 6 9017 9012 9013 9015=`CANCEL:R:::X-3` 9016 9029 |
-| `9 11=X-3 41=X-1 434=1 39=6` | {} | **4** | 0 | Y | **NONE** | NONE | 0 | 9010–9016 9029 (39 untouched: terminal) |
+| `F 11=X-2 41=X-1` | {X-2:CANCEL} | 1 | 700 | N | CANCEL | X-2 | 1 | 9021 9030 15011 15035 9015=`CANCEL:R:::X-2` 9016 |
+| `F 11=X-3 41=X-1` | {X-2, X-3} | 1 | 700 | N | CANCEL | X-3 | 2 | 9021 9030 15011 15035 9015=`CANCEL:R:::X-2;CANCEL:R:::X-3` 9016 |
+| `8 150=4 39=4 11=X-2 41=X-1` | {X-3} | **4** | **0** | **Y** | CANCEL | X-3 | 1 | 17 150 39 38 44 14 151=0 6 9017 15011 15035 9015=`CANCEL:R:::X-3` 9016 9029 |
+| `9 11=X-3 41=X-1 434=1 39=6` | {} | **4** | 0 | Y | **NONE** | NONE | 0 | pending family 9015 9016 9029 (39 untouched: terminal) |
 
-Final: `39=4 150=4 151=0 9017=Y 9013=NONE 9016=0 9022=9`. Canceled, nothing
+Final: `39=4 150=4 151=0 9017=Y 15035=NONE 9016=0 9022=9`. Canceled, nothing
 pending, and the record says the last thing that happened was a reject —
 which is true. Compare [01 §2](01-problem-the-two-cancels.md#2-what-the-shipped-rulebook-does-with-it).
 
@@ -355,10 +364,10 @@ which is true. Compare [01 §2](01-problem-the-two-cancels.md#2-what-the-shipped
 
 Same order, the venue answers in the other sequence.
 
-| message | pending | 39 | 151 | 9017 | 9013 | 9012 | note |
+| message | pending | 39 | 151 | 9017 | 15035 | 15011 | note |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | … as 7.1 through the second F | {X-2, X-3} | 1 | 700 | N | CANCEL | X-3 | |
-| `9 11=X-3 434=1 39=6` | {X-2} | 6 | 700 | N | CANCEL | X-2 | `39=6` adopted: not terminal, not 8, and a CANCEL is still pending. 9012 falls back to the remaining request |
+| `9 11=X-3 434=1 39=6` | {X-2} | 6 | 700 | N | CANCEL | X-2 | `39=6` adopted: not terminal, not 8, and a CANCEL is still pending. 15011 falls back to the remaining request |
 | `8 150=4 39=4 11=X-2` | {} | 4 | 0 | Y | NONE | NONE | |
 
 Both arrival orders converge on the same record. That is the property the
@@ -366,7 +375,7 @@ stateless design lacked.
 
 ### 7.3 A third cancel after the order is canceled
 
-| message | pending | 39 | 9017 | 9013 | note |
+| message | pending | 39 | 9017 | 15035 | note |
 | --- | --- | --- | --- | --- | --- |
 | … 7.1 complete | {} | 4 | Y | NONE | |
 | `F 11=X-4 41=X-1` | {X-4:CANCEL} | 4 | Y | CANCEL | status untouched: a request never moves 39 |
@@ -374,7 +383,7 @@ stateless design lacked.
 
 ### 7.4 Amend and cancel both in flight, reject for the cancel (contract edge 4)
 
-| message | pending | 39 | 38 | 44 | 9013 | 9012 | 9010 | 9011 |
+| message | pending | 39 | 38 | 44 | 15035 | 15011 | 15038 | 15044 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `D 11=A-1 38=10000 44=185.5` + ack | {} | 0 | 10000 | 185.5 | NONE | NONE | 0 | 0 |
 | `G 11=A-2 41=A-1 38=12000 44=185.75` | {A-2:REPLACE} | 0 | 10000 | 185.5 | REPLACE | A-2 | 12000 | 185.75 |
@@ -382,13 +391,13 @@ stateless design lacked.
 | `9 11=A-3 434=1 39=0` | {A-2} | 0 | 10000 | 185.5 | REPLACE | A-2 | 12000 | 185.75 |
 | `8 150=5 39=0 11=A-2 38=12000 44=185.75` | {} | 0 | **12000** | **185.75** | NONE | NONE | 0 | 0 |
 
-9010/9011 keep describing the pending amend while the cancel is the newest
+15038/15044 keep describing the pending amend while the cancel is the newest
 request (08 §4 item 3). The reject removed only its own request; the confirm
 adopted the venue's numbers and moved 9014 to `A-2`.
 
 ### 7.5 Amend rejected (the NVDA scenario)
 
-| message | pending | 39 | 38 | 44 | 9013 | 9010 | 9011 |
+| message | pending | 39 | 38 | 44 | 15035 | 15038 | 15044 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | D 4000 @ 121.80, ack, partial 1000 | {} | 1 | 4000 | 121.8 | NONE | 0 | 0 |
 | `G 11=N-2 41=N-1 38=6000 44=122.1` | {N-2:REPLACE} | 1 | 4000 | 121.8 | REPLACE | 6000 | 122.1 |
@@ -414,9 +423,11 @@ the acked terms were never touched, so nothing is reverted.
 
 | message | key | 9018 | 39 | 38 | 1/55/54 | 21/40/59/100 | pending |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `8 150=0 39=0 11=M-1 37=ORD-M 38=500 44=10 1=ACC 55=SYM 54=1` | **ORD-M** (9019=O) | MIDSTREAM | 0 | 500 | from the 8 | absent | {} |
-| `D 11=M-1 38=500 44=10 21=1 40=2 59=0 100=XNAS …` | ORD-M | D_LATE | 0 | 500 | unchanged | **from the D** | {} — never a NEW on a late D |
+| `8 150=0 39=0 11=M-1 37=ORD-M 38=500 44=10 1=ACC 55=SYM 54=1` | **M-1** (9019=C) | MIDSTREAM | 0 | 500 | from the 8 | absent | {} |
+| `D 11=M-1 38=500 44=10 21=1 40=2 59=0 100=XNAS …` | M-1 | D_LATE | 0 | 500 | unchanged | **from the D** | {} — never a NEW on a late D |
 
+The chain is keyed by the report's 11 — which is the root, as it usually is
+when the tap merely missed the D — and the D joins it through the same id.
 The D's 38/44 are not applied (a report has already stated them) and its
 arrival is a delta, not a FULL publish.
 
@@ -483,7 +494,7 @@ have been adopted. With `ADOPT_VENUE` the second row would read `39=1 151=500
 The shape the FIX state matrices prescribe and `OrderChain` emits (R1): once
 a request is acknowledged, the venue's reports carry the request's ClOrdID.
 
-| message | pending | 39 | 14 | 9013 | 9012 | note |
+| message | pending | 39 | 14 | 15035 | 15011 | note |
 | --- | --- | --- | --- | --- | --- | --- |
 | `D 11=X-1` ; `8 150=0 39=0 11=X-1` | {} | 0 | 0 | NONE | NONE | |
 | `F 11=X-2 41=X-1` | {X-2:CANCEL} | 0 | 0 | CANCEL | X-2 | |
@@ -580,7 +591,7 @@ the same way with `39=4`.
 | message | resolves to | key | note |
 | --- | --- | --- | --- |
 | `D 11=123456 38=100` | — | **123456** (9019=C) | order A opens |
-| `8 150=0 39=0 11=B-1 37=123456 14=0 151=500` (order B, first seen mid-stream) | nothing: `123456` is in the ClOrdID map, not the OrderID map | candidate 37 = `123456` is already A's key → skipped; **B-1** (9019=C) | `keyCollisions=1`; B's reports never touch A (S1) |
+| `8 150=0 39=0 11=B-1 37=123456 14=0 151=500` (order B, first seen mid-stream) | nothing: `123456` is in the ClOrdID map, not the OrderID map | **B-1** (9019=C): the report's 11, which the mint order prefers; 37 is bound into the OrderID map | B's reports never touch A (S1). Had the report carried no 11, candidate 37 = `123456` would equal A's key and be skipped, `keyCollisions=1` |
 | `8 150=0 39=0 11=X-1 37=X-1` (a venue whose OrderID equals the ClOrdID) | X-1's chain, via 11 | unchanged | 37 bound into the OrderID map; not a collision |
 
 ### 7.22 A `150=8` for a request the tap never saw
@@ -619,13 +630,13 @@ the same way with `39=4`.
 
 Decision 5. A message no route claims — `35=Q`, `H`, `j`, `3`, list and
 multileg types — a message missing a topic's key tag, or bytes that do not
-parse as FIX, are handled by `mode`. The 9020 trailer on a catch-all publish
+parse as FIX, are handled by `mode`. The 13011 trailer on a catch-all publish
 is present when the message resolved to a chain and omitted when it did not
 (S20):
 
 | | `strict` | `lenient` |
 | --- | --- | --- |
-| unrouted type | the machine raises; the publisher stops (the stateless publisher's stance, right for tests: a missing rule fails the first run that hits it) | published whole, with 9020 when it resolves, to `fix42/unrouted` — a journalled, non-SOW topic (no key needed, every message kept in arrival order, replayable by bookmark); `IGNORED(unrouted)`; a counter per 35 value; a rate-limited WARN |
+| unrouted type | the machine raises; the publisher stops (the stateless publisher's stance, right for tests: a missing rule fails the first run that hits it) | published whole, with 13011 when it resolves, to `fix42/unrouted` — a journalled, non-SOW topic (no key needed, every message kept in arrival order, replayable by bookmark); `IGNORED(unrouted)`; a counter per 35 value; a rate-limited WARN |
 | unparseable bytes | raise | wrapped as a fix message (`9032=<base64 of the bytes>`, `9033=<reason>`) on `fix42/malformed`, same topic shape; `malformed` counts |
 | a known type missing a topic's key tag (a `20=3` with no 17; a G with no 11) | raise | **routing only**: the topic whose key is missing is skipped and the message goes whole to `fix42/unrouted` instead; the machine applies it regardless, so a 17-less status restatement still reaches the blotter (S10) |
 | a report with a 150 value no rule names | applied as *other* or *fill* (§5 step 1); the value counted in the per-150 histogram — **not** unrouted (S11) | the same |

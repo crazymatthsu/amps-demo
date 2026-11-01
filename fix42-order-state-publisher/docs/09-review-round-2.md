@@ -11,6 +11,12 @@ it landed. Docs 02–07 have been revised for everything below.
 Dispositions as in 08: **accept, rule** / **accept, design** / **partly** /
 **noted** (a statement added, no rule change).
 
+**Tag numbers in this register follow the scheme adopted after both review
+rounds**: 13011 for the key (RootClOrdID) and 15011/15035/15038/15044 for the
+pending family. The drafts the review actually read used 9020 and 9010–9013;
+quotations have been renumbered so the register reads against the current
+documents.
+
 ---
 
 ## 1. What the review found, in short
@@ -108,7 +114,7 @@ a `beforeApply` hook).
   cross-thread write.
 - **Landed**: the repair is a `delta_publish` of every cached field, never a
   `publish`; a rejected creation re-sends the kept `createdPayload` or
-  rebuilds it from the D on `orders_audit` by 9020; a rejected audit publish
+  rebuilds it from the D on `orders_audit` by 13011; a rejected audit publish
   goes to `fix42/unrouted` with `auditPublishFailures`; the handler enqueues
   the key and the publishing thread drains the queue before each message, on
   an idle timer and at shutdown. [04 §6](04-recovery-and-operations.md#6-the-publish-path),
@@ -128,7 +134,7 @@ a `beforeApply` hook).
   throws, a file store grows without bound.
 - **Landed**: `execs` is journalled; a deployment that does not want the
   second copy of every report drops the route, since `execs_audit` filtered
-  by 9020 or 37 answers the same question; `PublishPathIT` asserts
+  by 13011 or 37 answers the same question; `PublishPathIT` asserts
   `publishStoreDepth` returns to zero with every route live, which is also the
   test of the premise — if this build acknowledges unjournalled publishes
   after all, the rule becomes a recommendation. [02 §1](02-architecture.md#1-topology),
@@ -188,7 +194,7 @@ a `beforeApply` hook).
   inferred.
 - **Landed**: a G or F whose 41 names an inferred entry of the same action
   re-keys it to the request's 11 and marks it requested; a late D converts an
-  inferred NEW; 9010/9011 read 0 for an inferred REPLACE, and 9015 writes
+  inferred NEW; 15038/15044 read 0 for an inferred REPLACE, and 9015 writes
   empty sub-fields for terms that were never proposed. [03 §6.1–6.2](03-state-machine.md#61-35d-newordersingle),
   [03 §7.23](03-state-machine.md#723-a-pending-acknowledgement-that-names-the-working-id),
   [02 §4](02-architecture.md#4-the-record), [02 §4.1](02-architecture.md#41-several-requests-in-flight-tag-9015),
@@ -277,7 +283,7 @@ a `beforeApply` hook).
 
 7.1, 7.4, 7.14, 7.16, 7.17, 7.18, 7.19, 7.6, 7.7 and 7.20 agree with the
 rules cell for cell. The one discrepancy was the "wire" column of 7.1, which
-listed 38 without 44 and 9013 inconsistently; corrected.
+listed 38 without 44 and 15035 inconsistently; corrected.
 
 ## 5. Consistency sweep
 
@@ -296,7 +302,7 @@ needed but did not list (`rejectWithoutOrderId`, `bustAfterCloseOut`, a 39
 parameter on `cancelReject`, `restateWhilePending`,
 `amendNamingAnotherOrder`, `pendingAcksEchoWorkingId`,
 `transactTimeInSeconds`, `orderIdEqualsClOrdId`); the `PublishPathIT` case
-the router would have diverted; the runner's profile; 9010/9011 for an
+the router would have diverted; the runner's profile; 15038/15044 for an
 inferred REPLACE; 02 §4.1's missing policy caveat; E41's 38/44 wording; the
 late guard's precedence over the terminal-after-terminal row; the unused
 9031 (now the busted set) and the non-record tags 9032/9033; the `44=0`

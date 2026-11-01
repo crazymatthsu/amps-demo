@@ -21,11 +21,17 @@ operations or plan addition; **decide** — accepted in substance, but the
 remedy changes something a consumer or operator sees and needs a call;
 **partly** — accepted with a narrower remedy than proposed.
 
+**Tag numbers in this register follow the scheme adopted after both review
+rounds**: 13011 for the key (RootClOrdID) and 15011/15035/15038/15044 for the
+pending family. The drafts the review actually read used 9020 and 9010–9013;
+quotations have been renumbered so the register reads against the current
+documents.
+
 ---
 
 ## 1. What the review found, in short
 
-The headline case holds: two cancels converge on `39=4 9013=NONE` in either
+The headline case holds: two cancels converge on `39=4 15035=NONE` in either
 arrival order, and "venue truth for 39, requests only in the pending set" is
 the right split. But three rules tightened while filling in the coverage
 matrix were tightened against the design's *own* assumptions about venue
@@ -78,7 +84,7 @@ and the amend variant: `G 11=A-2 …` ; `8 150=1 39=1 11=A-2 41=A-1 38=10000 44=
   acknowledgement … answers the pending request named by its own tag 11,
   whatever that request's action"; 03 §6.4 pending-set and 9014 rows; 06 E8,
   N14, E32 ("fill while PENDING_CANCEL … pending stays — handled").
-- **Goes wrong**: the fill removes X-2; the record reads `9013=NONE 9016=0`
+- **Goes wrong**: the fill removes X-2; the record reads `15035=NONE 9016=0`
   while the cancel is unanswered; the later 9 is "unmatched" on a healthy
   flow. In the amend variant the fill removes A-2 and **rotates 9014 to
   A-2, an id the venue then rejects**, for the life of the order. A `20=3`
@@ -162,7 +168,7 @@ Sequences:
 
 - (a) `recovery: NONE` restart with order X working: `8 150=1 11=X-1 37=ORD
   14=500 151=500` → cache miss → `MIDSTREAM` keyed `ORD`. The SOW now holds
-  `9020=X-1` frozen at its last 151 **and** `9020=ORD` live; the exposure
+  `13011=X-1` frozen at its last 151 **and** `13011=ORD` live; the exposure
   views sum both.
 - (b) Partial load; a D-opened order canceled earlier; `8 20=1 19=E-2 150=4
   39=4 37=ORD 14=300` (late bust) → miss; no tombstone, because the order was
@@ -183,9 +189,9 @@ Sequences:
   message carrying 37 (one `sow` by `/37`, hash-indexed) rather than a
   later-phase option — cheap, because after a complete load a miss is
   genuinely rare; (2) a partial load still reads every record and builds
-  tombstones (`37 → 9020`, 40 B each) for the ones it does not keep, which
+  tombstones (`37 → 13011`, 40 B each) for the ones it does not keep, which
   is what tombstones are for; (3) a D on a cache miss does a keyed `sow` by
-  `9020 = 11` before a FULL publish **only when the cache is known
+  `13011 = 11` before a FULL publish **only when the cache is known
   incomplete** (`recovery: NONE` or a partial load) — after a complete load
   a D miss is a new order and the hot path stays query-free; (4)
   `recovery: NONE` refuses to start against a non-empty
@@ -248,7 +254,7 @@ Sequences:
   them yet"; and a request-created chain sits at `39=A` though the order was
   plainly acked before it was amended.
 - **Disposition**: request-created MIDSTREAM chains write only the pending
-  set and 9010/9011; 38/44 and 39 stay absent until a report, `9017=N`. A
+  set and 15038/15044; 38/44 and 39 stay absent until a report, `9017=N`. A
   late D may supply 38/44 only when the record has none *and* no report has
   been seen. 02 §5 and 03 §6.1 are reconciled to one sentence.
 
@@ -333,7 +339,7 @@ Sequences:
 - **Disposition**: on `150=5` and `150=D` adopt every order-term tag the
   report carries, from a configurable list defaulting to the D's term set
   (18, 40, 44, 59, 99, 100, 110, 111, 126); when the report says `40=1` and
-  carries no 44, write `44=0` (the 9011 convention) and document "44 is
+  carries no 44, write `44=0` (the 15044 convention) and document "44 is
   meaningful only when 40=2".
 
 ### R15 — Fields a merge cannot remove go stale after busts; 60 is not monotonic — Medium — **partly**
@@ -370,12 +376,12 @@ Sequences:
 
 - **Condition**: a SOW written by version N loaded by N+1; records seeded by
   a hook-enabled instance loaded by a hookless one; the module pointed at
-  `sow/fix42/orders` by mistake (no 9020 anywhere). 04 §2.1 step 3 says
+  `sow/fix42/orders` by mistake (no 13011 anywhere). 04 §2.1 step 3 says
   nothing about missing or unknown tags.
 - **Disposition**: `9024 SchemaVersion`, written at creation and bumped by
   the writer; the loader fills missing tags with defaults and counts
   `recoveredWithDefaults`, refuses an unknown major version, and refuses a
-  record without 9020.
+  record without 13011.
 
 ### R18 — `20=3` status reports, absent ExecIDs, and OrdStatus values outside the contract's vocabulary — Medium/Low — **accept, rule**
 
@@ -396,8 +402,8 @@ Sequences:
   re-sent whole on every request delta (tens of KB per amend by afternoon)
   and the cache entry grows to megabytes for hot orders.
 - **Disposition**: cap 9021 at the last N ids plus a count. The reviewer's
-  further proposal — **stamp 9020 on the pass-through audit publishes** so
-  the chain history is one `/9020 = …` query across the three audit topics,
+  further proposal — **stamp 13011 on the pass-through audit publishes** so
+  the chain history is one `/13011 = …` query across the three audit topics,
   the index can be rebuilt from `orders_audit`, and `miss-lookup` becomes
   cheap — departs from "the audit topics hold the message as received" by
   exactly one tag, and is a decision.
@@ -414,14 +420,14 @@ Sequences:
   views imply a per-message copy, absent from the phase 5 budget, and the
   `onIgnored → publish` example does I/O on the thread 07 says must not
   block; (e) **the D's FULL publish ("the whole message less 35") carries
-  any venue custom tags in 9000–9099 — including 9010–9026 — onto the
+  any venue custom tags in 9000–9099 — including 9014–9026, and the pending tags — onto the
   record, overwriting machine state at creation**, and framing tags (8, 9,
   10, 34, 49, 52, 56) land on the record for ever.
 - **Disposition**: hook failure is fail-fast with the message held
   (deterministic on replay); `resolveKey(FixFrame, IndexView)` or a
   `KeyDecorator`; the audit topics always receive the original frame; the
   view copies are budgeted in phase 5; the FULL publish strips 8, 9, 10, 34,
-  49, 52, 56 and every tag in 9010–9099 that the machine owns, counting
+  49, 52, 56 and every tag in 9000–9099, 13xxx or 15xxx that the machine owns, counting
   `strippedTags`.
 
 ### R21 — `37=NONE` on rejects, rotated OrderIDs, absent 17 — Low/Medium — **accept, rule**
@@ -473,7 +479,7 @@ Sequences:
    11), §6.5 (11 → 41 → 37). State one order per message type, once.
 2. **Late D bookkeeping**: 03 §6.1 excludes 11/41/60 from what the D applies;
    03 §6.6 and 02 §5 say every applied message sets them.
-3. **9010/9011**: 02 §4 "the newest in-flight REPLACE's terms, else 0";
+3. **15038/15044**: 02 §4 "the newest in-flight REPLACE's terms, else 0";
    02 §4.1 and 03 §7.4 show `0/0` when the newest request is a CANCEL while
    a REPLACE is still pending.
 4. **9014**: 02 §4 says `150=0`/`150=5`; 03 §6.4 also when a fill answers.
@@ -530,7 +536,7 @@ id (R8); the cancel+new replace (R2); `150=8` naming a pending REPLACE with
 carrying `39=4` and one carrying `39=6` (R6); `20=3` reports with `17=0` and
 echoing a pending id (R18); `150=8` with `37=NONE` (R21); a G changing 40/110
 with no 44 (R14); ids containing `:`, `;`, `,` (R11); a D carrying 41, and a
-G whose 37 and 41 name different orders (R10); a venue tag in 9010–9099 and
+G whose 37 and 41 name different orders (R10); a venue tag in 9000–9099, 13xxx or 15xxx and
 framing tags on a D (R20); a bust of the *last* fill (R15); a thousand-amend
 algo child (R19).
 
@@ -546,7 +552,7 @@ a report without 17 to `execs_audit`, assert the handler fires); AMPS
 restart mid-flow → reconnect with no cache/SOW divergence; `NameInUse`
 retry; AMPS accepts a fix-typed record without 35 and (negative) an empty
 value; duplicate tags on a FULL publish; the blotter writer always carries
-9020 (the yml `topic-keys` check cannot see the `RecordWriter`); view totals
+13011 (the yml `topic-keys` check cannot see the `RecordWriter`); view totals
 equal the mock's per-account sums *including* a MIDSTREAM record.
 
 **Phase 4 tests to add**: `recovery: NONE` against a populated SOW — one
@@ -575,18 +581,18 @@ keeps the elaborations that preceded decisions 3, 4 and 5.
 | --- | --- | --- | --- | --- |
 | 1 | TransactTime (60) as the tiebreak between a venue-asserted reopen and an out-of-order late report (R2), and as the staleness guard for equal-CumQty status reports (E31) | trust 60 within a venue / treat every such report as a reopen / treat every such report as late | trust 60 | **yes: trust 60.** Equal timestamps count as not-earlier; `non-fill-after-terminal` keeps the other two behaviours available |
 | 2 | key format (R12) | raw id / kind-prefixed `C:`/`O:` / raw id plus `9019 KeyKind` | kind-prefixed | **no: keep the drop copy's own ids as the key.** R12's disposition changes to collision *detection*: when a `MIDSTREAM` chain would be keyed by an OrderID that is already another chain's key (a root ClOrdID of the same text) and that chain's own OrderID is different or unknown, the next candidate id is used instead (41, then 11), `keyCollisions` counts it, and the record carries `9019 KeyKind` (`C` or `O`) as metadata only. If every candidate collides the message is `IGNORED(keyConflict)` and logged with both keys |
-| 3 | tag 9020 on the pass-through audit publishes (R19) | message as received / message plus 9020 / CorrelationId header / side-index topic | plus 9020 | **yes: plus 9020**, appended as a trailer — §7.1 |
+| 3 | the key tag on the pass-through audit publishes (R19) | message as received / message plus the key / CorrelationId header / side-index topic | plus the key | **yes: plus the key tag**, appended as a trailer — §7.1. The tag was 9020 when decided and is 13011 (RootClOrdID) since the renumbering |
 | 4 | AMPS client (R5) | plain `Client` with apply-then-publish / `HAClient` with a publish store, `FailedWriteHandler`, two-phase machine | the latter | **yes: `HAClient` with a store**, `FILE` in production, `MEMORY` for demo and tests; the blotter topic journalled — §7.2 |
 | 5 | unrouted message types (R13) | raise / catch-all route | a mode | **yes: a mode**, `strict` for tests, `lenient` for production — §7.3 |
 | 6 | 32/31 after a bust of the last fill (R15) | leave as the stateless blotter does / write `32=0 31=0` plus `9028` | write zeros plus 9028 | **yes** |
 
 ## 7. Elaborations for the open decisions
 
-### 7.1 Tag 9020 on the audit publishes
+### 7.1 Tag 13011 on the audit publishes
 
 **What it is.** Every message is published whole to its pass-through topic
 (`orders_audit` keyed /11, `execs_audit` keyed /17, `rejects` keyed /11).
-The proposal appends one field, `9020=<OrderKey>`, to each of those payloads
+The proposal appends one field, `13011=<OrderKey>`, to each of those payloads
 before it is published — the key the machine filed the message under, in a
 tag the machine owns. Nothing else about the payload changes; the blotter
 publish is unaffected.
@@ -594,7 +600,7 @@ publish is unaffected.
 **What it buys.**
 
 1. *Chain history in one query.* `sow` on each audit topic with filter
-   `/9020 = 'X-1'` returns every message of the order — D, every G and F,
+   `/13011 = 'X-1'` returns every message of the order — D, every G and F,
    every report, every reject — without walking 41 links or trusting 9021,
    and so lets 9021 be capped at the last N ids (R19) without losing the
    history.
@@ -602,12 +608,12 @@ publish is unaffected.
    message names a prior request id: a G or F carries 41, a report carries
    11 and usually 41, a 9 carries 11 and 41, and every order has a D whose
    11 is on `orders_audit`. A keyed `sow` on `orders_audit` by that id (its
-   SOW key, O(1), no secondary index) returns the audit record and its 9020:
+   SOW key, O(1), no secondary index) returns the audit record and its 13011:
    the OrderKey. R4's remedy then needs no hash index on /37 and no
    "verify on build"; the /37 lookup becomes the fallback for the one case
    where 11 and 41 are both unknown.
 3. *An index rebuild without running the machine.* A bookmark replay of
-   `orders_audit` yields `11 → 9020` pairs directly, which is a cheaper
+   `orders_audit` yields `11 → 13011` pairs directly, which is a cheaper
    `recovery: JOURNAL` for the id index than re-deriving it.
 4. *Consumers of the audit topics group by order* without knowing the
    chaining rules — the same reason the stateless design wanted the chaining
@@ -624,7 +630,7 @@ publish is unaffected.
   parser does not care about field order (verify on build); a
   FIX-dictionary validator fed the record would flag the trailer, which it
   would flag anyway for any stored copy that is not a session message.
-- *A venue that uses tag 9020 itself.* The stamp is skipped and
+- *A venue that uses tag 13011 itself.* The stamp is skipped and
   `auditKeyTagConflict` counts it; the tag number is configurable.
 - The principle "the audit topics hold the message as received" is one this
   design introduced (the stateless publisher stores route-selected subsets),
@@ -637,9 +643,9 @@ publish is unaffected.
 
 | option | fidelity | filterable by order | cost |
 | --- | --- | --- | --- |
-| A. stamp 9020 in the payload (trailer) | changed by one field | yes | ~30 B per publish |
+| A. stamp 13011 in the payload (trailer) | changed by one field | yes | ~30 B per publish |
 | B. carry the key in the AMPS `CorrelationId` header | untouched | no — content filters evaluate the body (verify on build); a reader sees the key on each record but cannot select by it | nil |
-| C. a side topic `sow/fix42/order_index` keyed /11 holding `11, 41, 37, 9020` | untouched | yes, via the side topic | one extra ~60 B publish per D/G/F/9 (not per report) |
+| C. a side topic `sow/fix42/order_index` keyed /11 holding `11, 41, 37, 13011` | untouched | yes, via the side topic | one extra ~60 B publish per D/G/F/9 (not per report) |
 | D. nothing: uncapped 9021 plus a hash-indexed /37 lookup | untouched | partly | 9021 grows with every amend; the index is verify-on-build |
 
 **Recommendation.** A, with the trailer placement, unless a compliance rule
@@ -790,5 +796,5 @@ The revision of docs 01–07 that followed the decisions, finding by finding.
 | R21 `37=NONE`, rotated 37, absent 17 | [03 §6.4](03-state-machine.md#64-358-executionreport) 37 row; the `key-guard`; tombstones of every 37 — [04 §4](04-recovery-and-operations.md#4-eviction); 06 E44 |
 | R22 daily reset | [04 §9](04-recovery-and-operations.md#9-the-daily-reset); 06 E77 |
 | §3 disputed verdicts | every row re-examined in [06](06-case-coverage.md); those whose text changed are marked **(revised)**, those whose text already matched the resolution are not |
-| §4 ambiguities | 1: [03 §3.1](03-state-machine.md#31-resolution); 2: [03 §6.1](03-state-machine.md#61-35d-newordersingle); 3: 9010/9011 in [02 §4](02-architecture.md#4-the-record); 4: 9014 in [03 §6.4](03-state-machine.md#64-358-executionreport); 5: row order in [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision); 6–7: [02 §3.1](02-architecture.md#31-one-entry-per-order), `RecordWriter`; 8: [02 §9](02-architecture.md#9-what-changes-for-a-consumer-of-the-old-blotter); 9: [03 §3.2](03-state-machine.md#32-creation); 10–11: [03 §5](03-state-machine.md#5-arbitration-on-execution-reports), §6.4; 12–13: [04 §5](04-recovery-and-operations.md#5-one-writer); 14: 06 E5; 15: [02 §6](02-architecture.md#6-configuration); 16: [03 §6.6](03-state-machine.md#66-every-message) |
+| §4 ambiguities | 1: [03 §3.1](03-state-machine.md#31-resolution); 2: [03 §6.1](03-state-machine.md#61-35d-newordersingle); 3: 15038/15044 in [02 §4](02-architecture.md#4-the-record); 4: 9014 in [03 §6.4](03-state-machine.md#64-358-executionreport); 5: row order in [03 §4](03-state-machine.md#4-status-venue-truth-and-one-policy-decision); 6–7: [02 §3.1](02-architecture.md#31-one-entry-per-order), `RecordWriter`; 8: [02 §9](02-architecture.md#9-what-changes-for-a-consumer-of-the-old-blotter); 9: [03 §3.2](03-state-machine.md#32-creation); 10–11: [03 §5](03-state-machine.md#5-arbitration-on-execution-reports), §6.4; 12–13: [04 §5](04-recovery-and-operations.md#5-one-writer); 14: 06 E5; 15: [02 §6](02-architecture.md#6-configuration); 16: [03 §6.6](03-state-machine.md#66-every-message) |
 | §5 plan gaps | [05](05-implementation-plan.md), marked *(added)* and *(changed)* |

@@ -20,10 +20,10 @@ machine already publishes:
 
 | cache field | record tag |
 | --- | --- |
-| `orderKey`, `keyKind` | 9020, 9019 |
-| `clOrdIds` (→ the ClOrdID map) | 9021 holds the last `chain-ids-published`; 9030 the count; older ids are on `orders_audit` under this 9020 |
+| `orderKey`, `keyKind` | 13011, 9019 |
+| `clOrdIds` (→ the ClOrdID map) | 9021 holds the last `chain-ids-published`; 9030 the count; older ids are on `orders_audit` under this 13011 |
 | `workingClOrdId` | 9014 |
-| `orderIds` (→ the OrderID map; the tombstone) | 37 holds the latest; earlier ones are on `execs_audit` under this 9020 |
+| `orderIds` (→ the OrderID map; the tombstone) | 37 holds the latest; earlier ones are on `execs_audit` under this 13011 |
 | `parentOrderId`, `linkedClOrdId` | 9000, 9027 |
 | `ackedQty`, `ackedPx` | 38, 44 |
 | `venueStatus`, `lastExecType` | 39, 150 |
@@ -31,7 +31,7 @@ machine already publishes:
 | `lastExecId` | 17 (the ring behind it is **not** on the record — see §2) |
 | `lastFillExecId`, `lastFillCorrectionExecId`, `bustedExecIds` | 9028; the correction's 17 and every bust's 19 are in 9031 |
 | `lastReportTime` | 9029 |
-| `createdPayload` | not on the record and not needed after the creation's persisted acknowledgement; if lost before it, rebuilt from the D on `orders_audit` by `/9020` |
+| `createdPayload` | not on the record and not needed after the creation's persisted acknowledgement; if lost before it, rebuilt from the D on `orders_audit` by `/13011` |
 | `pending`, with each entry's requested-or-inferred flag | 9015 |
 | `msgCount`, `ignoredCount`, `lateFills` | 9023, 9025, 9026 |
 | `origin` | 9018 |
@@ -69,7 +69,7 @@ On start, before the first feed message is accepted:
    the ClOrdID map from 9021 and the OrderID map from 37 (two maps, never
    one — [03 §3.1](03-state-machine.md#31-resolution)); with
    `load-open-orders-only: true` keep the body only for `9017 = 'N'` records
-   and a **tombstone** (every 37 → 9020) for the rest; a record whose 9015,
+   and a **tombstone** (every 37 → 13011) for the rest; a record whose 9015,
    9021 or 9031 does not parse is loaded with an empty set,
    `9018=UNRECOVERED`, and counted;
 4. mark the cache **complete** (every record the blotter holds is known);
@@ -85,7 +85,7 @@ record through `orders_audit`.
 
 **Schema.** 9024 is the record's schema version. A missing tag of the current
 schema takes its default and `recoveredWithDefaults` counts; a record with an
-unknown major version, or without 9020 at all (the publisher pointed at the
+unknown major version, or without 13011 at all (the publisher pointed at the
 wrong topic), refuses the start (R17).
 
 **What a restart does not cover:** messages the feed delivered while the
@@ -108,7 +108,7 @@ the common path rather than the rare one.
 ### 2.2 Rebuild by replay (`recovery: JOURNAL`, later phase)
 
 The three audit topics are journalled and hold the **whole message as
-received**, plus 9020. A bookmark subscription on the topic regex
+received**, plus 13011. A bookmark subscription on the topic regex
 `^sow/fix42/(orders_audit|execs_audit|rejects)$` from the epoch (or from a
 timestamp) therefore delivers the feed again in journal order, and running it
 through a fresh machine reproduces every record, because the machine is
@@ -116,7 +116,7 @@ deterministic. The order across topics within one transaction log is the
 publish order — the same property [docs/fix42-view/03 §1](../../docs/fix42-view/03-proposed-architecture.md#1-topology)
 leans on; **verify on build** that a regex bookmark subscription across
 three SOW topics preserves it. The id index alone can be rebuilt more cheaply
-still: `orders_audit` records carry `11 → 9020` directly.
+still: `orders_audit` records carry `11 → 13011` directly.
 
 Replay is slower than the SOW rebuild (O(messages), not O(orders)) and is the
 tool for a different job: rebuilding the blotter **from scratch** after a rule
@@ -137,8 +137,8 @@ single keyed read:
 
 | lookup | finds | why it is cheap |
 | --- | --- | --- |
-| `sow/fix42/orders_audit` by SOW key = the message's **41**, then **11** | the audit record of the request that id names, and its 9020 | 11 is that topic's SOW key; every order has a D there, and every G/F names a predecessor (decision 3) |
-| `sow/fix42/rejects` by SOW key = 11 | a rejected request's 9020 | same |
+| `sow/fix42/orders_audit` by SOW key = the message's **41**, then **11** | the audit record of the request that id names, and its 13011 | 11 is that topic's SOW key; every order has a D there, and every G/F names a predecessor (decision 3) |
+| `sow/fix42/rejects` by SOW key = 11 | a rejected request's 13011 | same |
 | `sow/fix42/order_state` by SOW key = the message's 11 (a D) | the record itself | the check that keeps a resent D from erasing a record (R4c) |
 | `sow/fix42/order_state` filtered `/37 = '<OrderID>'` | the record, when the message carries 37 and none of its ClOrdIDs is known | needs a hash index on /37 on the server to be a lookup rather than a scan — **verify on build** the element name; optional, `miss-lookup-by-order-id` |
 
@@ -151,7 +151,7 @@ What a hit does depends on what the cache already holds (S9):
   re-added as pending (S21);
 - the key is **not cached**: `publishFlush` first, so the SOW cannot lag a
   delta still in the publish store, then one keyed read of `order_state` by
-  9020 rebuilds the entry, and the message is applied to it;
+  13011 rebuilds the entry, and the message is applied to it;
 - the key is not cached and **the record is gone** (the audit topics outlive
   a reset of the blotter, [§9](#9-the-daily-reset)): a `MIDSTREAM` entry is
   created **under the found key**, with 9019 from the audit record, and
@@ -286,7 +286,7 @@ order. The repair itself (S2):
 - for a rejected **creation** (the FULL publish): the kept `createdPayload`
   is re-sent whole; if it was already released by a persisted
   acknowledgement that turned out to be for something else, it is rebuilt
-  from the D on `orders_audit` by `/9020`;
+  from the D on `orders_audit` by `/13011`;
 - for a rejected **audit** publish: the record is not the remedy; the payload
   is re-routed to `fix42/unrouted` in lenient mode and `auditPublishFailures`
   counts, so the copy is not lost.
@@ -357,7 +357,7 @@ the ones worth setting first are `publishFailures > 0`,
 | AMPS rejects an audit publish | the blotter is right; the audit copy is missing from its topic | `auditPublishFailures` | the payload goes to `fix42/unrouted` (lenient) |
 | a publish throws after an earlier publish for the same message was stored | the stored ones are sent; the message is redelivered | — | keyed topics overwrite idempotently; `fix42/unrouted`/`malformed` may hold a duplicate |
 | `sow/fix42/order_state` SOW file lost, journal intact | either empty, or **rebuilt by AMPS from its own journal at startup** — the topic is journalled now, and the repository's notes say AMPS reconciles a persistent SOW against the transaction log (S13, **verify on build**) | the rebuild finds nothing, or everything | if empty: `recovery: JOURNAL` replays the audit topics |
-| two cancels race, either order | `39=4`, `9013=NONE` | — | n/a: [03 §7.1–7.2](03-state-machine.md#71-two-cancels-confirm-then-reject-the-motivating-case) |
+| two cancels race, either order | `39=4`, `15035=NONE` | — | n/a: [03 §7.1–7.2](03-state-machine.md#71-two-cancels-confirm-then-reject-the-motivating-case) |
 | feed replays a PossDup range | unchanged; `9025` counts | `ignoredDuplicate` | n/a |
 | an old status report is redelivered | unchanged; `9025` counts | `ignoredLate` | n/a (decision 1) |
 | venue reports a trade after confirming the cancel | 14/6 updated, `39=4` kept, `9026=1` | `lateFills` | n/a by default; `late-fill-after-terminal` if the venue means it as a reopen |
@@ -402,7 +402,7 @@ Two consequences of keeping the audit topics across the reset. A ClOrdID
 reused today **overwrites** yesterday's `orders_audit` SOW record for that id
 (the topic is keyed `/11`, last publish wins); the journal keeps both, the SOW
 does not, so the per-day history is the journal and a lookup for yesterday's
-id returns today's 9020. And a late message for a closed order from yesterday
+id returns today's 13011. And a late message for a closed order from yesterday
 — a bust of a fill on an order the reset removed — finds its key on the audit
 topics but no record, and becomes a `MIDSTREAM` record under that key
 (§3, `missLookupOrphans`): correct, if sparse.

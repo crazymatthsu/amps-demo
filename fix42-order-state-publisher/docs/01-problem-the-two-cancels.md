@@ -128,16 +128,17 @@ it:
   *smaller* deltas, because it knows what actually changed rather than what a
   route lists.
 - **Acked terms and proposed terms in separate tags.** 38/44 are written only
-  by the venue's own reports; 9010/9011 hold an in-flight amend. The family
-  9010–9014 keeps its meaning, so a consumer of the old blotter reads the new
-  one with one change of key field.
+  by the venue's own reports; the pending family holds an in-flight amend. The
+  family keeps its meaning under the deployment's tag scheme — 15038, 15044,
+  15011 and 15035 are the pending 38, 44, 11 and 35, where the old blotter
+  used 9010–9013 — and 9014 is unchanged.
 - **`151=0` stamped on every terminal projection**, so the exposure views
   over the blotter stop counting a cancelled, expired or rejected order
   ([10](../../docs/fix42-view/10-expired-rejected-restated-reports.md)).
 - **The audit topics record the message as received**, journalled, and are the
   system of record. The blotter is derived and rebuildable. This module makes
   the audit copies *whole* messages rather than route-selected subsets, filed
-  under the key the machine gave them (tag 9020 appended as a trailer), which
+  under the key the machine gave them (tag 13011 appended as a trailer), which
   turns the journal into a replay source for the machine and the audit topics
   into a per-order history ([04](04-recovery-and-operations.md)).
 - **The venue's cumulative fields are adopted, never computed.** 14/151/6/39

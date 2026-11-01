@@ -28,12 +28,15 @@ the phases.
 
 ## The design in one paragraph
 
-Every message resolves to an **OrderKey** (the root ClOrdID of a chain that
-opened with a `35=D`, otherwise the venue's OrderID — always one of the drop
-copy's own ids) through a publisher-owned index of every ClOrdID and OrderID
-ever seen. The key is stamped on the record
-as tag 9020 and is the plain SOW key of `sow/fix42/order_state`, so the server
-needs no module. A cache entry per order holds the ids (11, 41, 37, the
+Every message resolves to a **root ClOrdID** (the tag 11 of the chain's
+`35=D`; for a chain first seen mid-stream, the ClOrdID closest to the root its
+first message carries — always one of the drop copy's own ids) through a
+publisher-owned index of every ClOrdID and OrderID ever seen. The key is
+written once, in the D's full publish, as tag 13011, and is the plain SOW key
+of `sow/fix42/order_state`, so the server needs no module. The record's other
+custom tags follow one scheme: 15xxx is the pending value of standard tag xxx
+(15011, 15035, 15038, 15044 for the request in flight), 13xxx a root value,
+9000–9099 the machine's bookkeeping. A cache entry per order holds the ids (11, 41, 37, the
 working id, the chain), the acked terms (38, 44), the venue's last status and
 cumulative snapshot (39, 14, 151, 6), the last ExecID, and a *set* of
 in-flight requests — each with its own ClOrdID, action and proposed terms.
@@ -44,7 +47,7 @@ store so that nothing is lost or left unreported between the feed and the
 blotter. Because the venue's status is written only by the venue's own
 reports, and a `35=9` only removes its request from the set, a cancel
 confirmed by one report and a second cancel rejected afterwards end as
-`39=4`, `9013=NONE`: canceled, with nothing pending. The record carries
+`39=4`, `15035=NONE`: canceled, with nothing pending. The record carries
 everything the cache knows, so a restart rebuilds the cache from one `sow`
 query; a cache miss is resolved through the audit topics, which carry the key
 too, before it ever creates a second record.
