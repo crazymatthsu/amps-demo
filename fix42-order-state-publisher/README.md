@@ -34,3 +34,4 @@ AMPS_FLOW=fix42-order-state ./server/scripts/amps.sh start
 | [docs/07](docs/07-extension-points.md) | policies per venue, the hook SPI, replaceable components |
 | [docs/08](docs/08-review-findings.md) | round-1 review findings, the six decisions taken on them, where each landed |
 | [docs/09](docs/09-review-round-2.md) | round-2 review of the revised docs: round-1 dispositions verified, twenty-two new findings and where each landed |
+| [docs/10](docs/10-case-frequency-and-priority.md) | every case sorted by frequency (normal, sometimes, rare) and build slot, for implementation order |
