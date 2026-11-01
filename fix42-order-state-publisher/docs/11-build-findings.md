@@ -418,9 +418,17 @@ reloads the morning's whole flow, sized as if eviction were off.
 | schedule finished entries at load, due one retention after the restart | eviction covers the reloaded orders too | none beyond the queue entries |
 | require `load-open-orders-only: true` with eviction | finished orders load as tombstones | a refused start for a configuration that works today |
 
-**Disposition: open, for the design owner.** Recommendation: schedule at load.
-Until then, the README says to set `load-open-orders-only: true` with
-eviction.
+**Disposition: fixed, by the first option.** `OrderStateMachine.load` now
+schedules a terminal entry one retention after it is loaded, through the same
+helper `commit` uses. The deadline counts from the restart, not from when the
+order finished, because the record does not say when that was. A reloaded
+order therefore stays in the cache at most one retention longer than it would
+have without the restart. `load-open-orders-only: true` still gives the lower
+peak right after a restart, with tombstones from the start. Pinned by
+`CacheMissTest.loadedTerminalOrdersAreEvicted`, which fails without the fix,
+and against AMPS by `TombstoneIT.reloadedFinishedOrdersAreEvicted`: the
+finished orders reloaded in full are evicted, the open ones stay, and a late
+bust then lands on its record through the tombstone.
 
 ## 5. Not built
 

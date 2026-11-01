@@ -73,8 +73,9 @@ fix42-order-state:
     recovery: SOW
     # Keep a cache body only for open orders; terminal records yield a
     # tombstone (every 37 -> 13011) instead. docs/04 §2.1. Needs
-    # miss-lookup: true, like terminal-retention. With eviction on, set it:
-    # finished orders loaded in full are never evicted (docs/11 F12).
+    # miss-lookup: true, like terminal-retention. Without it, finished
+    # orders load in full and, with eviction on, are evicted one retention
+    # after the restart (docs/11 F12); with it, they are tombstones at once.
     load-open-orders-only: false
     # Let recovery NONE start against a non-empty blotter.
     allow-incomplete-cache: false

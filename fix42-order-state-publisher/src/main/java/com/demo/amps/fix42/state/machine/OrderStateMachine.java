@@ -195,11 +195,7 @@ public final class OrderStateMachine {
                     ? outcome.dirty & ~RecordField.KEY.bit() : 0;
             entries.put(outcome.key, entry);
             index.addKey(outcome.key);
-            if (terminalRetentionMillis > 0 && entry.terminal()) {
-                long deadline = clock.getAsLong() + terminalRetentionMillis;
-                evictionDeadlines.put(outcome.key, deadline);
-                evictions.addLast(new Eviction(deadline, outcome.key));
-            }
+            scheduleEvictionIfTerminal(outcome.key, entry);
         }
         for (Outcome.Binding binding : outcome.bindings) {
             if (binding.orderId()) {
@@ -251,11 +247,15 @@ public final class OrderStateMachine {
     /**
      * Loads an entry rebuilt from its SOW record (docs/04 §2): the ClOrdID map
      * from 9021, the OrderID map from 37. Used by the cache loader before the
-     * first message.
+     * first message. A terminal entry is scheduled for eviction one retention
+     * after it is loaded, as if it had just gone terminal: without that, a
+     * restart would keep every order finished before it for the rest of the
+     * day (docs/11 F12).
      */
     public void load(OrderState state) {
         entries.put(state.orderKey, state);
         index.addKey(state.orderKey);
+        scheduleEvictionIfTerminal(state.orderKey, state);
         if (state.keyKind == 'C') {
             index.bindClOrdId(state.orderKey, state.orderKey);
         }
@@ -287,6 +287,19 @@ public final class OrderStateMachine {
         }
         if (read.unrecovered()) {
             counters.increment(Counter.UNRECOVERED);
+        }
+    }
+
+    /**
+     * Schedules {@code key}'s entry for eviction one retention from now when
+     * it is terminal and eviction is on. A later schedule for the same key
+     * replaces the earlier: the queue keeps both, and the stale one is skipped.
+     */
+    private void scheduleEvictionIfTerminal(String key, OrderState entry) {
+        if (terminalRetentionMillis > 0 && entry.terminal()) {
+            long deadline = clock.getAsLong() + terminalRetentionMillis;
+            evictionDeadlines.put(key, deadline);
+            evictions.addLast(new Eviction(deadline, key));
         }
     }
 

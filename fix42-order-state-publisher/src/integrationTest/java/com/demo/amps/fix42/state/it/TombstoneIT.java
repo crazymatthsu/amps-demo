@@ -108,6 +108,39 @@ class TombstoneIT {
     }
 
     @Test
+    @DisplayName("docs/11 F12: a restart with eviction on evicts the finished orders it reloaded in full")
+    void reloadedFinishedOrdersAreEvicted() throws Exception {
+        fixture = OrderStateFixture.start("fix42os-reload-evict", "demo", "order-state.terminal-retention=PT0.2S");
+        fixture.publish(MockFixFlow.events());
+        fixture.flush();
+        FixMessage before = record("PARENT-AAPL-1");
+        long finished = fixture.sow.records(BLOTTER).stream()
+                .filter(r -> "Y".equals(r.value(FixTags.Record.TERMINAL))).count();
+        assertThat(finished).as("the scripted flow ends some orders").isPositive();
+        fixture.disconnectPublisher();
+
+        // load-open-orders-only stays false: every record comes back with a body.
+        fixture.connect(List.of());
+        assertThat(fixture.loaded.loaded()).isEqualTo(MockFixFlow.chains().size());
+        assertThat(fixture.publisher.machine().state("PARENT-AAPL-1")).as("reloaded in full").isNotNull();
+        Thread.sleep(400);
+        assertThat(fixture.publisher.machine().evictExpired()).isEqualTo((int) finished);
+        assertThat(fixture.publisher.machine().size()).isEqualTo(MockFixFlow.chains().size() - (int) finished);
+        assertThat(fixture.publisher.machine().state("PARENT-AAPL-1")).isNull();
+
+        // And a late bust still finds its record, through the tombstone.
+        send(AAPL_BUST);
+        fixture.flush();
+        FixMessage after = record("PARENT-AAPL-1");
+        assertThat(after.value(FixTags.ORD_STATUS)).isEqualTo("1");
+        assertThat(after.value(FixTags.Record.CL_ORD_ID_CHAIN))
+                .isEqualTo(before.value(FixTags.Record.CL_ORD_ID_CHAIN));
+        assertThat(Long.parseLong(after.value(FixTags.Record.MSG_COUNT)))
+                .isEqualTo(Long.parseLong(before.value(FixTags.Record.MSG_COUNT)) + 1);
+        assertThat(after.value(FixTags.Record.CHAIN_ORIGIN)).isEqualTo("D");
+    }
+
+    @Test
     @DisplayName("E62: a record missing 9026 loads with its default; a newer schema refuses the start")
     void schema() throws Exception {
         fixture = OrderStateFixture.start("fix42os-schema", "demo");
