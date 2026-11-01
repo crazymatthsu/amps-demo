@@ -390,15 +390,19 @@ overwrote:
 - 9023 `6` with `1`;
 - 9018 `D` with `MIDSTREAM`.
 
-That is the S9 overwrite 04 §4 says eviction never does. Nothing refuses the
-combination: `terminal-retention` and `load-open-orders-only` (which makes the
-same tombstones at load) are validated independently of `miss-lookup`.
+That is the S9 overwrite 04 §4 says eviction never does. Until this fix,
+nothing refused the combination: `terminal-retention` and
+`load-open-orders-only` (which makes the same tombstones at load) were
+validated independently of `miss-lookup`.
 
-**Disposition: open; a fix is recommended.** Refuse the start when
-`terminal-retention` is above zero, or `load-open-orders-only` is true, while
-`miss-lookup` is false, as `recovery: NONE` already refuses a non-empty
-blotter without `allow-incomplete-cache`. Until then, the README says to keep
-the lookup on.
+**Disposition: fixed.** `OrderStateProperties.validate()` now refuses the start
+when `terminal-retention` is above zero, or `load-open-orders-only` is true,
+while `miss-lookup` is false. The message names the setting and this finding.
+This is the same kind of refusal `recovery: NONE` already gives a non-empty
+blotter without `allow-incomplete-cache`. The machine still takes the S8 path
+when a record is truly gone; only the configuration that made it the normal
+path is refused. Pinned by `OrderStatePropertiesTest.tombstonesNeedTheMissLookup`
+and `tombstonesWithTheMissLookupAreAccepted`.
 
 ### F12 — Orders loaded at startup are never scheduled for eviction
 

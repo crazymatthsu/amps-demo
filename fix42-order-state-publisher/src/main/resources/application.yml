@@ -66,11 +66,15 @@ fix42-order-state:
     # How many ClOrdIDs 9021 carries; 9030 has the count. docs/02 §4.
     chain-ids-published: 50
     # Evict terminal orders from the cache after this long; PT0S = never.
+    # An evicted order keeps a tombstone (about 276 bytes) until restart.
+    # Needs miss-lookup: true; the start is refused otherwise (docs/11 F11).
     terminal-retention: PT0S
     # Rebuild the cache at startup: SOW (default) or NONE. docs/04 §2.
     recovery: SOW
     # Keep a cache body only for open orders; terminal records yield a
-    # tombstone (every 37 -> 13011) instead. docs/04 §2.1.
+    # tombstone (every 37 -> 13011) instead. docs/04 §2.1. Needs
+    # miss-lookup: true, like terminal-retention. With eviction on, set it:
+    # finished orders loaded in full are never evicted (docs/11 F12).
     load-open-orders-only: false
     # Let recovery NONE start against a non-empty blotter.
     allow-incomplete-cache: false
