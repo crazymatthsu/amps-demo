@@ -14,6 +14,8 @@ import com.demo.amps.fix42.state.publish.AmpsPublishSink;
 import com.demo.amps.fix42.state.publish.AuditRouter;
 import com.demo.amps.fix42.state.publish.OrderStatePublisher;
 import com.demo.amps.fix42.state.publish.RepairQueue;
+import com.demo.amps.fix42.state.recovery.MissResolver;
+import com.demo.amps.fix42.state.recovery.SowCacheLoader;
 import com.demo.amps.fix42.state.spi.OrderStateHook;
 import com.demo.amps.testharness.AmpsFlow;
 import com.demo.amps.testharness.AmpsTestServer;
@@ -47,6 +49,7 @@ final class OrderStateFixture implements AutoCloseable {
     Client jsonReader;
     SowReader sow;
     SowReader views;
+    SowCacheLoader.Report loaded;
 
     private OrderStateFixture(AmpsTestServer server, OrderStateProperties properties) {
         this.server = server;
@@ -68,11 +71,7 @@ final class OrderStateFixture implements AutoCloseable {
     static OrderStateFixture start(String clientName, String profile, String... overrides) throws Exception {
         assumeAvailable();
         AmpsTestServer server = AmpsTestServer.start(AmpsFlow.FIX42_ORDER_STATE);
-        String[] all = new String[overrides.length + 2];
-        all[0] = "amps.client-name=" + clientName;
-        all[1] = "amps.publish-store=MEMORY";
-        System.arraycopy(overrides, 0, all, 2, overrides.length);
-        OrderStateProperties properties = OrderStateConfigurations.shipped(server.uri(), profile, all);
+        OrderStateProperties properties = settings(server, clientName, profile, overrides);
         properties.validate();
         OrderStateFixture fixture = new OrderStateFixture(server, properties);
         try {
@@ -84,12 +83,44 @@ final class OrderStateFixture implements AutoCloseable {
         return fixture;
     }
 
-    /** (Re)connects the publisher, with a fresh machine, and the readers. */
+    /** The shipped configuration for {@code server}, with a memory store and {@code overrides}. */
+    static OrderStateProperties settings(AmpsTestServer server, String clientName, String profile,
+                                         String... overrides) {
+        String[] all = new String[overrides.length + 2];
+        all[0] = "amps.client-name=" + clientName;
+        all[1] = "amps.publish-store=MEMORY";
+        System.arraycopy(overrides, 0, all, 2, overrides.length);
+        OrderStateProperties properties = OrderStateConfigurations.shipped(server.uri(), profile, all);
+        properties.validate();
+        return properties;
+    }
+
+    /**
+     * (Re)connects the publisher with a fresh machine, wired as the
+     * application wires it -- miss lookups, terminal retention, and the cache
+     * rebuilt from the SOW before the first message -- and the readers.
+     */
     void connect(List<OrderStateHook> hooks) throws Exception {
-        client = AmpsClientConfiguration.connect(properties.amps(), repairs);
-        publisher = new OrderStatePublisher(new OrderStateMachine(properties.machineOptions()),
-                new RecordWriter(properties.machineOptions()), new AuditRouter(properties),
-                new AmpsPublishSink(client), repairs, hooks, properties);
+        connect(properties, hooks);
+    }
+
+    /** {@link #connect(List)} under different settings: a restart with another recovery mode. */
+    void connect(OrderStateProperties settings, List<OrderStateHook> hooks) throws Exception {
+        client = AmpsClientConfiguration.connect(settings.amps(), repairs);
+        OrderStateMachine machine = new OrderStateMachine(settings.machineOptions());
+        machine.setTerminalRetention(settings.orderState().terminalRetention(), System::currentTimeMillis);
+        if (settings.orderState().missLookup()) {
+            machine.setMissLookup(new MissResolver(client, settings));
+        }
+        try {
+            loaded = new SowCacheLoader(settings).load(client, machine);
+        } catch (Exception | Error e) {
+            client.close();
+            client = null;
+            throw e;
+        }
+        publisher = new OrderStatePublisher(machine, new RecordWriter(settings.machineOptions()),
+                new AuditRouter(settings), new AmpsPublishSink(client), repairs, hooks, settings);
         if (reader == null) {
             reader = new Client("fix42os-it-reader-" + System.nanoTime());
             reader.connect(server.uri());

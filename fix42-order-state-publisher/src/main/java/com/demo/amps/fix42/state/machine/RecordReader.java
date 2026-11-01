@@ -70,6 +70,8 @@ public final class RecordReader {
             s.clOrdIds = new ArrayList<>();
             unrecovered = true;
         }
+        String count = record.value(FixTags.Record.CL_ORD_ID_COUNT);
+        s.clOrdIdCount = count.isEmpty() ? s.clOrdIds.size() : Math.max(Long.parseLong(count), s.clOrdIds.size());
         try {
             String pending = record.value(FixTags.Record.PENDING_REQUESTS);
             if (pending.isEmpty()) {

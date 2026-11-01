@@ -9,6 +9,8 @@ import com.demo.amps.fix42.state.publish.AmpsPublishSink;
 import com.demo.amps.fix42.state.publish.AuditRouter;
 import com.demo.amps.fix42.state.publish.OrderStatePublisher;
 import com.demo.amps.fix42.state.publish.RepairQueue;
+import com.demo.amps.fix42.state.recovery.MissResolver;
+import com.demo.amps.fix42.state.recovery.SowCacheLoader;
 import com.demo.amps.fix42.state.spi.OrderStateHook;
 import java.time.Duration;
 import org.springframework.beans.factory.InitializingBean;
@@ -56,7 +58,9 @@ public class Fix42OrderStatePublisherApplication {
 
     @Bean
     public OrderStateMachine orderStateMachine(OrderStateProperties properties) {
-        return new OrderStateMachine(properties.machineOptions());
+        OrderStateMachine machine = new OrderStateMachine(properties.machineOptions());
+        machine.setTerminalRetention(properties.orderState().terminalRetention(), System::currentTimeMillis);
+        return machine;
     }
 
     @Bean
@@ -76,12 +80,20 @@ public class Fix42OrderStatePublisherApplication {
         return new DeskStatusHook();
     }
 
-    /** Every hook bean, in {@code @Order} sequence (docs/07 §2). */
+    /**
+     * The publisher, with its cache rebuilt from the SOW before the first
+     * message (docs/04 §2) and every hook bean in {@code @Order} sequence
+     * (docs/07 §2).
+     */
     @Bean(destroyMethod = "close")
     public OrderStatePublisher orderStatePublisher(OrderStateMachine machine, RecordWriter writer,
                                                    AuditRouter router, HAClient client, RepairQueue repairs,
                                                    ObjectProvider<OrderStateHook> hooks,
-                                                   OrderStateProperties properties) {
+                                                   OrderStateProperties properties) throws Exception {
+        if (properties.orderState().missLookup()) {
+            machine.setMissLookup(new MissResolver(client, properties));
+        }
+        new SowCacheLoader(properties).load(client, machine);
         OrderStatePublisher publisher = new OrderStatePublisher(machine, writer, router, new AmpsPublishSink(client),
                 repairs, hooks.orderedStream().toList(), properties);
         publisher.startIdleDrain(Duration.ofSeconds(1));

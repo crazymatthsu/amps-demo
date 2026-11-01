@@ -3,8 +3,11 @@ package com.demo.amps.fix42.state.machine;
 import com.demo.amps.fix42.state.config.FillUnderPendingIdPolicy;
 import com.demo.amps.fix42.state.config.NonFillAfterTerminalPolicy;
 import com.demo.amps.fix42.state.fix.FixFrame;
+import com.demo.amps.fix42.state.fix.FixMessage;
 import com.demo.amps.fix42.state.fix.FixTags;
 import com.demo.amps.fix42.state.spi.IgnoreReason;
+import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -12,6 +15,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,12 +60,52 @@ public final class OrderStateMachine {
     /** A hook's {@code resolveKey} answer for the message being planned, or null. */
     private String keyOverride;
 
+    private MissLookup lookup = MissLookup.NONE;
+    /** Every record the blotter holds is known: false after recovery NONE or a partial load. */
+    private boolean cacheComplete = true;
+    private long terminalRetentionMillis;
+    private LongSupplier clock = System::currentTimeMillis;
+    private final ArrayDeque<Eviction> evictions = new ArrayDeque<>();
+    private final Map<String, Long> evictionDeadlines = new HashMap<>();
+
+    private record Eviction(long deadline, String key) {
+    }
+
     public OrderStateMachine(MachineOptions options) {
         this.options = options;
     }
 
     public MachineOptions options() {
         return options;
+    }
+
+    /** The keyed reads a cache miss is resolved by (docs/04 §3); {@link MissLookup#NONE} by default. */
+    public void setMissLookup(MissLookup lookup) {
+        this.lookup = lookup;
+    }
+
+    /**
+     * Records the blotter may hold are not all in the cache -- recovery NONE,
+     * or a partial load -- so a D whose id is unknown is first looked up by
+     * key: a FULL publish over a record the cache merely did not know about
+     * would erase every delta since (R4c).
+     */
+    public void markCacheIncomplete() {
+        cacheComplete = false;
+    }
+
+    public boolean cacheComplete() {
+        return cacheComplete;
+    }
+
+    /**
+     * Evict a terminal order's entry {@code retention} after it went terminal
+     * (docs/04 §4); zero never evicts. Its OrderIDs stay in the index as the
+     * tombstone, so a late bust finds the record again.
+     */
+    public void setTerminalRetention(Duration retention, LongSupplier clock) {
+        this.terminalRetentionMillis = retention.toMillis();
+        this.clock = clock;
     }
 
     // ---- the two phases -------------------------------------------------------
@@ -151,6 +195,11 @@ public final class OrderStateMachine {
                     ? outcome.dirty & ~RecordField.KEY.bit() : 0;
             entries.put(outcome.key, entry);
             index.addKey(outcome.key);
+            if (terminalRetentionMillis > 0 && entry.terminal()) {
+                long deadline = clock.getAsLong() + terminalRetentionMillis;
+                evictionDeadlines.put(outcome.key, deadline);
+                evictions.addLast(new Eviction(deadline, outcome.key));
+            }
         }
         for (Outcome.Binding binding : outcome.bindings) {
             if (binding.orderId()) {
@@ -161,6 +210,9 @@ public final class OrderStateMachine {
         }
         counters.add(outcome.counts);
         counters.observe(outcome.msgType, outcome.execType);
+        if (terminalRetentionMillis > 0) {
+            evictExpired();
+        }
     }
 
     // ---- read access ------------------------------------------------------------
@@ -215,6 +267,56 @@ public final class OrderStateMachine {
         }
     }
 
+    /**
+     * A record the loader does not keep a body for: its OrderIDs to its key,
+     * so a late venue message finds it and the entry is recreated from the
+     * record (docs/04 §2.1, §4).
+     */
+    public void tombstone(String key, Collection<String> orderIds) {
+        index.addKey(key);
+        for (String orderId : orderIds) {
+            index.bindOrderId(orderId, key);
+        }
+        counters.increment(Counter.TOMBSTONES);
+    }
+
+    /** Counts what the loader found reading one record. */
+    public void countLoaded(RecordReader.Result read) {
+        if (read.defaulted()) {
+            counters.increment(Counter.RECOVERED_WITH_DEFAULTS);
+        }
+        if (read.unrecovered()) {
+            counters.increment(Counter.UNRECOVERED);
+        }
+    }
+
+    /** Evicts every terminal entry whose retention has run out; returns how many. */
+    public int evictExpired() {
+        int evicted = 0;
+        long now = clock.getAsLong();
+        while (!evictions.isEmpty() && evictions.peekFirst().deadline() <= now) {
+            Eviction due = evictions.pollFirst();
+            Long current = evictionDeadlines.get(due.key());
+            if (current == null || current != due.deadline()) {
+                continue;
+            }
+            evictionDeadlines.remove(due.key());
+            OrderState entry = entries.get(due.key());
+            if (entry == null || !entry.terminal()) {
+                continue;
+            }
+            entries.remove(due.key());
+            List<String> clOrdIds = new ArrayList<>(entry.clOrdIds);
+            if (entry.keyKind == 'C') {
+                clOrdIds.add(entry.orderKey);
+            }
+            index.forgetClOrdIds(clOrdIds, due.key());
+            counters.increment(Counter.EVICTIONS);
+            evicted++;
+        }
+        return evicted;
+    }
+
     // ---- 35=D --------------------------------------------------------------------
 
     /** docs/03 §6.1. A D resolves by its own 11 only; its 41 is lineage, never followed. */
@@ -225,6 +327,15 @@ public final class OrderStateMachine {
             return;
         }
         String key = keyOverride != null ? keyOverride : index.keyForClOrdId(id);
+        if (key == null && !cacheComplete) {
+            // A resent D, or a day replayed, against a record the cache does not know (R4c).
+            FixMessage record = lookup.record(id);
+            if (record != null) {
+                a.rebuildFrom(record);
+                a.count(Counter.RESENT_D_FOUND_BY_KEY);
+                key = id;
+            }
+        }
         if (key == null) {
             if (index.isKey(id)) {
                 a.count(Counter.KEY_COLLISIONS);
@@ -235,7 +346,11 @@ public final class OrderStateMachine {
             createFromNewOrder(a, id);
             return;
         }
-        a.attach(key);
+        if (a.s == null && !a.attach(key)) {
+            // A key the index holds whose record is gone: nothing to erase.
+            createFromNewOrder(a, id);
+            return;
+        }
         if (a.s.origin == Origin.MIDSTREAM) {
             lateNewOrder(a, id);
         } else {
@@ -308,13 +423,12 @@ public final class OrderStateMachine {
     /** docs/03 §6.2-6.3. Resolution 41 → 37 → 11; a request never moves 38/44 or 39. */
     private void planRequest(Apply a, PendingAction action) {
         String id = a.v(FixTags.CL_ORD_ID);
-        String key = resolve(a, FixTags.ORIG_CL_ORD_ID, -FixTags.ORDER_ID, FixTags.CL_ORD_ID);
+        String key = resolveOrLookUp(a, FixTags.ORIG_CL_ORD_ID, -FixTags.ORDER_ID, FixTags.CL_ORD_ID);
         if (id.isEmpty()) {
-            if (key == null) {
-                a.ignoreWithoutChain(IgnoreReason.NO_ID);
-            } else {
-                a.attach(key);
+            if (key != null && a.attach(key)) {
                 a.ignore(IgnoreReason.NO_ID);
+            } else {
+                a.ignoreWithoutChain(IgnoreReason.NO_ID);
             }
             return;
         }
@@ -325,7 +439,16 @@ public final class OrderStateMachine {
             createFromRequest(a, action, id, qty, px);
             return;
         }
-        a.attach(key);
+        if (!a.attach(key)) {
+            a.orphanUnder(key);
+            createFromRequest(a, action, id, qty, px);
+            return;
+        }
+        applyRequest(a, action, id, qty, px);
+    }
+
+    /** docs/03 §6.2's rows for a request on a chain the machine holds. */
+    private void applyRequest(Apply a, PendingAction action, String id, String qty, String px) {
         OrderState s = a.s;
         PendingRequest existing = s.pendingRequest(id);
         if (existing != null) {
@@ -343,7 +466,7 @@ public final class OrderStateMachine {
                 // The acknowledgement named the working id, not the request's (S7).
                 replacePending(a, underOrig, underOrig.asRequested(id, qty, px));
                 a.applied(true);
-            } else if (key.equals(index.keyForClOrdId(id))) {
+            } else if (boundHere(a, id)) {
                 // An answered id: its answer overtook it. Adding it would leave
                 // pending a request the venue has already dealt with.
                 a.ignore(IgnoreReason.LATE_REQUEST);
@@ -360,6 +483,10 @@ public final class OrderStateMachine {
     private void createFromRequest(Apply a, PendingAction action, String id, String qty, String px) {
         Minted minted = mint(a);
         if (minted == null) {
+            return;
+        }
+        if (existingRecordFor(a, minted)) {
+            applyRequest(a, action, id, qty, px);
             return;
         }
         OrderState s = new OrderState();
@@ -418,12 +545,16 @@ public final class OrderStateMachine {
     /** docs/03 §5 then §4's after-terminal table then §6.4. Resolution 37 → 11 → 41. */
     private void planReport(Apply a) {
         ReportKind kind = classify(a);
-        String key = resolve(a, -FixTags.ORDER_ID, FixTags.CL_ORD_ID, FixTags.ORIG_CL_ORD_ID);
+        String key = resolveOrLookUp(a, -FixTags.ORDER_ID, FixTags.CL_ORD_ID, FixTags.ORIG_CL_ORD_ID);
         if (key == null) {
             createFromReport(a, kind);
             return;
         }
-        a.attach(key);
+        if (!a.attach(key)) {
+            a.orphanUnder(key);
+            createFromReport(a, kind);
+            return;
+        }
         arbitrateAndApply(a, kind);
         a.stage(FixTags.ORIG_CL_ORD_ID, FixTags.CL_ORD_ID, FixTags.ORDER_ID);
     }
@@ -546,6 +677,11 @@ public final class OrderStateMachine {
         if (minted == null) {
             return;
         }
+        if (existingRecordFor(a, minted)) {
+            arbitrateAndApply(a, kind);
+            a.stage(FixTags.ORIG_CL_ORD_ID, FixTags.CL_ORD_ID, FixTags.ORDER_ID);
+            return;
+        }
         OrderState s = new OrderState();
         s.orderKey = minted.key;
         s.keyKind = minted.kind;
@@ -566,7 +702,8 @@ public final class OrderStateMachine {
         String clOrdId = a.v(FixTags.CL_ORD_ID);
         String execId = a.v(FixTags.EXEC_ID);
         boolean pendingAck = kind == ReportKind.PENDING_ACK;
-        boolean freshId = !clOrdId.isEmpty() && index.keyForClOrdId(clOrdId) == null;
+        boolean freshId = !clOrdId.isEmpty() && index.keyForClOrdId(clOrdId) == null
+                && !s.clOrdIds.contains(clOrdId);
         boolean forceLeavesZero = false;
 
         // A 150=8 rejects the ORDER only when it names a pending NEW or the
@@ -686,7 +823,7 @@ public final class OrderStateMachine {
         if (kind == ReportKind.PENDING_ACK) {
             // Never removes. An acknowledgement of a request this side has not
             // seen adds an inferred entry, so it is not lost (R9).
-            if (!clOrdId.isEmpty() && s.pendingRequest(clOrdId) == null && !answeredId(a.key, s, clOrdId)) {
+            if (!clOrdId.isEmpty() && s.pendingRequest(clOrdId) == null && !boundHere(a, clOrdId)) {
                 PendingAction action = switch (execType) {
                     case FixTags.ExecType.PENDING_NEW -> PendingAction.NEW;
                     case FixTags.ExecType.PENDING_CANCEL -> PendingAction.CANCEL;
@@ -833,13 +970,12 @@ public final class OrderStateMachine {
 
     /** docs/03 §6.5. Resolution 11 → 41 → 37; a reject never creates a chain. */
     private void planReject(Apply a) {
-        String key = resolve(a, FixTags.CL_ORD_ID, FixTags.ORIG_CL_ORD_ID, -FixTags.ORDER_ID);
-        if (key == null) {
+        String key = resolveOrLookUp(a, FixTags.CL_ORD_ID, FixTags.ORIG_CL_ORD_ID, -FixTags.ORDER_ID);
+        if (key == null || !a.attach(key)) {
             a.count(Counter.UNMATCHED_REJECTS);
             a.ignoreWithoutChain(IgnoreReason.UNMATCHED);
             return;
         }
-        a.attach(key);
         OrderState s = a.s;
         String clOrdId = a.v(FixTags.CL_ORD_ID);
         PendingRequest named = s.pendingRequest(clOrdId);
@@ -957,6 +1093,10 @@ public final class OrderStateMachine {
      * (decision 2, R12).
      */
     private Minted mint(Apply a) {
+        if (a.forcedKey != null) {
+            String orderId = a.v(FixTags.ORDER_ID);
+            return new Minted(a.forcedKey, a.forcedKey.equals(orderId) ? 'O' : 'C');
+        }
         String[] candidates = {a.v(FixTags.ORIG_CL_ORD_ID), a.v(FixTags.CL_ORD_ID), a.v(FixTags.ORDER_ID)};
         boolean any = false;
         for (int i = 0; i < candidates.length; i++) {
@@ -976,9 +1116,75 @@ public final class OrderStateMachine {
         return null;
     }
 
-    /** A request id bound to this chain and no longer pending: dealt with already. */
-    private boolean answeredId(String key, OrderState s, String clOrdId) {
-        return key.equals(index.keyForClOrdId(clOrdId)) && s.pendingRequest(clOrdId) == null;
+    /**
+     * With an incomplete cache, a key minted for a chain first seen here may
+     * already be a record's -- the order was first seen mid-stream before the
+     * restart, so no audit lookup names it. Then the entry is rebuilt from that
+     * record, never created over it (R4c, S9). One keyed read, and only while
+     * the cache is incomplete.
+     */
+    private boolean existingRecordFor(Apply a, Minted minted) {
+        if (cacheComplete || a.forcedKey != null) {
+            return false;
+        }
+        FixMessage record = lookup.record(minted.key);
+        if (record == null) {
+            return false;
+        }
+        a.rebuildFrom(record);
+        return true;
+    }
+
+    /**
+     * Whether {@code clOrdId} already belongs to this chain -- in the index, or
+     * in the chain list of an entry just rebuilt from its record -- and is not
+     * pending: an answered id, dealt with already.
+     */
+    private boolean boundHere(Apply a, String clOrdId) {
+        return (a.key.equals(index.keyForClOrdId(clOrdId)) || a.s.clOrdIds.contains(clOrdId))
+                && a.s.pendingRequest(clOrdId) == null;
+    }
+
+    /**
+     * Resolution with the cache-miss lookups of docs/04 §3 woven in: the
+     * candidates in the type's order, and a ClOrdID the index does not know
+     * looked up on the audit topics <b>in its turn</b>, before the next
+     * candidate is tried. Looking up only after every candidate missed would
+     * let a later candidate win that the index happens to know -- a G whose 41
+     * names its order and whose 37 names another (06 E58) would land on the
+     * other order once that one had been looked up first (docs/11 F8). Then,
+     * when every candidate missed, the blotter by 37 if
+     * {@code miss-lookup-by-order-id} is on.
+     */
+    private String resolveOrLookUp(Apply a, int... tags) {
+        if (keyOverride != null) {
+            return keyOverride;
+        }
+        for (int tag : tags) {
+            String id = a.v(Math.abs(tag));
+            if (id.isEmpty() || (tag < 0 && "NONE".equals(id))) {
+                continue;
+            }
+            String key = tag < 0 ? index.keyForOrderId(id) : index.keyForClOrdId(id);
+            if (key == null && tag > 0) {
+                key = lookup.keyForClOrdId(id);
+                if (key != null) {
+                    a.count(Counter.MISS_LOOKUPS);
+                }
+            }
+            if (key != null) {
+                return key;
+            }
+        }
+        String orderId = a.v(FixTags.ORDER_ID);
+        if (!orderId.isEmpty() && !"NONE".equals(orderId)) {
+            String key = lookup.keyForOrderId(orderId);
+            if (key != null) {
+                a.count(Counter.MISS_LOOKUPS);
+                return key;
+            }
+        }
+        return null;
     }
 
     // ---- small field rules ---------------------------------------------------------
@@ -1091,6 +1297,8 @@ public final class OrderStateMachine {
         Outcome.PassThrough passThrough = Outcome.PassThrough.NONE;
         boolean copyFillDetail;
         boolean zeroFillDetail;
+        /** The key a chain is created under when its record is gone (S8), instead of a minted one. */
+        String forcedKey;
         final List<Outcome.Binding> bindings = new ArrayList<>(3);
         final int[] counts = new int[Counter.values().length];
 
@@ -1134,17 +1342,57 @@ public final class OrderStateMachine {
             counts[counter.ordinal()]++;
         }
 
-        void attach(String key) {
+        /**
+         * Works on a copy of {@code key}'s entry. With no entry -- an evicted
+         * order's tombstone, or a key the audit topics named -- the entry is
+         * recreated from its blotter record, never from the message (S9).
+         *
+         * @return false when there is no record either: the caller creates a
+         *         chain under {@code key}, or ignores the message
+         */
+        boolean attach(String key) {
             this.key = key;
             OrderState entry = entries.get(key);
-            if (entry == null) {
-                // A key reached through an OrderID whose entry is gone: an
-                // evicted order's tombstone. The MissResolver of phase 4
-                // recreates the entry from its record; until then there is
-                // nothing honest to apply it to.
-                throw new IllegalStateException("key " + key + " has no cache entry");
+            if (entry != null) {
+                s = entry.copy();
+                return true;
             }
-            s = entry.copy();
+            FixMessage record = lookup.record(key);
+            if (record == null) {
+                s = null;
+                return false;
+            }
+            rebuildFrom(record);
+            return true;
+        }
+
+        /** The entry, rebuilt from its record; its ids are bound at commit like any other. */
+        void rebuildFrom(FixMessage record) {
+            RecordReader.Result read = RecordReader.read(record, options.schemaVersion());
+            s = read.state();
+            key = s.orderKey;
+            count(Counter.REBUILT_FROM_RECORD);
+            if (read.defaulted()) {
+                count(Counter.RECOVERED_WITH_DEFAULTS);
+            }
+            if (read.unrecovered()) {
+                count(Counter.UNRECOVERED);
+            }
+            if (s.keyKind == 'C') {
+                bindings.add(new Outcome.Binding(false, s.orderKey, s.orderKey));
+            }
+            for (String id : s.clOrdIds) {
+                bindings.add(new Outcome.Binding(false, id, s.orderKey));
+            }
+            for (String id : s.orderIds) {
+                bindings.add(new Outcome.Binding(true, id, s.orderKey));
+            }
+        }
+
+        /** The audit topics know the key but the record is gone: a chain under that key (S8). */
+        void orphanUnder(String key) {
+            forcedKey = key;
+            count(Counter.MISS_LOOKUP_ORPHANS);
         }
 
         void create(String key, OrderState state, Outcome.Publish publish, Outcome.PassThrough passThrough) {
@@ -1255,6 +1503,7 @@ public final class OrderStateMachine {
                     if (bound == null) {
                         if (!s.clOrdIds.contains(id)) {
                             s.clOrdIds.add(id);
+                            s.clOrdIdCount++;
                             mark(RecordField.CHAIN);
                         }
                         bindings.add(new Outcome.Binding(false, id, key));

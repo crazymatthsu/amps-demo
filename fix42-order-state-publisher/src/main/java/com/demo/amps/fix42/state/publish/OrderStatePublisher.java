@@ -323,7 +323,17 @@ public final class OrderStatePublisher implements MessageSink {
 
     // ---- lifecycle -------------------------------------------------------------------
 
-    /** Drains the repair queue every {@code period} while the feed is quiet. */
+    /** What the idle timer does: repairs, then terminal entries past their retention (docs/04 §4). */
+    private synchronized void idle() {
+        try {
+            drainRepairs();
+            machine.evictExpired();
+        } catch (Exception e) {
+            log.error("idle repair drain failed", e);
+        }
+    }
+
+    /** Drains the repair queue and evicts expired entries every {@code period} while the feed is quiet. */
     public synchronized void startIdleDrain(Duration period) {
         if (idleDrain != null) {
             return;
@@ -333,13 +343,7 @@ public final class OrderStatePublisher implements MessageSink {
             thread.setDaemon(true);
             return thread;
         });
-        idleDrain.scheduleWithFixedDelay(() -> {
-            try {
-                drainRepairs();
-            } catch (Exception e) {
-                log.error("idle repair drain failed", e);
-            }
-        }, period.toMillis(), period.toMillis(), TimeUnit.MILLISECONDS);
+        idleDrain.scheduleWithFixedDelay(this::idle, period.toMillis(), period.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     /**

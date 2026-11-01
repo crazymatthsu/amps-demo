@@ -118,7 +118,7 @@ public final class RecordWriter {
         }
         if (RecordField.CHAIN.in(mask)) {
             put(out, FixTags.Record.CL_ORD_ID_CHAIN, RecordCodec.encodeIds(s.clOrdIds, options.chainIdsPublished()));
-            out.field(FixTags.Record.CL_ORD_ID_COUNT, Integer.toString(s.clOrdIds.size()));
+            out.field(FixTags.Record.CL_ORD_ID_COUNT, Long.toString(Math.max(s.clOrdIdCount, s.clOrdIds.size())));
         }
         if (RecordField.WORKING.in(mask)) {
             put(out, FixTags.Record.WORKING_CL_ORD_ID, s.workingClOrdId);

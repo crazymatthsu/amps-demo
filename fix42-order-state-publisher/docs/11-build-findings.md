@@ -204,3 +204,69 @@ Still unverified: whether AMPS acknowledges a publish to an **unjournalled**
 topic (every topic is journalled, so the question never arises), and whether
 the `HAClient` blocks the calling thread while disconnected (the restart test
 publishes after the instance is back).
+
+## 3. Recovery and cache misses (phase 4)
+
+### F7 — An audit copy that carried its own 13011 names a key that is no chain's
+
+Decision 3 publishes the audit copy as received, plus the 13011 trailer --
+and a message that already carries 13011 is published as it is, counted as
+`auditKeyTagConflict` (02 §5). The miss lookup of 04 §3 then reads that
+copy's 13011 as the order's key. E60's D carries `13011=BOGUS` (a venue tag
+in the machine's range); after a `recovery: NONE` restart its first report
+looked the order up on `orders_audit`, found `BOGUS`, found no record under
+it, and created an orphan `MIDSTREAM` record keyed `BOGUS` (the S8 path).
+
+**Fixed.** `MissResolver` accepts an audit hit only when the key it names is a
+chain's key: the request names itself (it is the root), the key has its own
+root on `orders_audit`, or it has a blotter record. Anything else is a miss, and
+the next rule (below) finds the real record. Pinned by `RecoveryIT.noneWithLookups`,
+which ran a `BOGUS` record before the fix.
+
+### F8 — With an incomplete cache, the lookups must run in resolution order
+
+04 §3 looks an order up "when its ids resolve to nothing in the index". With an
+incomplete cache, an index miss is not conclusive, and looking up only after
+**every** candidate missed lets a later candidate win that the index happens to
+know: E58's G names its order in 41 and **another** order in 37; once the other
+order had been looked up (and its 37 bound), the G resolved by 37 -- 41's miss
+had not been looked up yet -- and landed on the wrong order.
+
+**Fixed.** A ClOrdID candidate the index does not know is looked up on the audit
+topics **in its turn** (41 → 37 → 11 for a request), before the next candidate.
+Same number of reads on a real miss; one more read only when an earlier ClOrdID
+misses and a later OrderID would hit. Pinned by
+`CacheMissTest.lookupsInResolutionOrder` and `RecoveryIT.noneWithLookups`.
+
+### Two more fixes the recovery suites forced
+
+- **9030 outlives 9021's cap.** The first version derived 9030 from the chain
+  list, which a rebuild holds only as the last `chain-ids-published` ids: E61's
+  thousand-amend order came back from a restart counting from 50. The entry now
+  carries the count, loaded from 9030. Pinned by `RecoveryIT.sowRecovery` (tag
+  for tag against the uninterrupted run).
+- **A key minted while the cache is incomplete is checked against the blotter.**
+  An order first seen mid-stream before a `recovery: NONE` restart has no audit
+  record naming its ids (its first message was a report), so every lookup misses
+  and the machine mints its key again -- the same key, whose record exists. The
+  first version then delta-published a fresh entry over it, resetting 9023, 9021
+  and the counters. Now, while the cache is incomplete, a minted key is read from
+  the blotter first and the entry rebuilt from the record (R4c, S9, extended
+  from the D to every message). One keyed read per new chain, only in that mode.
+  Pinned by `CacheMissTest.midstreamOrderAfterAnIncompleteRestart`.
+
+### What the recovery suites pin
+
+| case | result on 5.3.5.135 | pinned by |
+| --- | --- | --- |
+| E49 a publisher restart mid-flow, `recovery: SOW` | every record equal, tag for tag, to the uninterrupted run's; no `MIDSTREAM` chain | `RecoveryIT.sowRecovery` |
+| E53/E55 `recovery: NONE` with `allow-incomplete-cache` | one record per order, venue fields right; a resent D keeps the record; a stranger's report is a `MIDSTREAM` record. E43 (two replaces missed, known only by 37) needs `miss-lookup-by-order-id`, now built; without it, the documented `MIDSTREAM` twin | `RecoveryIT.noneWithLookups`, `CacheMissTest.knownOnlyByOrderId` |
+| E56 `recovery: NONE` against a non-empty blotter | refused, naming `allow-incomplete-cache` | `RecoveryIT.noneRefused` |
+| E54 `load-open-orders-only`, then a late bust | lands on the terminal order's record through the tombstone; 9021 kept, 9023 counts on | `TombstoneIT.partialLoad` |
+| E47/E48 `terminal-retention`, then a late bust and a late cancel | both find the record again, the cancel through `orders_audit` by its 41 | `TombstoneIT.eviction` |
+| E62 a record missing 9026; a record of schema 2 | loads with the default and counts `recoveredWithDefaults`; refuses the start | `TombstoneIT.schema` |
+
+Not built in phase 4, and listed for the next session: the QuickFIX/J
+`FeedAdapter` and the measured loss bound of a `MEMORY` store; the daily reset
+as a script (its `sow_delete` is pinned durable by `RestartIT`); `StoreCrashIT`
+for a `FILE` store; `recovery: JOURNAL`.

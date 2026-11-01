@@ -26,6 +26,10 @@ public final class MachineCounters {
         }
     }
 
+    void increment(Counter counter) {
+        values[counter.ordinal()]++;
+    }
+
     void observe(String msgType, String execType) {
         byMsgType.merge(msgType.isEmpty() ? "?" : msgType, 1L, Long::sum);
         if (!execType.isEmpty()) {

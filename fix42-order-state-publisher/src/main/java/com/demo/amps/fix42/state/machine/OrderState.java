@@ -24,8 +24,10 @@ public final class OrderState implements OrderStateView {
 
     String orderKey;
     char keyKind = 'C';
-    /** Every ClOrdID bound to this order, oldest first. */
+    /** Every ClOrdID bound to this order, oldest first -- after a rebuild, the last 9021 held. */
     List<String> clOrdIds = new ArrayList<>(3);
+    /** How many ClOrdIDs the chain has used: 9030, which outlives 9021's cap across a rebuild. */
+    long clOrdIdCount;
     String workingClOrdId;
     /** Every OrderID seen, latest first; the record shows the first. */
     List<String> orderIds = new ArrayList<>(1);
@@ -71,6 +73,7 @@ public final class OrderState implements OrderStateView {
         copy.orderKey = orderKey;
         copy.keyKind = keyKind;
         copy.clOrdIds = new ArrayList<>(clOrdIds);
+        copy.clOrdIdCount = clOrdIdCount;
         copy.workingClOrdId = workingClOrdId;
         copy.orderIds = new ArrayList<>(orderIds);
         copy.parentOrderId = parentOrderId;
@@ -191,6 +194,10 @@ public final class OrderState implements OrderStateView {
         return List.copyOf(clOrdIds);
     }
 
+    public long clOrdIdCount() {
+        return clOrdIdCount;
+    }
+
     public String workingClOrdId() {
         return workingClOrdId;
     }
@@ -293,6 +300,7 @@ public final class OrderState implements OrderStateView {
         return Objects.equals(orderKey, other.orderKey)
                 && keyKind == other.keyKind
                 && clOrdIds.equals(other.clOrdIds)
+                && clOrdIdCount == other.clOrdIdCount
                 && Objects.equals(workingClOrdId, other.workingClOrdId)
                 && Objects.equals(latestOrderId(), other.latestOrderId())
                 && Objects.equals(parentOrderId, other.parentOrderId)
