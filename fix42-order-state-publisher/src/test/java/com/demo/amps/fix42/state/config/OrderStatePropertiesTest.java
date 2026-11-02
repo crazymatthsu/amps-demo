@@ -53,8 +53,13 @@ class OrderStatePropertiesTest {
         OrderStateProperties properties = OrderStateConfigurations.withYaml(URI, "demo", "projection-routes.yml");
         properties.validate();
         OrderStateProperties.Route amend = properties.routes().get(1);
-        assertThat(amend.selectedTags()).containsExactly(35, 11, 41, 60, 38, 44, 59);
+        assertThat(amend.selectedTags()).as("orders_audit is a full publish").isEmpty();
         assertThat(amend.projection().copyTags()).containsEntry(59, 9059);
+        assertThat(properties.routes().get(6).selectedTags()).containsExactly(35, 11, 41, 37, 39, 434, 60, 102, 58);
+        assertThat(properties.fullPublish("sow/fix42/orders_audit")).isTrue();
+        assertThat(properties.fullPublish("sow/fix42/execs_audit")).isTrue();
+        assertThat(properties.fullPublish("sow/fix42/execs")).isFalse();
+        assertThat(properties.fullPublish("sow/fix42/rejects")).isFalse();
         assertThat(properties.routes().get(3).execTypes()).containsExactly("1", "2");
         assertThat(properties.routingOptions().routes().get(3).projection().producedTags())
                 .containsExactly(58, 9500, 9017, 9600);
@@ -74,8 +79,11 @@ class OrderStatePropertiesTest {
                 .hasMessageContaining("route 'owns-status' projection: it writes [39, 12015], which the state machine")
                 .hasMessageContaining("set-tags 9600 is empty")
                 .hasMessageContaining("route 'strips' projection writes [52], which order-state.strip-tags")
+                .hasMessageContaining("route 'audit-selection' lists tags, but every topic it sends to "
+                        + "[sow/fix42/orders_audit] is a full publish")
                 .hasMessageContaining("route 'keyless-selection' sends sow/fix42/execs a selection without its key tag 37")
                 .hasMessageContaining("route 'keyless-selection' selects 13011")
+                .hasMessageNotContaining("sow/fix42/execs_audit a selection")
                 .hasMessageContaining("route 'unrouted' projection: the route does not feed the state machine");
         assertThatThrownBy(properties::routingOptions).hasMessageContaining("route 'owns-status': projection refused");
     }

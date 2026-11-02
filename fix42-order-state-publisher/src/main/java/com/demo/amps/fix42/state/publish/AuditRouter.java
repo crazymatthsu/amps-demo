@@ -27,10 +27,13 @@ import java.util.List;
  *
  * <p>A route that lists {@code tags} (or {@code changeable-tags}) sends only
  * those, in rule order, plus the trailer, as a {@code delta_publish} --
- * {@code fix42-publisher}'s DELTA route (docs/07 §5). The key check above still reads the
- * message: the startup check has proven every topic's key is among the
- * selected tags. The catch-all copy of a message that lacked a key is always
- * whole: it is there to be diagnosed.
+ * {@code fix42-publisher}'s DELTA route (docs/07 §5) -- to every topic but
+ * the full-publish ones ({@code audit.full-publish-topics}, {@code *_audit}
+ * by default): an audit topic always records the message whole, as a
+ * {@code publish}. The key check above still reads the message: the startup
+ * check has proven every selected topic's key is among the selected tags.
+ * The catch-all copy of a message that lacked a key is always whole: it is
+ * there to be diagnosed.
  *
  * <p>Routes by topic name only: the names are what the {@link PublishSink} is
  * handed, and a sink other than AMPS maps them to whatever it writes.
@@ -41,11 +44,20 @@ public final class AuditRouter {
     private final Mode mode;
     private final String catchAllTopic;
     private final int keyTag;
+    /** Every routed topic that always gets the message whole, resolved once from the patterns. */
+    private final java.util.Set<String> fullPublishTopics = new java.util.HashSet<>();
 
     public AuditRouter(RoutingOptions options) {
         this.options = options;
         this.mode = options.mode();
         this.keyTag = options.keyTag();
+        for (Route route : options.routes()) {
+            for (String topic : route.topics()) {
+                if (options.fullPublish(topic)) {
+                    fullPublishTopics.add(topic);
+                }
+            }
+        }
         Route last = options.routes().getLast();
         this.catchAllTopic = last.catchAll() && !last.topics().isEmpty() ? last.topics().getFirst() : null;
     }
@@ -153,7 +165,8 @@ public final class AuditRouter {
             if (skip == Skip.GUARDED) {
                 continue;
             }
-            publishes.add(route.selects() ? selected(topic, message, route, trailer) : whole(topic, message, trailer));
+            publishes.add(route.selects() && !fullPublishTopics.contains(topic)
+                    ? selected(topic, message, route, trailer) : whole(topic, message, trailer));
         }
         if (unrouted && !route.catchAll() && catchAllTopic != null) {
             publishes.add(whole(catchAllTopic, message, trailer));

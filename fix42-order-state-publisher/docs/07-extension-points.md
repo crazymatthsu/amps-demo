@@ -271,7 +271,8 @@ is configuration, with `fix42-publisher`'s rulebook keys on the same
 | key | acts on | what it does |
 | --- | --- | --- |
 | `msg-types`, `exec-types`, `exec-trans-types` | matching | 35, 150 and 20, first match wins. An empty `exec-types` or `exec-trans-types` takes any value; an absent tag reads as `""`. A `35=8` can be split per 150 as before |
-| `tags`, `changeable-tags` | the route's `topics` | only these tags, in rule order, plus the 13011 trailer, as a `delta_publish` -- the old DELTA route. Both empty sends the message whole as a `publish`, the default. Every topic's key must be among them and 13011 must not |
+| `tags`, `changeable-tags` | the route's non-audit `topics` (`execs`, `rejects`) | only these tags, in rule order, plus the 13011 trailer, as a `delta_publish` -- the old DELTA route. Both empty sends the message whole as a `publish`, the default. Every such topic's key must be among them and 13011 must not |
+| `audit.full-publish-topics` | the audit topics | topic-name patterns, `["*_audit"]` by default, that **always** get the message whole as a `publish`, whatever a route's `tags` select: the audit trail records what was received. A route whose tags reach none of its topics is refused |
 | `projection.tags` | the blotter record | copied verbatim from the message. Non-empty **replaces** the machine's default pass-through for the route's messages (the D's descriptive tags, the `order-term-tags` of a `150=0/5/D`): the record gets exactly these beside the machine's fields. Empty keeps the default |
 | `projection.copy-tags` | the blotter record | `source: destination`, the source's value under the destination's number |
 | `projection.set-tags` | the blotter record | `tag: literal`; never empty, since a delta can overwrite a field but not remove one |
@@ -290,16 +291,17 @@ routes:
       tags: [1, 54, 55, 40, 59, 9500]           # the record's terms: these, nothing else from the D
   - name: amend
     msg-types: ["G"]
-    tags: [35, 11, 41, 60]
-    changeable-tags: [38, 44, 59]               # orders_audit gets a selection, as a delta
-    topics: ["sow/fix42/orders_audit"]
+    topics: ["sow/fix42/orders_audit"]          # an audit topic: always the whole G
     projection:
       tags: [58]
       copy-tags: { "59": 9059 }                 # the proposed TimeInForce, beside the acked 59
   - name: exec-fill
     msg-types: ["8"]
     exec-types: ["1", "2"]
-    topics: ["sow/fix42/execs", "sow/fix42/execs_audit"]
+    tags: [35, 11, 41, 37, 17, 39, 150, 60]
+    changeable-tags: [38, 31, 32, 14, 151, 6, 30]
+    topics: ["sow/fix42/execs", "sow/fix42/execs_audit"]   # execs: this selection, as a delta;
+                                                            # execs_audit: the whole report
     projection:
       tags: [58, 9500]
       set-tags: { "9600": "FILL" }
@@ -350,8 +352,10 @@ is a complete worked set.
 the machine owns -- normally all of `[35, 11, 41, 39, 150, 60, 38, 14, 151, 6,
 32, 31, 30]` -- and the `set-tags` of 9010-9014 (the pending family is the
 machine's 15xxx now, [02 §4.1](02-architecture.md#41-several-requests-in-flight-tag-12015));
-drop `projected-topics` and `mode`; keep `tags`, `changeable-tags`,
-`msg-types`, `exec-types` and `exec-trans-types` as they are. What is left
+drop `projected-topics` and `mode`; keep `msg-types`, `exec-types` and
+`exec-trans-types` as they are, and `tags`/`changeable-tags` on routes that
+send to a non-audit topic (`execs`, `rejects`) -- the `*_audit` topics now
+take the whole message, so a route that sends only to them drops its tags. What is left
 in the projection is what the old blotter carried and the machine does not
 compute: those tags then reach the record as before.
 

@@ -373,10 +373,13 @@ the topics whose key it carries, and is still applied to the blotter
 (R21, S10). A `key-guard` on a route does the same for sentinel values
 (`37=NONE`, `17=0`).
 
-A route that lists `tags` (or `changeable-tags`) sends its topics only those
-tags, in rule order, plus the 13011 trailer, as a `delta_publish`: the old
-publisher's DELTA route, for a deployment that wants its wire shape. The
-startup check proves every topic's key is in the selection. A route's
+A route that lists `tags` (or `changeable-tags`) sends its non-audit topics
+(`execs`, `rejects`) only those tags, in rule order, plus the 13011 trailer,
+as a `delta_publish`: the old publisher's DELTA route, for a deployment that
+wants its wire shape. The topics `audit.full-publish-topics` names --
+`*_audit` by default -- always get the message whole, as a `publish`, so the
+audit trail is what was received. The startup check proves every selected
+topic's key is in the selection. A route's
 `projection` decides which of the message's own tags the blotter record
 carries beside the machine's fields, on every tag the machine does not own
 ([07 §5](07-extension-points.md#5-which-tags-the-topics-and-the-record-carry)).
@@ -464,6 +467,8 @@ fix42-order-state:
     # Appended to every pass-through publish as a trailer; 0 disables; must
     # equal order-state.key-tag or validate() refuses to boot. docs/02 §5.
     key-tag: 13011
+    # Always the whole message, as a publish, whatever a route selects.
+    full-publish-topics: ["*_audit"]
 
   topic-keys:
     "[sow/fix42/order_state]": [13011]
@@ -514,8 +519,9 @@ default (the machine reads 150 and 20 itself), and `changeable-tags` for the
 blotter (the machine stages 38/44 from a G and adopts `order-term-tags` from
 the confirming report). The keys themselves are still there for what the
 machine does not own ([07 §5](07-extension-points.md#5-which-tags-the-topics-and-the-record-carry)):
-`exec-types`/`exec-trans-types` split a route, `tags:` turns the audit copy
-back into a selected delta, and `projection` chooses the record's other tags
+`exec-types`/`exec-trans-types` split a route, `tags:` turns the `execs` and
+`rejects` copies back into a selected delta (the `*_audit` topics stay
+whole), and `projection` chooses the record's other tags
 -- refused at startup if it names one the machine writes.
 
 ## 7. Threading and ordering

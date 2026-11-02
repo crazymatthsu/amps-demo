@@ -101,6 +101,10 @@ fix42-order-state:
     # Appended to every pass-through publish as a trailer; 0 disables; must
     # equal order-state.key-tag. docs/02 §5.
     key-tag: 13011
+    # Topics that always get the message WHOLE, as a publish, whatever a
+    # route's tags select: the audit trail records what was received. `*`
+    # matches any run of characters. docs/07 §5.
+    full-publish-topics: ["*_audit"]
 
   # The SOW key of every topic, mirroring server/config/flows/fix42-order-state.
   topic-keys:
@@ -122,9 +126,11 @@ fix42-order-state:
   #
   #   exec-types: ["1", "2"]      match on 150 too (exec-trans-types: on 20);
   #                               split a 35=8 into several routes, first wins
-  #   tags: [35, 11, 41, 60]      the topics get only these and changeable-tags,
-  #   changeable-tags: [38, 44]   in this order, plus 13011, as a delta_publish;
-  #                               every topic's key must be among them
+  #   tags: [35, 11, 37, 17, 39] the non-audit topics (execs, rejects) get only
+  #   changeable-tags: [14, 151]  these, in this order, plus 13011, as a
+  #                               delta_publish; every such topic's key must be
+  #                               among them. audit.full-publish-topics
+  #                               (*_audit) always get the message whole
   #   projection:                 the record's tags from this route's messages,
   #     tags: [1, 54, 55, 9500]   beside the machine's own: verbatim (replacing
   #                               the default pass-through when non-empty),

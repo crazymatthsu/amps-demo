@@ -95,13 +95,27 @@ class AuditRouterTest {
     }
 
     @Test
-    @DisplayName("docs/07 §5: a selecting route sends its tags in rule order, plus the trailer")
+    @DisplayName("docs/07 §5: a selecting route sends its tags in rule order, as a delta; *_audit gets the whole")
     void selection() {
         AuditRouter router = new AuditRouter(OrderStateConfigurations.withYaml(URI, null, "projection-routes.yml")
                 .routingOptions());
-        FixFrame g = frame("8=FIX.4.2|9=60|35=G|11=X-2|41=X|21=1|59=1|38=200|44=10|58=t|60=T|10=001|");
+        FixFrame fill = frame("8=FIX.4.2|9=80|35=8|150=1|39=1|11=X|37=O|17=F-1|32=10|31=10|14=10|151=90|6=10|58=t|"
+                + "21=1|60=T|10=001|");
+        AuditRouter.Plan plan = router.plan(fill, router.match(fill), "X");
+        assertThat(plan.publishes()).extracting(AuditRouterTest::text).containsExactly(
+                "sow/fix42/execs 35=8|11=X|37=O|17=F-1|39=1|150=1|60=T|31=10|32=10|14=10|151=90|6=10|13011=X|",
+                "sow/fix42/execs_audit 8=FIX.4.2|9=80|35=8|150=1|39=1|11=X|37=O|17=F-1|32=10|31=10|14=10|151=90|"
+                        + "6=10|58=t|21=1|60=T|10=001|13011=X|");
+        assertThat(plan.publishes()).extracting(AuditRouter.Publish::delta).containsExactly(true, false);
+
+        FixFrame reject = frame("35=9|11=X-3|41=X|37=O|39=0|434=1|102=1|58=too late|21=1|60=T|");
+        assertThat(router.plan(reject, router.match(reject), "X").publishes()).extracting(AuditRouterTest::text)
+                .containsExactly("sow/fix42/rejects 35=9|11=X-3|41=X|37=O|39=0|434=1|60=T|102=1|58=too late|13011=X|");
+
+        FixFrame g = frame("35=G|11=X-2|41=X|21=1|59=1|38=200|44=10|58=t|60=T|");
         assertThat(router.plan(g, router.match(g), "X").publishes()).extracting(AuditRouterTest::text)
-                .containsExactly("sow/fix42/orders_audit 35=G|11=X-2|41=X|60=T|38=200|44=10|59=1|13011=X|");
+                .containsExactly("sow/fix42/orders_audit 35=G|11=X-2|41=X|21=1|59=1|38=200|44=10|58=t|60=T|13011=X|");
+
         FixFrame noKey = frame("35=8|150=1|20=3|37=O|39=1|");
         assertThat(router.plan(noKey, router.match(noKey), "X").publishes()).extracting(AuditRouterTest::text)
                 .as("the catch-all copy of a message without a topic's key stays whole")

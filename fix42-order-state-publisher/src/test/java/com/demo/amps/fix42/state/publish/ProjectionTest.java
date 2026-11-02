@@ -114,8 +114,8 @@ class ProjectionTest {
         assertThat(record.has(59)).as("a request's order term is a proposal").isFalse();
         assertThat(record.has(FixTags.ORDER_QTY)).as("38 stays the acked quantity").isFalse();
         assertThat(record.value(FixTags.Record.PENDING_ORDER_QTY)).isEqualTo("200");
-        assertThat(last("sow/fix42/orders_audit").printable())
-                .isEqualTo("35=G|11=X-2|41=X|60=20261031-10:00:02.000|38=200|44=10|59=1|13011=X|");
+        assertThat(last("sow/fix42/orders_audit").printable()).as("an audit topic is a full publish")
+                .isEqualTo("35=G|11=X-2|41=X|38=200|44=10|59=1|58=bigger|21=1|60=20261031-10:00:02.000|13011=X|");
 
         send(publisher, "35=8|150=E|39=E|11=X-2|41=X|37=O|17=E-2|14=0|151=100|6=0|59=1|60=20261031-10:00:03.000|");
         assertThat(blotter().has(59)).as("a pending acknowledgement echoes the proposal").isFalse();
@@ -137,9 +137,10 @@ class ProjectionTest {
         assertThat(last("sow/fix42/execs").printable())
                 .isEqualTo("35=8|11=X|37=O|17=F-1|39=1|150=1|60=20261031-10:00:05.000|31=10|32=10|14=10|151=90|6=10|"
                         + "13011=X|");
-        assertThat(sink.sent).filteredOn(sent -> sent.topic().startsWith("sow/fix42/execs"))
-                .extracting(RecordingSink.Sent::command).as("a selection merges, as fix42-publisher's DELTA routes")
-                .containsOnly("publish", "delta_publish").last().isEqualTo("delta_publish");
+        assertThat(sink.sent.subList(sink.sent.size() - 2, sink.sent.size())).extracting(RecordingSink.Sent::toString)
+                .as("execs merges the selection, as fix42-publisher's DELTA routes; execs_audit records the whole")
+                .containsExactly("delta_publish sow/fix42/execs " + last("sow/fix42/execs").printable(),
+                        "publish sow/fix42/execs_audit " + fill + "13011=X|");
         FixMessage record = blotter();
         assertThat(record.value(58)).isEqualTo("part");
         assertThat(record.value(9500)).isEqualTo("d2");
