@@ -1,0 +1,31 @@
+# Routes OrderStatePropertiesTest expects validate() to refuse (docs/07 §5).
+fix42-order-state:
+  routes:
+    # 39 and 12015 are the machine's; an empty literal cannot be delta-published.
+    - name: owns-status
+      msg-types: ["D"]
+      topics: ["sow/fix42/orders_audit"]
+      projection:
+        tags: [39, 58]
+        copy-tags:
+          "58": 12015
+        set-tags:
+          "9600": ""
+    # 52 is in order-state.strip-tags.
+    - name: strips
+      msg-types: ["G"]
+      topics: ["sow/fix42/orders_audit"]
+      projection:
+        tags: [52]
+    # execs is keyed by 37, which the selection leaves out; 13011 is the trailer.
+    - name: keyless-selection
+      msg-types: ["8"]
+      tags: [35, 11, 17, 13011]
+      topics: ["sow/fix42/execs", "sow/fix42/execs_audit"]
+    # Nothing on this route reaches the machine, so nothing reaches the blotter.
+    - name: unrouted
+      msg-types: ["*"]
+      topics: ["fix42/unrouted"]
+      apply-state: false
+      projection:
+        tags: [58]

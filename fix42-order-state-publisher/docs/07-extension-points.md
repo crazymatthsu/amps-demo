@@ -4,7 +4,10 @@ The machine's rules are code, deliberately ([01 §5](01-problem-the-two-cancels.
 the stateless publisher's `projection` blocks were a state machine written as
 configuration, and the result was a rulebook that could not express a
 condition. But venues differ, and so do desks. This document says what can be
-changed without forking the machine, in three tiers of increasing reach.
+changed without forking the machine, in three tiers of increasing reach, and
+([§5](#5-which-tags-the-topics-and-the-record-carry)) which tags the topics
+and the record carry: the rulebook's keys are back for that, on every tag the
+machine does not own.
 
 ---
 
@@ -257,7 +260,102 @@ Three more things hold for any sink:
   through the same configuration produces the same records, which is the
   property every recovery path in [04](04-recovery-and-operations.md) stands on.
 
-## 5. Where it lands in the plan
+## 5. Which tags the topics and the record carry
+
+The machine owns the order's state: 11, 41, 37, 38, 44, 60, 9000, 39, 150,
+17, 14, 151, 6, the fill detail 32/31/30, 13011 and the 12xxx/15xxx fields.
+Every other tag -- account, symbol, side, text, the upstream system's 9xxx --
+is configuration, with `fix42-publisher`'s rulebook keys on the same
+`routes`:
+
+| key | acts on | what it does |
+| --- | --- | --- |
+| `msg-types`, `exec-types`, `exec-trans-types` | matching | 35, 150 and 20, first match wins. An empty `exec-types` or `exec-trans-types` takes any value; an absent tag reads as `""`. A `35=8` can be split per 150 as before |
+| `tags`, `changeable-tags` | the route's `topics` | only these tags, in rule order, plus the 13011 trailer, as a `delta_publish` -- the old DELTA route. Both empty sends the message whole as a `publish`, the default. Every topic's key must be among them and 13011 must not |
+| `projection.tags` | the blotter record | copied verbatim from the message. Non-empty **replaces** the machine's default pass-through for the route's messages (the D's descriptive tags, the `order-term-tags` of a `150=0/5/D`): the record gets exactly these beside the machine's fields. Empty keeps the default |
+| `projection.copy-tags` | the blotter record | `source: destination`, the source's value under the destination's number |
+| `projection.set-tags` | the blotter record | `tag: literal`; never empty, since a delta can overwrite a field but not remove one |
+
+The precedence is the old planner's: a literal beats a copy, a copy beats the
+verbatim field, and each tag is written once. There is one projected
+destination, `order-state.topic`, so there is no `projected-topics`; and no
+`mode`, because the tags imply it.
+
+```yaml
+routes:
+  - name: new-order
+    msg-types: ["D"]
+    topics: ["sow/fix42/orders_audit"]          # whole: no tags listed
+    projection:
+      tags: [1, 54, 55, 40, 59, 9500]           # the record's terms: these, nothing else from the D
+  - name: amend
+    msg-types: ["G"]
+    tags: [35, 11, 41, 60]
+    changeable-tags: [38, 44, 59]               # orders_audit gets a selection, as a delta
+    topics: ["sow/fix42/orders_audit"]
+    projection:
+      tags: [58]
+      copy-tags: { "59": 9059 }                 # the proposed TimeInForce, beside the acked 59
+  - name: exec-fill
+    msg-types: ["8"]
+    exec-types: ["1", "2"]
+    topics: ["sow/fix42/execs", "sow/fix42/execs_audit"]
+    projection:
+      tags: [58, 9500]
+      set-tags: { "9600": "FILL" }
+  - name: execution-report                       # every other 150, the machine's default record
+    msg-types: ["8"]
+    topics: ["sow/fix42/execs", "sow/fix42/execs_audit"]
+```
+
+The test suite's [`projection-routes.yml`](../src/test/resources/projection-routes.yml)
+is a complete worked set.
+
+**What a projection cannot do**, each for the reason the module exists:
+
+- **Write a field the machine owns**, the list above, or anything in
+  12000-12999, 13000-13999 or 15000-15999. `validate()` refuses to boot.
+  A projected 39 or 151 is last-writer-wins again, which is the two-cancels
+  bug ([01](01-problem-the-two-cancels.md)); the machine publishes each of
+  them whenever it changes. To keep a message's own value of one, copy it
+  under another tag: `copy-tags: { "39": 9039 }`.
+- **Write a tag `order-state.strip-tags` names.** Refused too: one list says
+  copy, the other says never.
+- **Apply to a message the machine ignored** -- a duplicate, a stale report,
+  a late request. Its tags change nothing on the record, exactly as its
+  quantities change nothing.
+- **Write an `order-term-tags` tag from a message whose terms the machine
+  does not adopt.** Terms come from a D (or a chain's first message) and from
+  a `150=0/5/D` that is not a pending acknowledgement. A G's or F's 59 is a
+  proposal, and a `150=A/6/E` echoes one; merged onto the record, it could
+  never be taken back if the venue rejects the request. The test above lists a
+  verbatim 59 on the amend route to pin that it is not written; `copy-tags`
+  to a non-term tag is how a proposal reaches the record, as 38/44 reach
+  15038/15044.
+
+**What a projected tag is**, on the record:
+
+- the value from the **last applied message** of a route that projects it;
+  the machine's guards still decide which messages apply;
+- **not in the cache**. A delta AMPS refuses is repaired from the cache
+  ([04 §6](04-recovery-and-operations.md#6-the-publish-path)), so a projected
+  tag that only the refused delta carried is missing until the next message
+  that carries it (a refused D is re-sent whole and loses nothing). The
+  default pass-through has always been in the same position;
+- **never read back**: recovery, the miss lookup and the hooks see the
+  machine's fields only, so a projection cannot change what the machine does;
+- **permanent until overwritten**, as every delta-published field is.
+
+**Porting a `fix42-publisher` route**: drop from `projection.tags` everything
+the machine owns -- normally all of `[35, 11, 41, 39, 150, 60, 38, 14, 151, 6,
+32, 31, 30]` -- and the `set-tags` of 9010-9014 (the pending family is the
+machine's 15xxx now, [02 §4.1](02-architecture.md#41-several-requests-in-flight-tag-12015));
+drop `projected-topics` and `mode`; keep `tags`, `changeable-tags`,
+`msg-types`, `exec-types` and `exec-trans-types` as they are. What is left
+in the projection is what the old blotter carried and the machine does not
+compute: those tags then reach the record as before.
+
+## 6. Where it lands in the plan
 
 Tier one is phase 2 (the policies are constructor options of the machine)
 and phase 3 (the yml binding and `VenueDialect`). Tier two is phase 3: the

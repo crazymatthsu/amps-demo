@@ -48,6 +48,39 @@ class OrderStatePropertiesTest {
     }
 
     @Test
+    @DisplayName("docs/07 §5: routes with fix42-publisher's selection and projection keys bind and validate")
+    void projectionRoutes() {
+        OrderStateProperties properties = OrderStateConfigurations.withYaml(URI, "demo", "projection-routes.yml");
+        properties.validate();
+        OrderStateProperties.Route amend = properties.routes().get(1);
+        assertThat(amend.selectedTags()).containsExactly(35, 11, 41, 60, 38, 44, 59);
+        assertThat(amend.projection().copyTags()).containsEntry(59, 9059);
+        assertThat(properties.routes().get(3).execTypes()).containsExactly("1", "2");
+        assertThat(properties.routingOptions().routes().get(3).projection().producedTags())
+                .containsExactly(58, 9500, 9017, 9600);
+        assertThat(OrderStateConfigurations.shipped(URI, null).routingOptions().routes())
+                .as("the shipped routes keep the machine's default record and send messages whole")
+                .allSatisfy(route -> {
+                    assertThat(route.projection()).isNull();
+                    assertThat(route.selects()).isFalse();
+                });
+    }
+
+    @Test
+    @DisplayName("docs/07 §5: a projection onto a machine field, a strip tag or nowhere, and a keyless selection")
+    void projectionRefusals() {
+        OrderStateProperties properties = OrderStateConfigurations.withYaml(URI, "demo", "projection-refused.yml");
+        assertThatThrownBy(properties::validate)
+                .hasMessageContaining("route 'owns-status' projection: it writes [39, 12015], which the state machine")
+                .hasMessageContaining("set-tags 9600 is empty")
+                .hasMessageContaining("route 'strips' projection writes [52], which order-state.strip-tags")
+                .hasMessageContaining("route 'keyless-selection' sends sow/fix42/execs a selection without its key tag 37")
+                .hasMessageContaining("route 'keyless-selection' selects 13011")
+                .hasMessageContaining("route 'unrouted' projection: the route does not feed the state machine");
+        assertThatThrownBy(properties::routingOptions).hasMessageContaining("route 'owns-status': projection refused");
+    }
+
+    @Test
     @DisplayName("refusals: a json URI, an audit key that is not the blotter's, an unknown dialect")
     void refusals() {
         assertThatThrownBy(() -> OrderStateConfigurations.shipped("tcp://h:9007/amps/json", null).validate())

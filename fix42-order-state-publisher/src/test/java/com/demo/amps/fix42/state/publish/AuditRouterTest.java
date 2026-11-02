@@ -73,6 +73,43 @@ class AuditRouterTest {
     }
 
     @Test
+    @DisplayName("docs/07 §5: routes split a 35=8 on 150 and 20, first match wins; strict names what has no route")
+    void execTypeRouting() {
+        RoutingOptions options = OrderStateConfigurations.withYaml(URI, "demo", "projection-routes.yml")
+                .routingOptions();
+        AuditRouter router = new AuditRouter(options);
+        assertThat(router.match(frame("35=8|150=1|37=O|17=E|")).name()).isEqualTo("exec-fill");
+        assertThat(router.match(frame("35=8|150=E|37=O|17=E|")).name()).isEqualTo("exec-ack");
+        assertThat(router.match(frame("35=8|150=4|37=O|17=E|")).name()).isEqualTo("execution-report");
+        assertThat(router.match("8").name()).as("on 35 alone: the first route for the type").isEqualTo("exec-fill");
+
+        Route fills = new Route("fills", java.util.List.of("8"), java.util.List.of("1", "2"),
+                java.util.List.of("0"), java.util.List.of("sow/fix42/execs"), java.util.List.of(), null, true, null);
+        AuditRouter strict = new AuditRouter(new RoutingOptions(com.demo.amps.fix42.state.config.Mode.STRICT, 13011,
+                options.topicKeys(), java.util.List.of(fills)));
+        assertThat(strict.match(frame("35=8|150=1|20=0|37=O|")).name()).isEqualTo("fills");
+        assertThatThrownBy(() -> strict.match(frame("35=8|150=1|20=1|37=O|")))
+                .isInstanceOf(UnroutedMessageException.class).hasMessageContaining("35=8 150=1 20=1");
+        assertThatThrownBy(() -> strict.match(frame("35=8|150=4|20=0|37=O|")))
+                .hasMessageContaining("35=8 150=4 20=0");
+    }
+
+    @Test
+    @DisplayName("docs/07 §5: a selecting route sends its tags in rule order, plus the trailer")
+    void selection() {
+        AuditRouter router = new AuditRouter(OrderStateConfigurations.withYaml(URI, null, "projection-routes.yml")
+                .routingOptions());
+        FixFrame g = frame("8=FIX.4.2|9=60|35=G|11=X-2|41=X|21=1|59=1|38=200|44=10|58=t|60=T|10=001|");
+        assertThat(router.plan(g, router.match(g), "X").publishes()).extracting(AuditRouterTest::text)
+                .containsExactly("sow/fix42/orders_audit 35=G|11=X-2|41=X|60=T|38=200|44=10|59=1|13011=X|");
+        FixFrame noKey = frame("35=8|150=1|20=3|37=O|39=1|");
+        assertThat(router.plan(noKey, router.match(noKey), "X").publishes()).extracting(AuditRouterTest::text)
+                .as("the catch-all copy of a message without a topic's key stays whole")
+                .containsExactly("sow/fix42/execs 35=8|37=O|39=1|150=1|13011=X|",
+                        "fix42/unrouted 35=8|150=1|20=3|37=O|39=1|13011=X|");
+    }
+
+    @Test
     @DisplayName("an unterminated payload gets its separator before the trailer")
     void unterminated() {
         AuditRouter router = new AuditRouter(OrderStateConfigurations.shipped(URI, null).routingOptions());

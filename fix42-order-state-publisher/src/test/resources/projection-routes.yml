@@ -1,0 +1,84 @@
+# Routes with tag selection and blotter projection (docs/07 §5), laid over
+# application.yml by ProjectionTest and OrderStatePropertiesTest. The shape is
+# fix42-publisher's rulebook: split by 35/150/20, `tags`/`changeable-tags` for
+# the audit topics, `projection` for the record.
+fix42-order-state:
+  routes:
+    # Replaces the D's default pass-through: the record gets these, and the
+    # machine's own fields, and nothing else from the D.
+    - name: new-order
+      msg-types: ["D"]
+      topics: ["sow/fix42/orders_audit"]
+      projection:
+        tags: [1, 54, 55, 40, 59, 9500]
+
+    # The audit copy is a selection; the record gets 58, and the proposed 59
+    # under 9059. A verbatim 59 is listed too, to show it is NOT written: a
+    # request's 59 is a proposal, and order terms come only from a message
+    # whose terms the machine adopts.
+    - name: amend
+      msg-types: ["G"]
+      tags: [35, 11, 41, 60]
+      changeable-tags: [38, 44, 59]
+      topics: ["sow/fix42/orders_audit"]
+      projection:
+        tags: [58, 59]
+        copy-tags:
+          "59": 9059
+
+    # No verbatim tags: the default (nothing, for a request) plus the copy.
+    - name: cancel-request
+      msg-types: ["F"]
+      topics: ["sow/fix42/orders_audit"]
+      projection:
+        copy-tags:
+          "58": 9058
+
+    - name: exec-fill
+      msg-types: ["8"]
+      exec-types: ["1", "2"]
+      tags: [35, 11, 41, 37, 17, 39, 150, 60]
+      changeable-tags: [38, 31, 32, 14, 151, 6, 30]
+      topics: ["sow/fix42/execs", "sow/fix42/execs_audit"]
+      key-guard:
+        "[sow/fix42/execs]": { "37": ["NONE"] }
+        "[sow/fix42/execs_audit]": { "17": ["0", "NONE"] }
+      projection:
+        tags: [58, 9500]
+        copy-tags:
+          "17": 9017
+        set-tags:
+          "9600": "FILL"
+
+    # Acknowledgements: 59 is written from a 150=0/5 (terms adopted), not
+    # from a 150=E (a pending acknowledgement echoes the proposal). The
+    # literal beats the copy for 9601.
+    - name: exec-ack
+      msg-types: ["8"]
+      exec-types: ["0", "5", "E"]
+      topics: ["sow/fix42/execs", "sow/fix42/execs_audit"]
+      key-guard:
+        "[sow/fix42/execs]": { "37": ["NONE"] }
+        "[sow/fix42/execs_audit]": { "17": ["0", "NONE"] }
+      projection:
+        tags: [59, 58]
+        copy-tags:
+          "58": 9601
+        set-tags:
+          "9601": "ACK"
+
+    - name: execution-report
+      msg-types: ["8"]
+      topics: ["sow/fix42/execs", "sow/fix42/execs_audit"]
+      key-guard:
+        "[sow/fix42/execs]": { "37": ["NONE"] }
+        "[sow/fix42/execs_audit]": { "17": ["0", "NONE"] }
+
+    - name: cancel-reject
+      msg-types: ["9"]
+      topics: ["sow/fix42/rejects"]
+
+    - name: unrouted
+      msg-types: ["*"]
+      topics: ["fix42/unrouted"]
+      apply-state: false

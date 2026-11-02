@@ -23,6 +23,11 @@ import java.util.Set;
  * overwrite state nor collide with a hook's field (R20e, S18). The 9xxx
  * range, ParentOrderID 9000 included, is the upstream system's and passes
  * through.
+ *
+ * <p>A route's {@link Projection} reshapes that pass-through (docs/07 §5):
+ * its verbatim tags replace the default selection, its copies and literals
+ * are written in the same place, and none of them can reach a field the
+ * machine writes.
  */
 public final class RecordWriter {
 
@@ -38,6 +43,21 @@ public final class RecordWriter {
             FixTags.TEXT, FixTags.ORD_REJ_REASON, FixTags.EXEC_RESTATEMENT_REASON,
             FixTags.CXL_REJ_RESPONSE_TO, FixTags.CXL_REJ_REASON);
 
+    /**
+     * Every standard tag the machine writes onto the record from its own
+     * state: {@link #MANAGED}, the venue status and quantities, and the fill
+     * detail it copies or zeroes itself. A projection may not write any of
+     * them, nor anything in the internal ranges.
+     */
+    private static final Set<Integer> MACHINE_WRITTEN;
+
+    static {
+        java.util.Set<Integer> written = new java.util.HashSet<>(MANAGED);
+        written.addAll(Set.of(FixTags.ORD_STATUS, FixTags.EXEC_TYPE, FixTags.EXEC_ID, FixTags.CUM_QTY,
+                FixTags.LEAVES_QTY, FixTags.AVG_PX, FixTags.LAST_SHARES, FixTags.LAST_PX, FixTags.LAST_MKT));
+        MACHINE_WRITTEN = Set.copyOf(written);
+    }
+
     private final MachineOptions options;
 
     public RecordWriter(MachineOptions options) {
@@ -52,11 +72,29 @@ public final class RecordWriter {
      * @return whether anything was written; {@code false} for {@link Outcome.Publish#NONE}
      */
     public boolean write(Outcome outcome, FixFrame message, FixWriter out) {
+        return write(outcome, message, out, null);
+    }
+
+    /**
+     * As {@link #write(Outcome, FixFrame, FixWriter)}, reshaped by the
+     * route's {@code projection} (null for none). The projection applies only
+     * when the machine applied the message: an ignored message -- a
+     * duplicate, a stale report, a late request -- changes nothing on the
+     * record, its tags included.
+     */
+    public boolean write(Outcome outcome, FixFrame message, FixWriter out, Projection projection) {
         if (outcome.publish == Outcome.Publish.NONE) {
             return false;
         }
         out.field(FixTags.Record.ROOT_CL_ORD_ID, outcome.key);
-        passThrough(outcome.passThrough, message, out);
+        Projection applied = projection != null && message != null && outcome.kind != Outcome.Kind.IGNORED
+                ? projection : null;
+        if (applied == null || !applied.replacesPassThrough()) {
+            passThrough(outcome.passThrough, message, out, applied);
+        }
+        if (applied != null) {
+            project(applied, termsAdopted(outcome.passThrough), message, out);
+        }
         fields(outcome.staged, outcome.dirty & ~RecordField.KEY.bit(), out);
         if (outcome.copyFillDetail) {
             copyNonEmpty(message, FixTags.LAST_SHARES, out);
@@ -84,6 +122,14 @@ public final class RecordWriter {
     }
 
     /**
+     * Whether the machine writes {@code tag} itself, or it lies in the
+     * internal ranges: a tag no {@link Projection} may write.
+     */
+    public static boolean writtenByMachine(int tag) {
+        return MACHINE_WRITTEN.contains(tag) || inInternalRange(tag);
+    }
+
+    /**
      * 12000-12999, 13000-13999, 15000-15999: the publisher's internal tags,
      * which no upstream message may put on the record. 12000-12099 is the
      * machine's, 12100-12999 the hooks' ({@code RecordFields}).
@@ -94,13 +140,15 @@ public final class RecordWriter {
                 || (tag >= 15000 && tag <= 15999);
     }
 
-    private void passThrough(Outcome.PassThrough mode, FixFrame message, FixWriter out) {
+    /** The default selection; a tag {@code projection} copies or stamps is left to it. */
+    private void passThrough(Outcome.PassThrough mode, FixFrame message, FixWriter out, Projection projection) {
         if (mode == Outcome.PassThrough.NONE || message == null) {
             return;
         }
         for (int i = 0, n = message.count(); i < n; i++) {
             int tag = message.tagAt(i);
-            if (message.valueLengthAt(i) == 0 || MANAGED.contains(tag) || stripped(tag, options)) {
+            if (message.valueLengthAt(i) == 0 || MANAGED.contains(tag) || stripped(tag, options)
+                    || (projection != null && projection.rewrites(tag))) {
                 continue;
             }
             boolean term = options.orderTermTags().contains(tag);
@@ -116,6 +164,54 @@ public final class RecordWriter {
                 message.copyFieldAt(message.indexOf(tag), out);
             }
         }
+    }
+
+    /**
+     * Whether the machine adopts this message's order terms: a 35=D (or a
+     * chain's first message), or a {@code 150=0/5/D} that is not a pending
+     * acknowledgement. A projection writes an {@code order-term-tags} tag only
+     * then; anywhere else the value is a proposal or an echo, and a merge
+     * could never take it back.
+     */
+    private static boolean termsAdopted(Outcome.PassThrough mode) {
+        return mode == Outcome.PassThrough.DESCRIPTIVE || mode == Outcome.PassThrough.ORDER_TERMS;
+    }
+
+    /** Verbatim tags in rule order, then copies and literals whose tags are new (fix42-publisher's order). */
+    private void project(Projection projection, boolean termsAdopted, FixFrame message, FixWriter out) {
+        for (int tag : projection.tags()) {
+            emit(projection, termsAdopted, message, out, tag);
+        }
+        for (int tag : projection.copyTo()) {
+            emit(projection, termsAdopted, message, out, tag);
+        }
+        for (int tag : projection.setTags()) {
+            emit(projection, termsAdopted, message, out, tag);
+        }
+    }
+
+    /** Writes {@code tag} once: a literal, else a copy (the last declared wins), else the field itself. */
+    private void emit(Projection projection, boolean termsAdopted, FixFrame message, FixWriter out, int tag) {
+        if (out.contains(tag) || (!termsAdopted && options.orderTermTags().contains(tag))
+                || options.stripTags().contains(tag)) {
+            return;
+        }
+        byte[] literal = projection.literal(tag);
+        if (literal != null) {
+            out.raw(tag, literal);
+            return;
+        }
+        int[] copyTo = projection.copyTo();
+        for (int i = copyTo.length - 1; i >= 0; i--) {
+            if (copyTo[i] == tag) {
+                int index = message.indexOf(projection.copyFrom(i));
+                if (index >= 0 && message.valueLengthAt(index) > 0) {
+                    out.field(tag, message.buffer(), message.valueOffsetAt(index), message.valueLengthAt(index));
+                    return;
+                }
+            }
+        }
+        copyNonEmpty(message, tag, out);
     }
 
     private void fields(OrderState s, long mask, FixWriter out) {

@@ -1,10 +1,13 @@
 # FIX 4.2 order-state publisher (docs/02 §6).
 #
-# Nothing here selects which tags reach the blotter: that is the state
-# machine's, in code (docs/03). What is here is the connection, the policy
-# knobs a venue dialect bundles (docs/07 §1), and the pass-through routing of
-# the audit topics. OrderStateProperties.validate() refuses to boot on a
-# configuration that would fail later at the server.
+# The state machine decides, in code, which of its own fields reach the
+# blotter: status, quantities, the chain, the pending set (docs/03). What is
+# here is the connection, the policy knobs a venue dialect bundles (docs/07
+# §1), and the routes: where each message goes, which of its tags those
+# topics receive, and which of its tags the record carries beside the
+# machine's fields -- fix42-publisher's rulebook keys (docs/07 §5).
+# OrderStateProperties.validate() refuses to boot on a configuration that
+# would fail later at the server, or would let a route write a machine field.
 #
 # The defaults below are PRODUCTION's. The `demo` profile at the end of this
 # file (bootRun, the integration tests) switches to an in-memory publish store
@@ -109,10 +112,30 @@ fix42-order-state:
     "[fix42/unrouted]": []          # not a SOW topic: no key
     "[fix42/malformed]": []
 
-  # Pass-through routing: matched in order, first match wins. Each message goes
-  # WHOLE to its route's topics, plus 13011 as a trailer when it resolved to a
-  # chain. A topic whose key the message lacks (a 20=3 with no 17) is skipped
-  # and the message goes to fix42/unrouted instead; the blotter still gets it.
+  # Routing: matched in order, first match wins. Each message goes WHOLE to
+  # its route's topics, plus 13011 as a trailer when it resolved to a chain.
+  # A topic whose key the message lacks (a 20=3 with no 17) is skipped and the
+  # message goes to fix42/unrouted instead; the blotter still gets it.
+  #
+  # The routes below keep the defaults. fix42-publisher's keys work on any of
+  # them (docs/07 §5; src/test/resources/projection-routes.yml is a full set):
+  #
+  #   exec-types: ["1", "2"]      match on 150 too (exec-trans-types: on 20);
+  #                               split a 35=8 into several routes, first wins
+  #   tags: [35, 11, 41, 60]      the topics get only these and changeable-tags,
+  #   changeable-tags: [38, 44]   in this order, plus 13011, as a delta_publish;
+  #                               every topic's key must be among them
+  #   projection:                 the record's tags from this route's messages,
+  #     tags: [1, 54, 55, 9500]   beside the machine's own: verbatim (replacing
+  #                               the default pass-through when non-empty),
+  #     copy-tags: {"59": 9059}   renamed (a G's proposed 59 as 9059), and
+  #     set-tags: {"9600": "X"}   literal; a literal beats a copy beats verbatim
+  #
+  # A projection may not write the machine's fields (35, 11, 41, 37, 38, 44, 60,
+  # 9000, 39, 150, 17, 14, 151, 6, 32, 31, 30), its ranges (12000-12999,
+  # 13000-13999, 15000-15999) or a strip-tag; it applies only to a message the
+  # machine applied, and writes an order-term tag only from a message whose
+  # terms the machine adopts (a D, a 150=0/5/D that is not a pending ack).
   routes:
     - name: new-order
       msg-types: ["D"]
