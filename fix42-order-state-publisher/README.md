@@ -263,7 +263,8 @@ its defaults are production's. The ones that change behaviour most:
 | `order-state.miss-lookup` | `true` | before creating a mid-stream order, look an unknown id up on the audit topics |
 | `order-state.terminal-retention` | `PT0S` | how long a finished order stays in the cache; `PT0S` keeps it forever |
 | `order-state.cancel-reject-status` and the other policies | per venue | what a reject's 39, a late fill or a late report may do ([docs/07 §1](docs/07-extension-points.md#1-tier-one-policies)) |
-| `routes[].tags`, `changeable-tags` | none: the message whole | the tags a route's audit topics receive, as a delta ([docs/07 §5](docs/07-extension-points.md#5-which-tags-the-topics-and-the-record-carry)) |
+| `routes[].tags`, `changeable-tags` | none: the message whole | the tags a route's non-audit topics (`execs`, `rejects`) receive, as a delta ([docs/07 §5](docs/07-extension-points.md#5-which-tags-the-topics-and-the-record-carry)) |
+| `audit.full-publish-topics` | `["*_audit"]` | topics that always get the message whole, as a publish, whatever a route selects |
 | `routes[].projection` | none: the machine's default | the tags the record carries from a route's messages beside the machine's own: `tags`, `copy-tags`, `set-tags`, as in `fix42-publisher`; `exec-types`/`exec-trans-types` split a route per 150/20 |
 | `hooks.desk-status` | `false` | a one-word desk status in tag 12100 |
 | `hooks.reject-status-at-request-time` | `false` | for a venue whose rejects carry the request-time status (docs/11 F2) |

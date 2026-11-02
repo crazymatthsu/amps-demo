@@ -12,14 +12,12 @@ fix42-order-state:
       projection:
         tags: [1, 54, 55, 40, 59, 9500]
 
-    # The audit copy is a selection; the record gets 58, and the proposed 59
-    # under 9059. A verbatim 59 is listed too, to show it is NOT written: a
-    # request's 59 is a proposal, and order terms come only from a message
-    # whose terms the machine adopts.
+    # orders_audit is a full publish, so no tags here. The record gets 58,
+    # and the proposed 59 under 9059. A verbatim 59 is listed too, to show it
+    # is NOT written: a request's 59 is a proposal, and order terms come only
+    # from a message whose terms the machine adopts.
     - name: amend
       msg-types: ["G"]
-      tags: [35, 11, 41, 60]
-      changeable-tags: [38, 44, 59]
       topics: ["sow/fix42/orders_audit"]
       projection:
         tags: [58, 59]
@@ -34,6 +32,7 @@ fix42-order-state:
         copy-tags:
           "58": 9058
 
+    # execs gets the selection, as a delta; execs_audit the whole report.
     - name: exec-fill
       msg-types: ["8"]
       exec-types: ["1", "2"]
@@ -74,8 +73,11 @@ fix42-order-state:
         "[sow/fix42/execs]": { "37": ["NONE"] }
         "[sow/fix42/execs_audit]": { "17": ["0", "NONE"] }
 
+    # rejects is not an audit topic: the old publisher's selection.
     - name: cancel-reject
       msg-types: ["9"]
+      tags: [35, 11, 41, 37, 39, 434, 60]
+      changeable-tags: [102, 58]
       topics: ["sow/fix42/rejects"]
 
     - name: unrouted

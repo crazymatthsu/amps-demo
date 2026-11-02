@@ -17,10 +17,16 @@ fix42-order-state:
       topics: ["sow/fix42/orders_audit"]
       projection:
         tags: [52]
+    # orders_audit is a full publish: the selection could never apply.
+    - name: audit-selection
+      msg-types: ["F"]
+      tags: [35, 11, 41]
+      topics: ["sow/fix42/orders_audit"]
     # execs is keyed by 37, which the selection leaves out; 13011 is the trailer.
+    # execs_audit (keyed by 17) is a full publish, so its key is not required.
     - name: keyless-selection
       msg-types: ["8"]
-      tags: [35, 11, 17, 13011]
+      tags: [35, 11, 13011]
       topics: ["sow/fix42/execs", "sow/fix42/execs_audit"]
     # Nothing on this route reaches the machine, so nothing reaches the blotter.
     - name: unrouted

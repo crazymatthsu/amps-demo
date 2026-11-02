@@ -113,8 +113,17 @@ public record OrderStateProperties(Amps amps,
                           Boolean transactTimeGuard) {
     }
 
-    /** @param keyTag appended to every pass-through publish as a trailer; 0 disables */
-    public record Audit(@DefaultValue("13011") int keyTag) {
+    /**
+     * @param keyTag            appended to every pass-through publish as a
+     *                          trailer; 0 disables
+     * @param fullPublishTopics topic-name patterns ({@code *} matches anything)
+     *                          that always receive the message whole, as a
+     *                          {@code publish}, whatever a route's {@code tags}
+     *                          select: the audit trail records what was
+     *                          received (docs/07 §5)
+     */
+    public record Audit(@DefaultValue("13011") int keyTag,
+                        @DefaultValue("*_audit") List<String> fullPublishTopics) {
     }
 
     /**
@@ -244,7 +253,8 @@ public record OrderStateProperties(Amps amps,
 
     /** The audit router's options: the mode, the key trailer, the topic keys and the routes. */
     public RoutingOptions routingOptions() {
-        return new RoutingOptions(mode, audit.keyTag(), topicKeys, routes.stream().map(Route::toRoute).toList());
+        return new RoutingOptions(mode, audit.keyTag(), topicKeys, routes.stream().map(Route::toRoute).toList(),
+                audit.fullPublishTopics());
     }
 
     /** The startup loader's options: {@code order-state}'s recovery knobs and schema version. */
@@ -263,6 +273,11 @@ public record OrderStateProperties(Amps amps,
     /** The key tags of {@code topic}; empty for a non-SOW topic. */
     public List<Integer> keysOf(String topic) {
         return topicKeys.getOrDefault(topic, List.of());
+    }
+
+    /** Whether {@code topic} always receives the message whole ({@code audit.full-publish-topics}). */
+    public boolean fullPublish(String topic) {
+        return RoutingOptions.fullPublish(audit.fullPublishTopics(), topic);
     }
 
     /**
@@ -341,7 +356,12 @@ public record OrderStateProperties(Amps amps,
         }
     }
 
-    /** {@code tags}/{@code changeable-tags}: every topic's key among them, and never the trailer's tag. */
+    /**
+     * {@code tags}/{@code changeable-tags}: at least one topic they apply to,
+     * the key of every such topic among them, and never the trailer's tag. A
+     * full-publish topic gets the message whole, so the selection does not
+     * reach it.
+     */
     private void checkSelection(Route route, List<String> problems) {
         String where = "route '" + route.name() + "'";
         if (route.catchAll() && (!route.execTypes().isEmpty() || !route.execTransTypes().isEmpty())) {
@@ -357,7 +377,13 @@ public record OrderStateProperties(Amps amps,
         if (audit.keyTag() != 0 && selected.contains(audit.keyTag())) {
             problems.add(where + " selects " + audit.keyTag() + ", the trailer the publisher appends itself");
         }
-        for (String topic : route.topics()) {
+        List<String> selecting = route.topics().stream().filter(topic -> !fullPublish(topic)).toList();
+        if (selecting.isEmpty() && !route.topics().isEmpty()) {
+            problems.add(where + " lists tags, but every topic it sends to " + route.topics()
+                    + " is a full publish (audit.full-publish-topics " + audit.fullPublishTopics()
+                    + "): the selection would never apply -- remove it");
+        }
+        for (String topic : selecting) {
             for (int key : keysOf(topic)) {
                 if (!selected.contains(key)) {
                     problems.add(where + " sends " + topic + " a selection without its key tag " + key
