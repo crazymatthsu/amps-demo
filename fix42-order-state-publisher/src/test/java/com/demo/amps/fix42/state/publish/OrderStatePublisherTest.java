@@ -3,7 +3,6 @@ package com.demo.amps.fix42.state.publish;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.crankuptheamps.client.Message;
 import com.demo.amps.fix42.state.config.OrderStateProperties;
 import com.demo.amps.fix42.state.fix.FixFrame;
 import com.demo.amps.fix42.state.fix.FixMessage;
@@ -35,8 +34,8 @@ class OrderStatePublisherTest {
     private OrderStatePublisher publisher(String profile, OrderStateHook... hooks) {
         OrderStateProperties properties = OrderStateConfigurations.shipped(URI, profile);
         return new OrderStatePublisher(new OrderStateMachine(properties.machineOptions()),
-                new RecordWriter(properties.machineOptions()), new AuditRouter(properties), sink, repairs,
-                List.of(hooks), properties);
+                new RecordWriter(properties.machineOptions()), new AuditRouter(properties.routingOptions()), sink,
+                repairs, List.of(hooks), properties.publisherOptions());
     }
 
     private static Outcome send(OrderStatePublisher publisher, String raw) throws Exception {
@@ -105,7 +104,7 @@ class OrderStatePublisherTest {
         send(publisher, "35=8|150=0|39=0|11=X|37=O|17=E-1|14=0|151=100|6=0|60=20261031-10:00:01.000|");
         RecordingSink.Sent delta = sink.sent.get(2);
         repairs.add(new RepairQueue.Failure("sow/fix42/order_state", delta.sequence(), bytes(delta.message()),
-                Message.Reason.ParseError, Message.Command.DeltaPublish));
+                "ParseError", true));
         publisher.drainRepairs();
         RecordingSink.Sent repair = sink.last();
         assertThat(repair.command()).isEqualTo("delta_publish");
@@ -122,7 +121,7 @@ class OrderStatePublisherTest {
         send(publisher, "35=D|11=X|38=100|44=10|55=SYM|60=20261031-10:00:00.000|");
         RecordingSink.Sent creation = sink.sent.getFirst();
         repairs.add(new RepairQueue.Failure("sow/fix42/order_state", creation.sequence(), bytes(creation.message()),
-                Message.Reason.SowStoreFailed, Message.Command.Publish));
+                "SowStoreFailed", false));
         publisher.drainRepairs();
         assertThat(sink.last().command()).isEqualTo("publish");
         assertThat(sink.last().message().value(FixTags.SYMBOL)).isEqualTo("SYM");
@@ -130,7 +129,7 @@ class OrderStatePublisherTest {
         byte[] keyless = "39=0\u0001".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
         publisher.publishRaw("X", false, keyless);
         repairs.add(new RepairQueue.Failure("sow/fix42/order_state", sink.last().sequence(), keyless,
-                Message.Reason.BadSowKey, Message.Command.DeltaPublish));
+                "BadSowKey", true));
         publisher.drainRepairs();
         assertThat(sink.last().command()).isEqualTo("delta_publish");
         assertThat(sink.last().message().value(FixTags.Record.ROOT_CL_ORD_ID)).isEqualTo("X");
@@ -141,8 +140,7 @@ class OrderStatePublisherTest {
     void repairRefusedAudit() throws Exception {
         OrderStatePublisher publisher = publisher(null);
         byte[] payload = "35=D\u000111=X\u0001".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
-        repairs.add(new RepairQueue.Failure("sow/fix42/orders_audit", 7, payload, Message.Reason.ParseError,
-                Message.Command.Publish));
+        repairs.add(new RepairQueue.Failure("sow/fix42/orders_audit", 7, payload, "ParseError", false));
         publisher.drainRepairs();
         assertThat(sink.last().topic()).isEqualTo("fix42/unrouted");
         assertThat(publisher.counters().auditPublishFailures()).isEqualTo(1);

@@ -26,7 +26,7 @@ class AuditRouterTest {
     @Test
     @DisplayName("the message whole, plus 13011 as a trailer after any tag 10")
     void wholePlusTrailer() {
-        AuditRouter router = new AuditRouter(OrderStateConfigurations.shipped(URI, null));
+        AuditRouter router = new AuditRouter(OrderStateConfigurations.shipped(URI, null).routingOptions());
         FixFrame d = frame("8=FIX.4.2|9=40|35=D|11=X-1|38=100|10=123|");
         AuditRouter.Plan plan = router.plan(d, router.match("D"), "X-1");
         assertThat(plan.publishes()).extracting(AuditRouterTest::text)
@@ -36,7 +36,7 @@ class AuditRouterTest {
     @Test
     @DisplayName("no trailer when nothing resolved; none added when the message already carries 13011")
     void trailerRules() {
-        AuditRouter router = new AuditRouter(OrderStateConfigurations.shipped(URI, null));
+        AuditRouter router = new AuditRouter(OrderStateConfigurations.shipped(URI, null).routingOptions());
         AuditRouter.Plan unmatched = router.plan(frame("35=9|11=Z|41=Y|434=1|"), router.match("9"), null);
         assertThat(unmatched.publishes()).extracting(AuditRouterTest::text)
                 .containsExactly("sow/fix42/rejects 35=9|11=Z|41=Y|434=1|");
@@ -48,7 +48,7 @@ class AuditRouterTest {
     @Test
     @DisplayName("a report goes to execs and execs_audit; 37=NONE skips execs, a missing 17 goes to unrouted")
     void perTopicKeyCheck() {
-        AuditRouter router = new AuditRouter(OrderStateConfigurations.shipped(URI, null));
+        AuditRouter router = new AuditRouter(OrderStateConfigurations.shipped(URI, null).routingOptions());
         assertThat(router.plan(frame("35=8|37=O|17=E|150=0|"), router.match("8"), "K").publishes())
                 .extracting(AuditRouter.Publish::topic).containsExactly("sow/fix42/execs", "sow/fix42/execs_audit");
         assertThat(router.plan(frame("35=8|37=NONE|17=E|150=8|"), router.match("8"), "K").publishes())
@@ -63,10 +63,10 @@ class AuditRouterTest {
     @Test
     @DisplayName("lenient: an unrouted type goes whole to fix42/unrouted; strict: it raises")
     void unrouted() {
-        AuditRouter lenient = new AuditRouter(OrderStateConfigurations.shipped(URI, null));
+        AuditRouter lenient = new AuditRouter(OrderStateConfigurations.shipped(URI, null).routingOptions());
         assertThat(lenient.plan(frame("35=Q|17=E|"), lenient.match("Q"), null).publishes())
                 .extracting(AuditRouterTest::text).containsExactly("fix42/unrouted 35=Q|17=E|");
-        AuditRouter strict = new AuditRouter(OrderStateConfigurations.shipped(URI, "demo"));
+        AuditRouter strict = new AuditRouter(OrderStateConfigurations.shipped(URI, "demo").routingOptions());
         assertThatThrownBy(() -> strict.match("Q")).isInstanceOf(UnroutedMessageException.class);
         assertThatThrownBy(() -> strict.plan(frame("35=8|20=3|37=O|150=1|"), strict.match("8"), "K"))
                 .isInstanceOf(UnroutedMessageException.class).hasMessageContaining("execs_audit");
@@ -75,7 +75,7 @@ class AuditRouterTest {
     @Test
     @DisplayName("an unterminated payload gets its separator before the trailer")
     void unterminated() {
-        AuditRouter router = new AuditRouter(OrderStateConfigurations.shipped(URI, null));
+        AuditRouter router = new AuditRouter(OrderStateConfigurations.shipped(URI, null).routingOptions());
         FixWriter writer = new FixWriter(64);
         FixMessage.parse("35=F\u000111=X-2\u000141=X\u0001").writeTo(writer);
         byte[] bytes = java.util.Arrays.copyOf(writer.buffer(), writer.size() - 1);

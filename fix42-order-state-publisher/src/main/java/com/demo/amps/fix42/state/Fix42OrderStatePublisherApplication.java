@@ -1,16 +1,17 @@
 package com.demo.amps.fix42.state;
 
 import com.crankuptheamps.client.HAClient;
+import com.demo.amps.fix42.state.amps.AmpsPublishSink;
+import com.demo.amps.fix42.state.amps.MissResolver;
+import com.demo.amps.fix42.state.amps.SowRecordSource;
 import com.demo.amps.fix42.state.config.OrderStateProperties;
 import com.demo.amps.fix42.state.hooks.DeskStatusHook;
 import com.demo.amps.fix42.state.hooks.RejectStatusAtRequestTimeHook;
 import com.demo.amps.fix42.state.machine.OrderStateMachine;
 import com.demo.amps.fix42.state.machine.RecordWriter;
-import com.demo.amps.fix42.state.publish.AmpsPublishSink;
 import com.demo.amps.fix42.state.publish.AuditRouter;
 import com.demo.amps.fix42.state.publish.OrderStatePublisher;
 import com.demo.amps.fix42.state.publish.RepairQueue;
-import com.demo.amps.fix42.state.recovery.MissResolver;
 import com.demo.amps.fix42.state.recovery.SowCacheLoader;
 import com.demo.amps.fix42.state.spi.OrderStateHook;
 import java.time.Duration;
@@ -38,6 +39,10 @@ import org.springframework.context.annotation.Bean;
  * cache per order, so a message is applied conditionally: two cancels, one
  * confirmed and one rejected, leave the order canceled whichever answer
  * arrives first.
+ *
+ * <p>The Spring shell around a core that knows neither Spring nor AMPS: the
+ * bindings map onto the core's plain options, and the {@code amps} package's
+ * adapters fill the core's seams (docs/07 §3).
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan
@@ -71,7 +76,7 @@ public class Fix42OrderStatePublisherApplication {
 
     @Bean
     public AuditRouter auditRouter(OrderStateProperties properties) {
-        return new AuditRouter(properties);
+        return new AuditRouter(properties.routingOptions());
     }
 
     /** The shipped example hook; on in the demo profile, off unless asked for elsewhere. */
@@ -98,12 +103,15 @@ public class Fix42OrderStatePublisherApplication {
                                                    AuditRouter router, HAClient client, RepairQueue repairs,
                                                    ObjectProvider<OrderStateHook> hooks,
                                                    OrderStateProperties properties) throws Exception {
+        String blotter = properties.orderState().topic();
+        long timeoutMs = properties.amps().timeoutMs();
         if (properties.orderState().missLookup()) {
-            machine.setMissLookup(new MissResolver(client, properties));
+            machine.setMissLookup(new MissResolver(client, new MissResolver.Options(blotter, timeoutMs,
+                    properties.orderState().missLookupByOrderId())));
         }
-        new SowCacheLoader(properties).load(client, machine);
+        new SowCacheLoader(properties.recoveryOptions()).load(new SowRecordSource(client, blotter, timeoutMs), machine);
         OrderStatePublisher publisher = new OrderStatePublisher(machine, writer, router, new AmpsPublishSink(client),
-                repairs, hooks.orderedStream().toList(), properties);
+                repairs, hooks.orderedStream().toList(), properties.publisherOptions());
         publisher.startIdleDrain(Duration.ofSeconds(1));
         return publisher;
     }

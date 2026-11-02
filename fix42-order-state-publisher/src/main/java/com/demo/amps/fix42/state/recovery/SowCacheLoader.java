@@ -1,15 +1,11 @@
 package com.demo.amps.fix42.state.recovery;
 
-import com.crankuptheamps.client.Client;
-import com.crankuptheamps.client.Command;
-import com.crankuptheamps.client.Message;
-import com.crankuptheamps.client.MessageStream;
-import com.demo.amps.fix42.state.config.OrderStateProperties;
 import com.demo.amps.fix42.state.config.Recovery;
 import com.demo.amps.fix42.state.fix.FixMessage;
 import com.demo.amps.fix42.state.machine.OrderState;
 import com.demo.amps.fix42.state.machine.OrderStateMachine;
 import com.demo.amps.fix42.state.machine.RecordReader;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,10 +13,12 @@ import org.slf4j.LoggerFactory;
  * Rebuilds the cache at startup, before the first feed message (docs/04 §2).
  *
  * <p>The SOW record is the checkpoint: every field of a cache entry is on it,
- * so one {@code sow} over the blotter rebuilds the entries, the ClOrdID map
- * from 12021 and the OrderID map from 37. What is not recovered is the ExecID
- * ring behind the last ExecID, so duplicate detection is depth one for the
- * first reports after a restart; the stale and late guards still hold.
+ * so one pass over the records rebuilds the entries, the ClOrdID map from
+ * 12021 and the OrderID map from 37. The pass reads a {@link RecordSource}:
+ * over AMPS, one {@code sow} over the blotter ({@code amps.SowRecordSource}).
+ * What is not recovered is the ExecID ring behind the last ExecID, so
+ * duplicate detection is depth one for the first reports after a restart; the
+ * stale and late guards still hold.
  *
  * <ul>
  *   <li>{@code recovery: SOW} loads every record; with
@@ -34,8 +32,8 @@ import org.slf4j.LoggerFactory;
  *       refuses the start (R17).</li>
  * </ul>
  *
- * <p>Run after logon, so the old instance's bytes cannot still be in flight
- * behind the snapshot (docs/04 §5).
+ * <p>Run after the sink is connected, so the old instance's bytes cannot still
+ * be in flight behind the snapshot (docs/04 §5).
  */
 public final class SowCacheLoader {
 
@@ -46,19 +44,17 @@ public final class SowCacheLoader {
                          boolean complete) {
     }
 
-    private final OrderStateProperties properties;
+    private final RecoveryOptions options;
 
-    public SowCacheLoader(OrderStateProperties properties) {
-        this.properties = properties;
+    public SowCacheLoader(RecoveryOptions options) {
+        this.options = options;
     }
 
-    public Report load(Client client, OrderStateMachine machine) throws Exception {
-        OrderStateProperties.OrderState settings = properties.orderState();
-        String topic = settings.topic();
-        long timeoutMs = properties.amps().timeoutMs();
-        if (settings.recovery() == Recovery.NONE) {
-            boolean empty = isEmpty(client, topic, timeoutMs);
-            if (!empty && !settings.allowIncompleteCache()) {
+    public Report load(RecordSource source, OrderStateMachine machine) throws Exception {
+        String topic = source.name();
+        if (options.recovery() == Recovery.NONE) {
+            boolean empty = source.isEmpty();
+            if (!empty && !options.allowIncompleteCache()) {
                 throw new IllegalStateException("recovery: NONE against a non-empty " + topic + " is refused: "
                         + "every D for an existing order would become a new chain. Use recovery: SOW, or set "
                         + "allow-incomplete-cache: true to look each order up on its first message (docs/04 §2)");
@@ -70,59 +66,50 @@ public final class SowCacheLoader {
             return new Report(Recovery.NONE, 0, 0, 0, 0, empty);
         }
 
-        int loaded = 0;
-        int tombstones = 0;
-        int defaulted = 0;
-        int unrecovered = 0;
-        Command command = new Command("sow").setTopic(topic).setTimeout(timeoutMs);
-        try (MessageStream stream = client.execute(command)) {
-            for (Message message : stream) {
-                if (message.getCommand() == Message.Command.GroupEnd) {
-                    break;
-                }
-                if (message.getCommand() != Message.Command.SOW || message.isDataNull()) {
-                    continue;
-                }
-                RecordReader.Result read = RecordReader.read(FixMessage.parse(message.getData()),
-                        settings.schemaVersion());
-                machine.countLoaded(read);
-                defaulted += read.defaulted() ? 1 : 0;
-                unrecovered += read.unrecovered() ? 1 : 0;
-                OrderState state = read.state();
-                if (settings.loadOpenOrdersOnly() && state.terminal()) {
-                    machine.tombstone(state.orderKey(), state.orderIds());
-                    tombstones++;
-                } else {
-                    machine.load(state);
-                    loaded++;
-                }
-            }
-        }
-        boolean complete = !settings.loadOpenOrdersOnly() || tombstones == 0;
+        Pass pass = new Pass(machine, options);
+        source.forEach(pass);
+        boolean complete = !options.loadOpenOrdersOnly() || pass.tombstones == 0;
         if (!complete) {
             machine.markCacheIncomplete();
         }
-        if (unrecovered > 0) {
+        if (pass.unrecovered > 0) {
             log.warn("{} record(s) of {} did not parse and were loaded UNRECOVERED with an empty pending set",
-                    unrecovered, topic);
+                    pass.unrecovered, topic);
         }
         log.info("recovery SOW: {} entries loaded, {} tombstones, {} with defaults, {} unrecovered, from {}",
-                loaded, tombstones, defaulted, unrecovered, topic);
-        return new Report(Recovery.SOW, loaded, tombstones, defaulted, unrecovered, complete);
+                pass.loaded, pass.tombstones, pass.defaulted, pass.unrecovered, topic);
+        return new Report(Recovery.SOW, pass.loaded, pass.tombstones, pass.defaulted, pass.unrecovered, complete);
     }
 
-    private static boolean isEmpty(Client client, String topic, long timeoutMs) throws Exception {
-        Command command = new Command("sow").setTopic(topic).setTopN(1).setTimeout(timeoutMs);
-        try (MessageStream stream = client.execute(command)) {
-            for (Message message : stream) {
-                if (message.getCommand() == Message.Command.GroupEnd) {
-                    break;
-                }
-                if (message.getCommand() == Message.Command.SOW) {
-                    return false;
-                }
+    /** One record at a time into the machine, counted for the {@link Report}. */
+    private static final class Pass implements Consumer<FixMessage> {
+
+        private final OrderStateMachine machine;
+        private final RecoveryOptions options;
+        int loaded;
+        int tombstones;
+        int defaulted;
+        int unrecovered;
+
+        Pass(OrderStateMachine machine, RecoveryOptions options) {
+            this.machine = machine;
+            this.options = options;
+        }
+
+        @Override
+        public void accept(FixMessage record) {
+            RecordReader.Result read = RecordReader.read(record, options.schemaVersion());
+            machine.countLoaded(read);
+            defaulted += read.defaulted() ? 1 : 0;
+            unrecovered += read.unrecovered() ? 1 : 0;
+            OrderState state = read.state();
+            if (options.loadOpenOrdersOnly() && state.terminal()) {
+                machine.tombstone(state.orderKey(), state.orderIds());
+                tombstones++;
+            } else {
+                machine.load(state);
+                loaded++;
             }
         }
-        return true;
     }
 }

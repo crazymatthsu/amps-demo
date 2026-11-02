@@ -1,4 +1,4 @@
-package com.demo.amps.fix42.state.config;
+package com.demo.amps.fix42.state.amps;
 
 import com.crankuptheamps.client.DefaultServerChooser;
 import com.crankuptheamps.client.FailedWriteHandler;
@@ -7,6 +7,7 @@ import com.crankuptheamps.client.HAClient;
 import com.crankuptheamps.client.MemoryPublishStore;
 import com.crankuptheamps.client.PublishStore;
 import com.crankuptheamps.client.exception.NameInUseException;
+import com.demo.amps.fix42.state.config.OrderStateProperties;
 import com.demo.amps.fix42.state.publish.RepairQueue;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,8 +25,9 @@ import org.springframework.context.annotation.Configuration;
  * topic only, which is why the flow journals every topic this client writes --
  * and the acknowledgement discards it; after a reconnect the client replays
  * what is still in the store and the server drops duplicates by client name
- * and sequence. The {@link FailedWriteHandler} reports what the server refused;
- * the {@link RepairQueue} carries it to the publishing thread.
+ * and sequence. The {@link FailedWriteHandler}, an {@link AmpsFailedWriteHandler},
+ * reports what the server refused; the {@link RepairQueue} carries it to the
+ * publishing thread.
  *
  * <p>The client name is the identity all of this hangs off, so it is stable,
  * and a transaction-logged instance allows one connection per name: a
@@ -50,7 +52,7 @@ public class AmpsClientConfiguration {
 
     @Bean(destroyMethod = "close")
     public HAClient ampsClient(OrderStateProperties properties, RepairQueue repairs) throws Exception {
-        return connect(properties.amps(), repairs);
+        return connect(properties.amps(), new AmpsFailedWriteHandler(repairs));
     }
 
     /**

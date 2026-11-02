@@ -110,8 +110,8 @@ class PublishPathAllocationTest {
 
     private static OrderStatePublisher publisher(OrderStateProperties properties) {
         return new OrderStatePublisher(new OrderStateMachine(properties.machineOptions()),
-                new RecordWriter(properties.machineOptions()), new AuditRouter(properties), new DiscardingSink(),
-                new RepairQueue(), List.of(new DeskStatusHook()), properties);
+                new RecordWriter(properties.machineOptions()), new AuditRouter(properties.routingOptions()),
+                new DiscardingSink(), new RepairQueue(), List.of(new DeskStatusHook()), properties.publisherOptions());
     }
 
     /** The whole flow through {@code publisher}; returns the bytes the sends allocated. */

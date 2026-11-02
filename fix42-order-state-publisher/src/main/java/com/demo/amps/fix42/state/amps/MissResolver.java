@@ -1,10 +1,9 @@
-package com.demo.amps.fix42.state.recovery;
+package com.demo.amps.fix42.state.amps;
 
 import com.crankuptheamps.client.Client;
 import com.crankuptheamps.client.Command;
 import com.crankuptheamps.client.Message;
 import com.crankuptheamps.client.MessageStream;
-import com.demo.amps.fix42.state.config.OrderStateProperties;
 import com.demo.amps.fix42.state.fix.FixMessage;
 import com.demo.amps.fix42.state.fix.FixTags;
 import com.demo.amps.fix42.state.machine.MissLookup;
@@ -25,24 +24,49 @@ import org.slf4j.LoggerFactory;
  * <p>Runs on the publishing thread, inside {@code plan}, through the
  * publisher's own client. A failure is thrown unchecked: nothing is committed
  * and the message can be redelivered.
+ *
+ * <p>The core's {@link MissLookup} over AMPS; a sink that writes somewhere
+ * else implements that interface over its own store (docs/07 §3.1).
  */
 public final class MissResolver implements MissLookup {
 
     private static final Logger log = LoggerFactory.getLogger(MissResolver.class);
 
-    private static final String ORDERS_AUDIT = "sow/fix42/orders_audit";
-    private static final String REJECTS = "sow/fix42/rejects";
+    /** The audit topics the shipped flow files every request under, by tag 11. */
+    public static final String ORDERS_AUDIT = "sow/fix42/orders_audit";
+    public static final String REJECTS = "sow/fix42/rejects";
+
+    /**
+     * Where the lookups read, and how long each may take.
+     *
+     * @param blotter     the record topic, keyed by 13011
+     * @param ordersAudit every D, F and G whole, keyed by tag 11, with the 13011 trailer
+     * @param rejects     every 35=9 whole, keyed by tag 11, with the 13011 trailer
+     * @param timeoutMs   for each query and the {@code publishFlush} before a blotter read
+     * @param byOrderId   {@code miss-lookup-by-order-id}: also look a 37 up on the blotter
+     */
+    public record Options(String blotter, String ordersAudit, String rejects, long timeoutMs, boolean byOrderId) {
+
+        /** The shipped flow's audit topics. */
+        public Options(String blotter, long timeoutMs, boolean byOrderId) {
+            this(blotter, ORDERS_AUDIT, REJECTS, timeoutMs, byOrderId);
+        }
+    }
 
     private final Client client;
     private final String blotter;
+    private final String ordersAudit;
+    private final String rejects;
     private final long timeoutMs;
     private final boolean byOrderId;
 
-    public MissResolver(Client client, OrderStateProperties properties) {
+    public MissResolver(Client client, Options options) {
         this.client = client;
-        this.blotter = properties.orderState().topic();
-        this.timeoutMs = properties.amps().timeoutMs();
-        this.byOrderId = properties.orderState().missLookupByOrderId();
+        this.blotter = options.blotter();
+        this.ordersAudit = options.ordersAudit();
+        this.rejects = options.rejects();
+        this.timeoutMs = options.timeoutMs();
+        this.byOrderId = options.byOrderId();
     }
 
     /** {@code miss-lookup-by-order-id}: the blotter filtered by its latest 37, after a flush. */
@@ -72,7 +96,7 @@ public final class MissResolver implements MissLookup {
      */
     @Override
     public String keyForClOrdId(String clOrdId) {
-        for (String topic : new String[] {ORDERS_AUDIT, REJECTS}) {
+        for (String topic : new String[] {ordersAudit, rejects}) {
             FixMessage audit = first(topic, "/" + FixTags.CL_ORD_ID + " = " + quote(clOrdId));
             if (audit == null) {
                 continue;
@@ -94,7 +118,7 @@ public final class MissResolver implements MissLookup {
         if (key.equals(audit.value(FixTags.CL_ORD_ID))) {
             return true;
         }
-        FixMessage root = first(ORDERS_AUDIT, "/" + FixTags.CL_ORD_ID + " = " + quote(key));
+        FixMessage root = first(ordersAudit, "/" + FixTags.CL_ORD_ID + " = " + quote(key));
         if (root != null && key.equals(root.value(FixTags.Record.ROOT_CL_ORD_ID))) {
             return true;
         }

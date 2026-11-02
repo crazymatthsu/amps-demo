@@ -1,8 +1,6 @@
 package com.demo.amps.fix42.state.publish;
 
 import com.demo.amps.fix42.state.config.Mode;
-import com.demo.amps.fix42.state.config.OrderStateProperties;
-import com.demo.amps.fix42.state.config.OrderStateProperties.Route;
 import com.demo.amps.fix42.state.fix.FixFrame;
 import com.demo.amps.fix42.state.fix.FixMessage;
 import com.demo.amps.fix42.state.fix.FixTags;
@@ -46,7 +44,8 @@ import org.slf4j.LoggerFactory;
  *       only after every publish is in the client's store.</li>
  * </ul>
  *
- * <p>The repair queue the {@link RepairQueue} handler fills is drained here,
+ * <p>The {@link RepairQueue} the sink's failure callback fills (over AMPS,
+ * {@code amps.AmpsFailedWriteHandler}) is drained here,
  * on the publishing thread, before each message, on an idle timer and at
  * {@link #close()}: a refused delta is repaired by a delta of every cached
  * field, never a {@code publish} that would erase the D's terms the cache does
@@ -94,17 +93,17 @@ public final class OrderStatePublisher implements MessageSink {
     private ScheduledExecutorService idleDrain;
 
     public OrderStatePublisher(OrderStateMachine machine, RecordWriter writer, AuditRouter router, PublishSink sink,
-                               RepairQueue repairs, List<OrderStateHook> hooks, OrderStateProperties properties) {
+                               RepairQueue repairs, List<OrderStateHook> hooks, PublisherOptions options) {
         this.machine = machine;
         this.writer = writer;
         this.router = router;
         this.sink = sink;
         this.repairs = repairs;
         this.hooks = List.copyOf(hooks);
-        this.mode = properties.mode();
-        this.blotter = properties.orderState().topic();
-        this.malformedTopic = properties.topicKeys().containsKey("fix42/malformed") ? "fix42/malformed" : null;
-        this.timeoutMs = properties.amps().timeoutMs();
+        this.mode = options.mode();
+        this.blotter = options.blotter();
+        this.malformedTopic = options.malformedTopic();
+        this.timeoutMs = options.flushTimeoutMs();
     }
 
     // ---- the feed ------------------------------------------------------------------

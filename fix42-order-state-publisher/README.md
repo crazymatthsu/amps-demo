@@ -286,6 +286,27 @@ used 9xxx bookkeeping tags and refuse to load; see
 Custom behaviour goes in hooks: Spring beans implementing `OrderStateHook`,
 writing in tags 12100–12999 ([docs/07 §2](docs/07-extension-points.md#2-tier-two-hooks)).
 
+## As a library
+
+The state machine and the publish path work without AMPS or Spring. The
+packages that hold them import only the JDK, SLF4J and each other, and
+`checkCoreSelfContained` fails the build otherwise. A deployment with another
+FIX source or another store implements the seams and wires the classes by
+hand. [docs/07 §3.1](docs/07-extension-points.md#31-a-feed-and-a-sink-other-than-amps)
+says what a feed and a sink must provide: a sink that merges deltas by 13011,
+a `publish` that returns only once the write is durable, and records it can
+read back for recovery.
+
+| package | holds | depends on |
+| --- | --- | --- |
+| `fix`, `machine`, `spi`, `hooks` | FIX parsing, the state machine, the hook SPI, the shipped hooks | the core only |
+| `publish` | `OrderStatePublisher`, `AuditRouter`, the `PublishSink` seam, `RepairQueue`, their option records | the core only |
+| `recovery` | `SowCacheLoader` over the `RecordSource` seam, `RecoveryOptions` | the core only |
+| `config` | the policy enums; `OrderStateProperties`, the yml binding, is the one Spring class | the core; Spring for `OrderStateProperties` |
+| `amps` | `AmpsPublishSink`, `AmpsFailedWriteHandler`, `SowRecordSource`, `MissResolver`, `AmpsClientConfiguration` | the AMPS client, Spring |
+| `mock` | the deterministic mock venue: not part of the core, though it needs only `fix` | `fix` |
+| the application, `MockFlowRunner` | the Spring Boot shell and the demo's feed | everything above, Spring |
+
 ## Tests
 
 ```bash
@@ -299,10 +320,11 @@ That runs about 2,600 unit tests with no server. 2,358 of them are
 AMPS_IMAGE=localhost/amps-demo:5.3.5.135 ./gradlew :fix42-order-state-publisher:integrationTest
 ```
 
-That runs 35 tests against a real AMPS, each class on its own throwaway
+That runs 36 tests against a real AMPS, each class on its own throwaway
 container. Without `AMPS_IMAGE` they skip, which is what CI does.
 `checkModuleDocs` fails the build if a relative link in this README or in
-`docs/` points at nothing.
+`docs/` points at nothing. `checkCoreSelfContained` fails it if a core
+package imports AMPS, Spring or anything else outside the JDK and SLF4J.
 
 ## Status and what is left
 
@@ -332,8 +354,8 @@ Open for the design owner: F4, F6, F9 and F10 in
 | [docs/04](docs/04-recovery-and-operations.md) | restart, cache misses, eviction, single writer, metrics, failure matrix |
 | [docs/05](docs/05-implementation-plan.md) | the six phases, class layout, decisions, risks |
 | [docs/06](docs/06-case-coverage.md) | the case matrix: every lifecycle and edge case, the rule that handles it, and a verdict |
-| [docs/07](docs/07-extension-points.md) | policies per venue, the hook SPI, replaceable components |
+| [docs/07](docs/07-extension-points.md) | policies per venue, the hook SPI, replaceable components, and what a non-AMPS feed or sink must provide |
 | [docs/08](docs/08-review-findings.md) | round-1 review findings, the six decisions taken on them, where each landed |
 | [docs/09](docs/09-review-round-2.md) | round-2 review of the revised docs: round-1 dispositions verified, twenty-two new findings and where each landed |
 | [docs/10](docs/10-case-frequency-and-priority.md) | every case sorted by frequency (normal, sometimes, rare) and build slot, for implementation order |
-| [docs/11](docs/11-build-findings.md) | what the build found: findings on the rules, on AMPS 5.3.5.135, on recovery and from the measurements, the verify-on-build answers, and what is not built yet |
+| [docs/11](docs/11-build-findings.md) | what the build found: findings on the rules, on AMPS 5.3.5.135, on recovery and from the measurements, the verify-on-build answers, what is not built yet, the schema 2 renumbering and the core/AMPS split |

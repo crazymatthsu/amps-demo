@@ -2,6 +2,9 @@ package com.demo.amps.fix42.state.config;
 
 import com.demo.amps.fix42.state.fix.FixTags;
 import com.demo.amps.fix42.state.machine.MachineOptions;
+import com.demo.amps.fix42.state.publish.PublisherOptions;
+import com.demo.amps.fix42.state.publish.RoutingOptions;
+import com.demo.amps.fix42.state.recovery.RecoveryOptions;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -22,6 +25,11 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * startup and refuses to boot on a configuration that would fail later at
  * the server.
  *
+ * <p>Spring's, and so outside the core: the core takes plain option records,
+ * which {@link #machineOptions()}, {@link #publisherOptions()},
+ * {@link #routingOptions()} and {@link #recoveryOptions()} map this onto
+ * (docs/07 §3).
+ *
  * @param amps       the connection and the publish store
  * @param mode       {@code strict} raises on an unrouted or unparseable
  *                   message; {@code lenient} records it on the catch-all topics
@@ -39,7 +47,10 @@ public record OrderStateProperties(Amps amps,
                                    List<Route> routes) {
 
     /** The catch-all message type of a lenient-mode route. */
-    public static final String ANY_TYPE = "*";
+    public static final String ANY_TYPE = com.demo.amps.fix42.state.publish.Route.ANY_TYPE;
+
+    /** Where lenient mode records unparseable bytes, when {@code topic-keys} declares it. */
+    private static final String MALFORMED_TOPIC = "fix42/malformed";
 
     /**
      * @param uri              must select the fix message type: a URI ending {@code /fix}
@@ -103,7 +114,8 @@ public record OrderStateProperties(Amps amps,
     }
 
     /**
-     * One pass-through route.
+     * One pass-through route, as bound from the yml; {@link #toRoute()} maps it
+     * onto the core's {@code publish.Route}, which the router reads.
      *
      * @param name       for logs and errors
      * @param msgTypes   tag 35 values, or {@code *} for the lenient catch-all
@@ -119,21 +131,22 @@ public record OrderStateProperties(Amps amps,
                         Map<String, Map<Integer, List<String>>> keyGuard,
                         @DefaultValue("true") boolean applyState) {
 
+        /** The plain route the {@code AuditRouter} reads. */
+        public com.demo.amps.fix42.state.publish.Route toRoute() {
+            return new com.demo.amps.fix42.state.publish.Route(name, msgTypes, topics, keyGuard, applyState);
+        }
+
         public boolean matches(String msgType) {
-            return msgTypes.contains(msgType) || msgTypes.contains(ANY_TYPE);
+            return toRoute().matches(msgType);
         }
 
         public boolean catchAll() {
-            return msgTypes.contains(ANY_TYPE);
+            return toRoute().catchAll();
         }
 
         /** Whether {@code value} of {@code tag} is a sentinel that skips {@code topic}. */
         public boolean guarded(String topic, int tag, String value) {
-            if (keyGuard == null) {
-                return false;
-            }
-            Map<Integer, List<String>> guards = keyGuard.get(topic);
-            return guards != null && guards.getOrDefault(tag, List.of()).contains(value);
+            return toRoute().guarded(topic, tag, value);
         }
     }
 
@@ -152,6 +165,23 @@ public record OrderStateProperties(Amps amps,
                 d != null && d.transactTimeGuard() != null ? d.transactTimeGuard() : s.transactTimeGuard(),
                 s.execIdHistory(), Set.copyOf(s.orderTermTags()), Set.copyOf(s.stripTags()),
                 s.chainIdsPublished(), s.schemaVersion(), s.publishUnchanged());
+    }
+
+    /** The publisher's options: the mode, the blotter, the malformed topic if declared, the flush timeout. */
+    public PublisherOptions publisherOptions() {
+        return new PublisherOptions(mode, orderState.topic(),
+                topicKeys.containsKey(MALFORMED_TOPIC) ? MALFORMED_TOPIC : null, amps.timeoutMs());
+    }
+
+    /** The audit router's options: the mode, the key trailer, the topic keys and the routes. */
+    public RoutingOptions routingOptions() {
+        return new RoutingOptions(mode, audit.keyTag(), topicKeys, routes.stream().map(Route::toRoute).toList());
+    }
+
+    /** The startup loader's options: {@code order-state}'s recovery knobs and schema version. */
+    public RecoveryOptions recoveryOptions() {
+        return new RecoveryOptions(orderState.recovery(), orderState.schemaVersion(),
+                orderState.loadOpenOrdersOnly(), orderState.allowIncompleteCache());
     }
 
     private Dialect selectedDialect() {

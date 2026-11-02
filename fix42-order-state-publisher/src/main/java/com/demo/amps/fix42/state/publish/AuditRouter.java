@@ -1,8 +1,6 @@
 package com.demo.amps.fix42.state.publish;
 
 import com.demo.amps.fix42.state.config.Mode;
-import com.demo.amps.fix42.state.config.OrderStateProperties;
-import com.demo.amps.fix42.state.config.OrderStateProperties.Route;
 import com.demo.amps.fix42.state.fix.FixFrame;
 import com.demo.amps.fix42.state.fix.FixMessage;
 import com.demo.amps.fix42.state.fix.FixTags;
@@ -26,19 +24,22 @@ import java.util.List;
  * ({@code 37=NONE}, {@code 17=0}), without the catch-all copy: a sentinel is a
  * value the venue meant. In strict mode a missing key, like an unrouted type,
  * raises.
+ *
+ * <p>Routes by topic name only: the names are what the {@link PublishSink} is
+ * handed, and a sink other than AMPS maps them to whatever it writes.
  */
 public final class AuditRouter {
 
-    private final OrderStateProperties properties;
+    private final RoutingOptions options;
     private final Mode mode;
     private final String catchAllTopic;
     private final int keyTag;
 
-    public AuditRouter(OrderStateProperties properties) {
-        this.properties = properties;
-        this.mode = properties.mode();
-        this.keyTag = properties.audit().keyTag();
-        Route last = properties.routes().getLast();
+    public AuditRouter(RoutingOptions options) {
+        this.options = options;
+        this.mode = options.mode();
+        this.keyTag = options.keyTag();
+        Route last = options.routes().getLast();
         this.catchAllTopic = last.catchAll() && !last.topics().isEmpty() ? last.topics().getFirst() : null;
     }
 
@@ -60,7 +61,7 @@ public final class AuditRouter {
      *         (or nothing) would take it
      */
     public Route match(String msgType) {
-        for (Route route : properties.routes()) {
+        for (Route route : options.routes()) {
             if (route.catchAll()) {
                 break;
             }
@@ -71,7 +72,7 @@ public final class AuditRouter {
         if (mode == Mode.STRICT) {
             throw new UnroutedMessageException("no route for 35=" + msgType + " (strict mode)");
         }
-        Route last = properties.routes().getLast();
+        Route last = options.routes().getLast();
         if (!last.catchAll()) {
             throw new UnroutedMessageException("no route for 35=" + msgType + " and no catch-all route");
         }
@@ -94,7 +95,7 @@ public final class AuditRouter {
             if (skip == Skip.MISSING_KEY) {
                 if (mode == Mode.STRICT) {
                     throw new UnroutedMessageException("35=" + message.value(FixTags.MSG_TYPE) + " lacks the key of "
-                            + topic + " " + properties.keysOf(topic) + " (strict mode): " + message.printable());
+                            + topic + " " + options.keysOf(topic) + " (strict mode): " + message.printable());
                 }
                 unrouted = true;
                 continue;
@@ -128,7 +129,7 @@ public final class AuditRouter {
     private enum Skip { NONE, MISSING_KEY, GUARDED }
 
     private Skip check(FixFrame message, Route route, String topic) {
-        for (int tag : properties.keysOf(topic)) {
+        for (int tag : options.keysOf(topic)) {
             int index = message.indexOf(tag);
             if (index < 0 || message.valueLengthAt(index) == 0) {
                 return Skip.MISSING_KEY;
