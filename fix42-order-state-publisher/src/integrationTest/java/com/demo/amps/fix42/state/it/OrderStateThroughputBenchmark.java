@@ -1,7 +1,9 @@
 package com.demo.amps.fix42.state.it;
 
 import com.crankuptheamps.client.HAClient;
-import com.demo.amps.fix42.state.config.AmpsClientConfiguration;
+import com.demo.amps.fix42.state.amps.AmpsClientConfiguration;
+import com.demo.amps.fix42.state.amps.AmpsFailedWriteHandler;
+import com.demo.amps.fix42.state.amps.AmpsPublishSink;
 import com.demo.amps.fix42.state.config.OrderStateProperties;
 import com.demo.amps.fix42.state.fix.FixFrame;
 import com.demo.amps.fix42.state.fix.FixWriter;
@@ -11,7 +13,6 @@ import com.demo.amps.fix42.state.machine.RecordWriter;
 import com.demo.amps.fix42.state.mock.FixEvent;
 import com.demo.amps.fix42.state.mock.Instrument;
 import com.demo.amps.fix42.state.mock.OrderChain;
-import com.demo.amps.fix42.state.publish.AmpsPublishSink;
 import com.demo.amps.fix42.state.publish.AuditRouter;
 import com.demo.amps.fix42.state.publish.OrderStatePublisher;
 import com.demo.amps.fix42.state.publish.RepairQueue;
@@ -87,7 +88,7 @@ class OrderStateThroughputBenchmark {
             replay("F. its publishes replayed through a plain Client", plain, recorded);
             recorded = record(machineOnly, load("G-"));
             HAClient ha = AmpsClientConfiguration.connect(settings(server, "bench-G-" + System.nanoTime(), "NONE").amps(),
-                    new RepairQueue());
+                    new AmpsFailedWriteHandler(new RepairQueue()));
             replay("G. the same through an HAClient, no store", ha, recorded);
         }
     }
@@ -129,8 +130,8 @@ class OrderStateThroughputBenchmark {
             }
         };
         OrderStatePublisher publisher = new OrderStatePublisher(new OrderStateMachine(settings.machineOptions()),
-                new RecordWriter(settings.machineOptions()), new AuditRouter(settings), capture, new RepairQueue(),
-                List.of(), settings);
+                new RecordWriter(settings.machineOptions()), new AuditRouter(settings.routingOptions()), capture,
+                new RepairQueue(), List.of(), settings.publisherOptions());
         for (byte[] message : wire) {
             publisher.onMessage(message, 0, message.length);
         }
@@ -194,12 +195,13 @@ class OrderStateThroughputBenchmark {
         String name = "bench-" + (label == null ? "warm" : label.substring(0, 1)) + "-" + System.nanoTime();
         OrderStateProperties settings = settings(server, name, store);
         RepairQueue repairs = new RepairQueue();
-        HAClient client = AmpsClientConfiguration.connect(settings.amps(), repairs);
+        HAClient client = AmpsClientConfiguration.connect(settings.amps(), new AmpsFailedWriteHandler(repairs));
         logger.setLevel(ch.qos.logback.classic.Level.toLevel(level));
         try {
             OrderStatePublisher publisher = new OrderStatePublisher(
                     new OrderStateMachine(settings.machineOptions()), new RecordWriter(settings.machineOptions()),
-                    new AuditRouter(settings), new AmpsPublishSink(client), repairs, List.of(), settings);
+                    new AuditRouter(settings.routingOptions()), new AmpsPublishSink(client), repairs, List.of(),
+                    settings.publisherOptions());
             long start = System.nanoTime();
             for (byte[] message : wire) {
                 publisher.onMessage(message, 0, message.length);

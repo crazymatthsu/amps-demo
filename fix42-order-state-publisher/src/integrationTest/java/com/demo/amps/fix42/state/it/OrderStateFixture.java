@@ -4,17 +4,19 @@ import static org.assertj.core.api.Assumptions.assumeThat;
 
 import com.crankuptheamps.client.Client;
 import com.crankuptheamps.client.HAClient;
-import com.demo.amps.fix42.state.config.AmpsClientConfiguration;
+import com.demo.amps.fix42.state.amps.AmpsClientConfiguration;
+import com.demo.amps.fix42.state.amps.AmpsFailedWriteHandler;
+import com.demo.amps.fix42.state.amps.AmpsPublishSink;
+import com.demo.amps.fix42.state.amps.MissResolver;
+import com.demo.amps.fix42.state.amps.SowRecordSource;
 import com.demo.amps.fix42.state.config.OrderStateProperties;
 import com.demo.amps.fix42.state.fix.FixWriter;
 import com.demo.amps.fix42.state.machine.OrderStateMachine;
 import com.demo.amps.fix42.state.machine.RecordWriter;
 import com.demo.amps.fix42.state.mock.FixEvent;
-import com.demo.amps.fix42.state.publish.AmpsPublishSink;
 import com.demo.amps.fix42.state.publish.AuditRouter;
 import com.demo.amps.fix42.state.publish.OrderStatePublisher;
 import com.demo.amps.fix42.state.publish.RepairQueue;
-import com.demo.amps.fix42.state.recovery.MissResolver;
 import com.demo.amps.fix42.state.recovery.SowCacheLoader;
 import com.demo.amps.fix42.state.spi.OrderStateHook;
 import com.demo.amps.testharness.AmpsFlow;
@@ -106,21 +108,26 @@ final class OrderStateFixture implements AutoCloseable {
 
     /** {@link #connect(List)} under different settings: a restart with another recovery mode. */
     void connect(OrderStateProperties settings, List<OrderStateHook> hooks) throws Exception {
-        client = AmpsClientConfiguration.connect(settings.amps(), repairs);
+        client = AmpsClientConfiguration.connect(settings.amps(), new AmpsFailedWriteHandler(repairs));
         OrderStateMachine machine = new OrderStateMachine(settings.machineOptions());
         machine.setTerminalRetention(settings.orderState().terminalRetention(), System::currentTimeMillis);
+        String blotter = settings.orderState().topic();
+        long timeoutMs = settings.amps().timeoutMs();
         if (settings.orderState().missLookup()) {
-            machine.setMissLookup(new MissResolver(client, settings));
+            machine.setMissLookup(new MissResolver(client, new MissResolver.Options(blotter, timeoutMs,
+                    settings.orderState().missLookupByOrderId())));
         }
         try {
-            loaded = new SowCacheLoader(settings).load(client, machine);
+            loaded = new SowCacheLoader(settings.recoveryOptions())
+                    .load(new SowRecordSource(client, blotter, timeoutMs), machine);
         } catch (Exception | Error e) {
             client.close();
             client = null;
             throw e;
         }
         publisher = new OrderStatePublisher(machine, new RecordWriter(settings.machineOptions()),
-                new AuditRouter(settings), new AmpsPublishSink(client), repairs, hooks, settings);
+                new AuditRouter(settings.routingOptions()), new AmpsPublishSink(client), repairs, hooks,
+                settings.publisherOptions());
         if (reader == null) {
             reader = new Client("fix42os-it-reader-" + System.nanoTime());
             reader.connect(server.uri());

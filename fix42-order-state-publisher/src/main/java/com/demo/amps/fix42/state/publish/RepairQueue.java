@@ -1,42 +1,48 @@
 package com.demo.amps.fix42.state.publish;
 
-import com.crankuptheamps.client.FailedWriteHandler;
-import com.crankuptheamps.client.Message;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * What the server refused, handed from the AMPS client's receive thread to
- * the publishing thread (docs/04 §6, S2).
+ * What the sink reports refused, handed from the thread that learns of it --
+ * over AMPS, the client's receive thread -- to the publishing thread
+ * (docs/04 §6, S2).
  *
- * <p>The {@link FailedWriteHandler} runs on the client's thread and the cache
- * entries are the publishing thread's, so the handler never touches an entry:
- * it copies what it was told into the queue and returns. The publisher drains
- * it before each message, on an idle timer and at shutdown, and decides the
- * repair there -- a delta of every cached field for a rejected delta, the
- * kept payload for a rejected creation, the catch-all topic for a rejected
- * audit publish.
+ * <p>The failure callback runs on the sink's thread and the cache entries are
+ * the publishing thread's, so the callback never touches an entry: it copies
+ * what it was told into the queue and returns. The publisher drains it before
+ * each message, on an idle timer and at shutdown, and decides the repair
+ * there -- a delta of every cached field for a rejected delta, the kept
+ * payload for a rejected creation, the catch-all topic for a rejected audit
+ * publish. Over AMPS the callback is {@code amps.AmpsFailedWriteHandler}, the
+ * client's {@code FailedWriteHandler}; another sink calls
+ * {@link #onRefused} and {@link #onDuplicate} itself.
  *
- * <p>A {@code Duplicate} is the server's expected answer to a store replay
- * after a reconnect (the message was already there): logged and counted, never
+ * <p>A duplicate is the server's expected answer to a store replay after a
+ * reconnect (the message was already there): logged and counted, never
  * repaired.
  */
-public final class RepairQueue implements FailedWriteHandler {
+public final class RepairQueue {
 
     private static final Logger log = LoggerFactory.getLogger(RepairQueue.class);
 
     /**
-     * One refused publish, copied off the client's thread.
+     * One refused publish, copied off the sink's thread.
      *
-     * @param command {@code Message.Command.Publish} or {@code DeltaPublish}:
-     *                a refused creation is re-sent whole, a refused delta is not
+     * @param topic    the topic it was published to
+     * @param sequence the sequence {@link PublishSink} returned for it, 0 if none
+     * @param data     the payload as sent
+     * @param reason   why it was refused, for the log: over AMPS the
+     *                 {@code Message.Reason} constant's name
+     * @param delta    whether it was a delta publish: a refused creation is
+     *                 re-sent whole, a refused delta is not
      */
-    public record Failure(String topic, long sequence, byte[] data, int reason, int command) {
+    public record Failure(String topic, long sequence, byte[] data, String reason, boolean delta) {
 
         public boolean wasPublish() {
-            return command == Message.Command.Publish;
+            return !delta;
         }
     }
 
@@ -44,24 +50,18 @@ public final class RepairQueue implements FailedWriteHandler {
     private final AtomicLong duplicates = new AtomicLong();
     private final AtomicLong refused = new AtomicLong();
 
-    @Override
-    public void failedWrite(Message message, int reason) {
-        long sequence = message.isSequenceNull() ? 0 : message.getSequence();
-        if (reason == Message.Reason.Duplicate) {
-            duplicates.incrementAndGet();
-            log.info("publish {} dropped by the server as a duplicate (expected after a replay)", sequence);
-            return;
-        }
-        String topic = message.isTopicNull() ? "" : message.getTopic();
-        byte[] copy = new byte[0];
-        if (!message.isDataNull()) {
-            com.crankuptheamps.client.fields.Field data = message.getDataRaw();
-            copy = java.util.Arrays.copyOfRange(data.buffer, data.position, data.position + data.length);
-        }
+    /** The sink's callback for a publish the server refused: logged and queued for repair. */
+    public void onRefused(Failure failure) {
         refused.incrementAndGet();
-        log.warn("publish {} to {} refused by the server, reason {}: queued for repair", sequence, topic,
-                reasonName(reason));
-        failures.add(new Failure(topic, sequence, copy, reason, message.getCommand()));
+        log.warn("publish {} to {} refused by the server, reason {}: queued for repair", failure.sequence(),
+                failure.topic(), failure.reason());
+        failures.add(failure);
+    }
+
+    /** The sink's callback for a publish the server dropped as one it already had: counted, never repaired. */
+    public void onDuplicate(long sequence) {
+        duplicates.incrementAndGet();
+        log.info("publish {} dropped by the server as a duplicate (expected after a replay)", sequence);
     }
 
     /** Enqueues a failure directly: a client without a store, or a test. */
@@ -87,18 +87,5 @@ public final class RepairQueue implements FailedWriteHandler {
     /** Everything the server refused for a reason other than a duplicate. */
     public long refused() {
         return refused.get();
-    }
-
-    static String reasonName(int reason) {
-        for (java.lang.reflect.Field field : Message.Reason.class.getFields()) {
-            try {
-                if (field.getType() == int.class && field.getInt(null) == reason) {
-                    return field.getName();
-                }
-            } catch (IllegalAccessException ignored) {
-                // not ours to read; fall through to the number
-            }
-        }
-        return Integer.toString(reason);
     }
 }

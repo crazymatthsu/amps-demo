@@ -142,11 +142,108 @@ interfaces, so a deployment that needs more than a hook replaces one:
 | replace | to |
 | --- | --- |
 | `FeedAdapter` | sit the publisher behind a different FIX engine, a message bus, or a file replay |
+| `PublishSink` | write the records and the audit copies somewhere other than AMPS |
 | `AuditRouter` | route pass-through topics by something the yml cannot express (per account, per venue) |
 | `RecordWriter` | publish the record as JSON instead of FIX, for a consumer that prefers it — the machine does not care what the record looks like on the wire |
-| `SowCacheLoader`, `MissResolver` | rebuild or look up the cache from somewhere other than the SOW and audit topics |
+| `RecordSource`, `MissLookup` | rebuild or look up the cache from somewhere other than the SOW and audit topics |
 | `OrderKeyIndex` | an off-heap or persistent index for a flow the heap cannot hold |
 | `OrderStateMachine` | the whole rule set — at which point this is a different publisher, and the rest of the module is a shell for it |
+
+### 3.1 A feed and a sink other than AMPS
+
+The core does not know where its FIX comes from or where its records go. It
+is the packages `fix`, `machine`, `spi`, `hooks`, `publish` and `recovery`,
+plus the policy enums in `config`. These import only the JDK, SLF4J and each
+other, and `checkCoreSelfContained` fails the build if one imports anything
+else. AMPS code lives in the `amps` package. Spring code lives in the
+application class, in `MockFlowRunner`, in `amps.AmpsClientConfiguration` and
+in `config/OrderStateProperties`. The core takes plain option records:
+`MachineOptions`, `PublisherOptions`, `RoutingOptions` (with its `Route`s) and
+`RecoveryOptions`. `OrderStateProperties` maps the yml onto each of them.
+
+An adapter implements these:
+
+| interface | what it does | the AMPS one |
+| --- | --- | --- |
+| `spi.FeedAdapter` | calls `MessageSink.onMessage(bytes, offset, length)` once per message, in session order | `MockFlowRunner` in the demo |
+| `publish.PublishSink` | `publish` (a whole record or an audit copy), `deltaPublish`, `flush`, `unpersisted`, `lastPersisted` | `amps.AmpsPublishSink` |
+| the failure callback into `publish.RepairQueue` | `onRefused(Failure)` for a write refused after `publish` returned, `onDuplicate(sequence)` for one dropped as already held; callable from any thread | `amps.AmpsFailedWriteHandler` |
+| `recovery.RecordSource` | `name`, `isEmpty`, `forEach`: every record read back at startup | `amps.SowRecordSource` |
+| `machine.MissLookup` | `keyForClOrdId`, `keyForOrderId`, `record`: the keyed reads on a cache miss | `amps.MissResolver` |
+
+Wired by hand, without Spring:
+
+```java
+OrderStateMachine machine = new OrderStateMachine(machineOptions);
+machine.setMissLookup(lookup);                       // or leave MissLookup.NONE
+new SowCacheLoader(recoveryOptions).load(source, machine);
+RepairQueue repairs = new RepairQueue();             // the sink reports into it
+OrderStatePublisher publisher = new OrderStatePublisher(machine, new RecordWriter(machineOptions),
+        new AuditRouter(routingOptions), sink, repairs, hooks, publisherOptions);
+feed.run(publisher);
+publisher.close();                                   // repairs what is queued, then flushes
+```
+
+A sink and a feed must keep three contracts. Over AMPS, the SOW's merge,
+the publish store and the SOW's own reads keep them.
+
+**1. The output is a delta against a keyed record.** The message that
+creates an order's cache entry, normally its D, is a full publish of the
+record. Every later message is a `deltaPublish` carrying only the fields that
+changed, under the same key: tag 13011, the order's root ClOrdID. AMPS merges
+each delta into the SOW record. Any other sink must do that merge itself,
+keyed by 13011. If it cannot, its consumer must apply each delta over the
+record it already holds. The fields only the full publish carries are the
+D's descriptive terms (account, symbol, side and the like). A sink that
+replaces the record with each delta, instead of merging, loses them, and the
+cache cannot restore them because it does not keep them. `RecordWriter.writeAll`
+writes every field the cache does hold, as the repair of a refused delta
+does. A mode that publishes the full record every time, for a sink that
+cannot merge, is possible on top of it. It is not built.
+
+**2. `onMessage` returning means durably accepted.** The feed adapter
+acknowledges a message to its source only after `onMessage` returns: the FIX
+session's sequence number, a bookmark, or an offset. It must never acknowledge
+when `onMessage` throws. The publisher returns only after every publish for
+the message has returned from the sink and the cache is committed. So a
+`publish` or `deltaPublish` that returns must survive whatever the deployment
+needs it to survive; over AMPS with a `FILE` store, that is a process crash. A
+sink that learns of a refusal later, on another thread, reports it through
+`RepairQueue.onRefused`, and the publisher repairs it on its own thread before
+the next message. The sequence the sink returned from `publish` goes in the
+`Failure`: it is how a refused payload without its own 13011 finds its order.
+A sink that does neither is at most once, as `publish-store: NONE` is.
+`flush` waits until everything published is durable. `unpersisted` and
+`lastPersisted` feed the metrics; a sink with no store returns 0 and
+`Long.MAX_VALUE`.
+
+**3. The records are the checkpoint.** With `recovery: SOW`, the cache is
+rebuilt at startup by reading every record back through the `RecordSource`.
+On a cache miss, the `MissLookup` reads the audit copies by ClOrdID, and the
+record by 13011 once everything published so far is durable, so the record
+cannot lag a delta still in flight. Both read what the sink wrote. So the
+sink's own store must be readable, by key for the lookup, or a side store
+beside it must be: a table, or a compacted topic, keyed by 13011. A
+fire-and-forget output, such as a socket or a log, can only run with
+`recovery: NONE` and `allow-incomplete-cache: true`. Its `RecordSource`
+cannot know what downstream holds, so it must not answer empty. With no
+lookup either (`miss-lookup: false`), every order the cache does not hold
+becomes a new `MIDSTREAM` record. Eviction and `load-open-orders-only` are
+then refused ([11 F11](11-build-findings.md#f11--eviction-without-the-miss-lookup-overwrites-the-record)).
+
+Three more things hold for any sink:
+- **Single thread, session order, one writer.** The feed calls `onMessage`
+  from one thread, in the order the session delivered. One publisher writes a
+  given blotter: two would each publish deltas against their own cache.
+- **Names, not topics.** `AuditRouter` routes by topic name. The blotter's
+  name and each route's `topics` are strings handed to the sink, and a
+  non-AMPS sink maps them to whatever it writes, such as a table or a Kafka
+  topic. `MissResolver.Options` names the audit topics it reads.
+- **`topic-keys` and `key-guard` are SOW ideas.** They skip a topic whose key
+  the message lacks, or whose key is a sentinel that would collapse SOW
+  records onto one. A sink that keys nothing can declare the audit topics
+  `[]` and drop the guards. The blotter stays `[13011]`, because the record is
+  always keyed by it.
 
 ## 4. What is not extensible, on purpose
 
@@ -167,4 +264,6 @@ and phase 3 (the yml binding and `VenueDialect`). Tier two is phase 3: the
 SPI, the Spring collection of hook beans, the fail-fast semantics, and one
 shipped example hook (the derived desk status above) with a test that the
 machine's own fields cannot be written through `RecordFields`. Tier three is a
-property of the design rather than a deliverable.
+property of the design rather than a deliverable. The split of the core from
+AMPS and Spring that §3.1 describes came later, and is recorded in
+[11 §7](11-build-findings.md#7-the-core-as-a-library-amps-and-spring-behind-the-seams).

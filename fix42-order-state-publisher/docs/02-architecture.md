@@ -91,17 +91,22 @@ same question is answered by `execs_audit` filtered by `/13011` or `/37`.
 | `PendingRequest` set | the in-flight D/G/F requests of one order, requested or inferred | inside `OrderState` | new |
 | `OrderStateMachine` | `plan`: resolve, arbitrate, stage; `commit`: apply. Reports what changed | owns the two maps | new, rules in [03](03-state-machine.md) |
 | `RecordWriter` | encode an `OrderState` as FIX tags: whole, or only the dirty fields; the 12015/12021 encodings and their parsers | per-thread buffer | new |
-| `OrderStatePublisher` | `send(FixFrame)`: plan → blotter publish → audit publishes → `commit`, all through the `HAClient`; drains the repair queue before each message, on an idle timer and at shutdown; counters | per-thread scratch | new, the shape of `AmpsDeltaPublisher` with a store ([04 §6](04-recovery-and-operations.md#6-the-publish-path)) |
-| `AmpsClientConfiguration` | an `HAClient` with a `PublishStore` (`FILE`, `MEMORY` or `NONE`) and a `FailedWriteHandler` that enqueues the rejected publish's key for repair — it never touches an entry itself | none | new, after `amps-connectors` and `fix-pub-seqno` |
-| `SowCacheLoader` | on start, rebuild the maps from `sow/fix42/order_state`; tombstones for records not kept; schema version check | none | new, [04](04-recovery-and-operations.md) |
-| `MissResolver` | on a cache miss, the keyed lookups of [04 §3](04-recovery-and-operations.md#3-cache-misses) before a `MIDSTREAM` entry is created | none | new |
+| `OrderStatePublisher` | `send(FixFrame)`: plan → blotter publish → audit publishes → `commit`, all through a `PublishSink`; drains the `RepairQueue` before each message, on an idle timer and at shutdown; counters | per-thread scratch | new, the shape of `AmpsDeltaPublisher` with a store ([04 §6](04-recovery-and-operations.md#6-the-publish-path)) |
+| `PublishSink` / `amps.AmpsPublishSink` | the core's output: `publish`, `deltaPublish`, `flush`; over AMPS, the `HAClient` and its publish store | none | new; the contract a non-AMPS sink keeps is [07 §3.1](07-extension-points.md#31-a-feed-and-a-sink-other-than-amps) |
+| `amps.AmpsClientConfiguration` | an `HAClient` with a `PublishStore` (`FILE`, `MEMORY` or `NONE`) and an `amps.AmpsFailedWriteHandler` that copies a rejected publish into the core's `RepairQueue` — it never touches an entry itself | none | new, after `amps-connectors` and `fix-pub-seqno` |
+| `SowCacheLoader` (`recovery`) | on start, rebuild the maps from every record a `RecordSource` reads back — over AMPS, `amps.SowRecordSource`'s `sow` of `sow/fix42/order_state`; tombstones for records not kept; schema version check | none | new, [04](04-recovery-and-operations.md) |
+| `amps.MissResolver` | on a cache miss, the keyed lookups of [04 §3](04-recovery-and-operations.md#3-cache-misses) before a `MIDSTREAM` entry is created; the AMPS implementation of the core's `MissLookup` | none | new |
 | `OrderStateProperties` | the yml surface (§6) | none | new, the shape of `Fix42Properties` |
 | `OrderStateHook` (SPI) + `VenueDialect` | per-venue policy bundles, and hooks called before and after each apply | none, by contract | new, [07](07-extension-points.md) |
 | `Fix42OrderStatePublisherApplication` + `MockFlowRunner` | the Spring Boot shell; publishes the scripted and edge-case flows and exits | none | copied |
 
 The split that matters for testing is the same as before: everything up to
-`RecordWriter` is pure and runs without a server; only `OrderStatePublisher`,
-`SowCacheLoader` and `MissResolver` touch an AMPS client.
+`RecordWriter` is pure and runs without a server, and the publisher runs
+against a recording `PublishSink` in the unit tests. Only the `amps`
+package touches an AMPS client: `AmpsPublishSink`, `AmpsFailedWriteHandler`,
+`SowRecordSource` and `MissResolver`, connected by `AmpsClientConfiguration`.
+The rest is the core, which imports neither AMPS nor Spring
+([11 §7](11-build-findings.md#7-the-core-as-a-library-amps-and-spring-behind-the-seams)).
 
 ## 3. The cache
 
@@ -546,8 +551,8 @@ Three tiers, in [07](07-extension-points.md): the policy knobs above, bundled
 per venue as a `VenueDialect`; an `OrderStateHook` SPI called before and after
 each apply, which may veto or normalise a message and add record fields in the
 12100–12999 range but never touch the machine's own; and constructor-injected
-components (`AuditRouter`, `RecordWriter`, `SowCacheLoader`, `MissResolver`,
-`OrderKeyIndex`, `FeedAdapter`) a deployment can replace. Hooks are stateless
+components (`AuditRouter`, `RecordWriter`, `PublishSink`, `RecordSource`,
+`MissLookup`, `OrderKeyIndex`, `FeedAdapter`) a deployment can replace. Hooks are stateless
 by contract and fail fast, so every recovery path in
 [04](04-recovery-and-operations.md) still holds with them in place.
 

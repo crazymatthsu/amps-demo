@@ -158,8 +158,85 @@ val checkModuleDocs = tasks.register("checkModuleDocs") {
     }
 }
 
+/**
+ * The core is a library that does not care where its FIX comes from or where
+ * its records go (docs/07 §3): the packages below may import only the JDK,
+ * SLF4J and each other. AMPS lives in `amps`, Spring in the application, the
+ * `amps` package and `config/OrderStateProperties`, which binds the yml and is
+ * the one class under `config` left out. A fully-qualified name in code counts
+ * as an import: an import-only check misses `com.crankuptheamps.client.fields.Field`
+ * written inline.
+ */
+val corePackages = listOf("fix", "machine", "spi", "hooks", "publish", "recovery", "config")
+val checkCoreSelfContained = tasks.register("checkCoreSelfContained") {
+    group = "verification"
+    description = "Verify the core packages import only the JDK, SLF4J and each other."
+
+    val root = layout.projectDirectory.dir("src/main/java/com/demo/amps/fix42/state").asFile
+    val dirs = corePackages.map { File(root, it) }
+    dirs.forEach { inputs.dir(it) }
+    outputs.upToDateWhen { false }
+
+    doLast {
+        val excluded = setOf("config/OrderStateProperties.java")
+        val allowed = listOf("java.", "org.slf4j.") + corePackages.map { "com.demo.amps.fix42.state.$it." }
+        val importLine = Regex("""^\s*import\s+(?:static\s+)?([\w.]+)""")
+        // A qualified name in code: two or more dotted lower-case segments, then more.
+        val qualifiedName = Regex("""(?<![\w.])((?:com|org|net|io|jakarta|javax)\.[a-z]\w*(?:\.\w+)+)""")
+        val problems = mutableListOf<String>()
+        var scanned = 0
+        dirs.forEach { dir ->
+            val files = dir.walkTopDown().filter { it.isFile && it.extension == "java" }.sortedBy { it.path }.toList()
+            if (files.isEmpty()) {
+                problems += "no sources under ${dir.relativeTo(projectDir)}"
+            }
+            files.filter { it.relativeTo(root).invariantSeparatorsPath !in excluded }.forEach { file ->
+                scanned++
+                var inComment = false
+                file.readLines().forEachIndexed { index, line ->
+                    val where = "${file.relativeTo(projectDir)}:${index + 1}"
+                    val imported = importLine.find(line)?.groupValues?.get(1)
+                    if (imported != null) {
+                        if (allowed.none { imported.startsWith(it) }) {
+                            problems += "$where: imports $imported"
+                        }
+                        return@forEachIndexed
+                    }
+                    // Code only: javadoc and comments may name what lives outside.
+                    var code = line
+                    if (inComment) {
+                        val end = code.indexOf("*/")
+                        if (end < 0) return@forEachIndexed
+                        code = code.substring(end + 2)
+                        inComment = false
+                    }
+                    code = code.replace(Regex("""/\*.*?\*/"""), "")
+                    val open = code.indexOf("/*")
+                    if (open >= 0) {
+                        code = code.substring(0, open)
+                        inComment = true
+                    }
+                    code = code.substringBefore("//")
+                    if (code.trimStart().startsWith("package ")) return@forEachIndexed
+                    qualifiedName.findAll(code).forEach { match ->
+                        val name = match.groupValues[1]
+                        if (allowed.none { name.startsWith(it) }) {
+                            problems += "$where: refers to $name"
+                        }
+                    }
+                }
+            }
+        }
+        if (problems.isNotEmpty()) {
+            throw GradleException("the fix42-order-state core is not self-contained (docs/07 §3):\n  "
+                + problems.joinToString("\n  "))
+        }
+        logger.lifecycle("fix42-order-state-publisher: $scanned core sources depend only on the JDK, SLF4J and each other")
+    }
+}
+
 tasks.named("check") {
-    dependsOn(checkModuleDocs)
+    dependsOn(checkModuleDocs, checkCoreSelfContained)
 }
 
 /**

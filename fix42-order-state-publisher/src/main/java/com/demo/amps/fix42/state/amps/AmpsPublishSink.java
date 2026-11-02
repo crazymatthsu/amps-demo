@@ -1,15 +1,17 @@
-package com.demo.amps.fix42.state.publish;
+package com.demo.amps.fix42.state.amps;
 
 import com.crankuptheamps.client.Client;
 import com.crankuptheamps.client.Store;
+import com.demo.amps.fix42.state.publish.PublishSink;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
 /**
  * {@link PublishSink} over an AMPS client -- in production the
- * {@code HAClient} with a publish store that {@code AmpsClientConfiguration}
- * builds.
+ * {@code HAClient} with a publish store that {@link AmpsClientConfiguration}
+ * builds, whose refusals {@link AmpsFailedWriteHandler} carries into the
+ * {@code RepairQueue}.
  *
  * <p>With a store, {@code publish} returns once the message is in the store,
  * not when the server acknowledges it; {@link #flush} is {@code publishFlush},

@@ -293,6 +293,14 @@ Self-contained: nothing under `fix42-order-state-publisher/` imports from
 `fix42-publisher`, and the only in-repository dependency is the test-scope
 `amps-test-harness`, which every container-backed suite here uses.
 
+Inside the module, the core is `fix`, `machine`, `spi`, `hooks`, `publish`,
+`recovery` and `config`'s enums. It imports only the JDK, SLF4J and itself,
+and `checkCoreSelfContained` holds it to that. Every AMPS class is in `amps`.
+Spring is in the application, `MockFlowRunner`, `amps` and
+`OrderStateProperties`
+([07 §3.1](07-extension-points.md#31-a-feed-and-a-sink-other-than-amps),
+[11 §7](11-build-findings.md#7-the-core-as-a-library-amps-and-spring-behind-the-seams)).
+
 ```
 fix42-order-state-publisher/
   build.gradle.kts                              phase 0
@@ -300,17 +308,21 @@ fix42-order-state-publisher/
   docs/                                         these notes
   src/main/resources/application.yml            02 §6
   src/main/java/com/demo/amps/fix42/state/
-    Fix42OrderStatePublisherApplication.java
-    MockFlowRunner.java                         implements FeedAdapter
+    Fix42OrderStatePublisherApplication.java   the Spring shell, outside the core
+    MockFlowRunner.java                         implements FeedAdapter; Spring, outside the core
     fix/      FixFrame FixWriter FixMessage FixTags Prices         copied, phase 0
     mock/     OrderChain MockFixFlow Instrument FixEvent OrderScope copied, phase 0; dialect switches, EdgeCaseFlow, phase 1
-    config/   OrderStateProperties  AmpsClientConfiguration  VenueDialect  Mode
+    config/   OrderStateProperties (Spring, outside the core)  Mode  Recovery  PublishStoreType
               CancelRejectStatusPolicy  LateFillPolicy  NonFillAfterTerminalPolicy  FillUnderPendingIdPolicy
     machine/  OrderKeyIndex  OrderState  PendingRequest  OrderStateMachine  Outcome  RecordWriter
-    spi/      OrderStateHook  OrderStateView  IndexView  Decision  RecordFields  IgnoreReason  FeedAdapter
+              MachineOptions  MissLookup
+    spi/      OrderStateHook  OrderStateView  IndexView  Decision  RecordFields  IgnoreReason  FeedAdapter  MessageSink
     hooks/    DeskStatusHook (the shipped example)  RejectStatusAtRequestTimeHook (docs/11 F2)
-    publish/  AuditRouter  OrderStatePublisher
-    recovery/ SowCacheLoader  MissResolver  (JournalReplayer, later)
+    publish/  AuditRouter  OrderStatePublisher  PublishSink  RepairQueue
+              PublisherOptions  RoutingOptions  Route
+    recovery/ SowCacheLoader  RecordSource  RecoveryOptions  (JournalReplayer, later)
+    amps/     AmpsPublishSink  AmpsFailedWriteHandler  SowRecordSource  MissResolver
+              AmpsClientConfiguration                              the AMPS adapters, docs/11 §7
     feed/     QuickFixJFeedAdapter                                 phase 4
   src/test/java/…/fix/, …/mock/                  copied unit tests + ScriptedFlowPinTest, phase 0
   src/test/java/…/machine/                       phase 2: per-rule, per-walkthrough, per-matrix-row, round-trip

@@ -490,3 +490,43 @@ first time this version starts: delete its records at a daily reset. No
 migration of an existing blotter is built. Pinned by
 `RecordShapeTest.legacyTagScheme`; every other test reads the tags through
 `FixTags.Record`, so the suites ran unchanged on the new numbers.
+
+## 7. The core as a library: AMPS and Spring behind the seams
+
+Made on 2026-11-01. The module now works as a library that does not care
+where its FIX comes from or where its records go. Nothing in it behaves
+differently: the unit and integration suites ran unchanged, apart from how
+they construct the classes below.
+
+**The split.** The core is `fix`, `machine`, `spi`, `hooks`, `publish`,
+`recovery`, and the policy enums in `config`. It imports only the JDK, SLF4J
+and itself. The new package `amps` holds every AMPS adapter. The Spring
+classes are the application, `MockFlowRunner`, `amps.AmpsClientConfiguration`
+and `config/OrderStateProperties`; `mock` stays where it is.
+
+| what | before | after |
+| --- | --- | --- |
+| `AmpsPublishSink` | `publish` | `amps`, moved |
+| `MissResolver` | `recovery`, built from `OrderStateProperties` | `amps`, moved; takes `MissResolver.Options`: blotter, audit topic names, timeout, by-order-id |
+| `AmpsClientConfiguration` | `config` | `amps`, moved whole; the `RepairQueue` bean stays in it |
+| `RepairQueue` | the client's `FailedWriteHandler`; `Failure` held AMPS reason and command ints | a plain queue; `Failure(topic, sequence, data, reason, delta)` with the reason as a name, and `onRefused`/`onDuplicate` as the sink's callback |
+| the `FailedWriteHandler` | `RepairQueue` itself | `amps.AmpsFailedWriteHandler`: translates `Message.Reason` and `Message.Command` into the queue |
+| `SowCacheLoader` | ran its own `sow` queries | the same logic over a `RecordSource` and `RecoveryOptions`; the queries are `amps.SowRecordSource` |
+| `OrderStatePublisher`, `AuditRouter` | built from `OrderStateProperties` | built from `PublisherOptions` and `RoutingOptions`; the router reads a plain `publish.Route` |
+
+**The new interfaces and records.** `recovery.RecordSource` is `name()`,
+`isEmpty()` and `forEach(Consumer<FixMessage>)`. The option records are
+`publish.PublisherOptions`, `publish.RoutingOptions`, `publish.Route` and
+`recovery.RecoveryOptions`. `OrderStateProperties.publisherOptions()`,
+`routingOptions()` and `recoveryOptions()` map the yml onto them, as
+`machineOptions()` already did. `machine.MissLookup` and the `spi` feed
+interfaces were already free of AMPS, and are unchanged.
+[07 §3.1](07-extension-points.md#31-a-feed-and-a-sink-other-than-amps) says
+what an adapter must provide.
+
+**The check.** `checkCoreSelfContained` runs in `check`. It reads every
+source file in the core packages, leaving out `config/OrderStateProperties.java`,
+and fails on an import outside the JDK, SLF4J and the core. It also fails on
+a qualified name used in code. The old `RepairQueue` wrote
+`com.crankuptheamps.client.fields.Field` inline, and an import-only check
+would have missed it. Comments may still name classes outside the core.

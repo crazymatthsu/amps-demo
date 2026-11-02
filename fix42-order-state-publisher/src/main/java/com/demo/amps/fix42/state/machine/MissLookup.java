@@ -4,8 +4,9 @@ import com.demo.amps.fix42.state.fix.FixMessage;
 
 /**
  * The keyed reads a cache miss is resolved by (docs/04 §3), behind an
- * interface so the machine stays free of AMPS: {@code MissResolver} is the
- * implementation over the audit topics and the blotter.
+ * interface so the machine stays free of AMPS: {@code amps.MissResolver} is
+ * the implementation over the audit topics and the blotter; a sink that
+ * writes somewhere else implements it over its own store (docs/07 §3).
  *
  * <p>Each method is one keyed read. A failure is thrown unchecked: it
  * propagates out of {@code plan}, nothing is committed, and the message can
