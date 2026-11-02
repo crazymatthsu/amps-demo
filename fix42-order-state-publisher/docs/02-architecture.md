@@ -85,7 +85,7 @@ same question is answered by `execs_audit` filtered by `/13011` or `/37`.
 | `FixFrame` / `FixWriter` / `FixMessage` / `FixTags` / `Prices` | parse, index and render FIX; the tag vocabulary | none | copied from `fix42-publisher` into this module's package in phase 0; `FixTags` gains 13011, the 15011/15035/15038/15044 pending family and 12014–12033 |
 | `OrderChain` / `MockFixFlow` / `Instrument` / `FixEvent` / `OrderScope` | the deterministic mock venue | per chain, test only | copied in phase 0; extended in phase 1 with multi-request scenarios and venue-dialect switches |
 | `FeedAdapter` | hands each received message to the publisher and acknowledges it to the session only after `commit()` | none | new; `MockFlowRunner` implements it for the demo, a QuickFIX/J `fromApp` adapter in phase 4 |
-| `AuditRouter` | which pass-through topics a message goes to, whole, plus tag 13011; the per-payload key check; the lenient-mode catch-all | none | new, a simplified `PublishPlanner`: no projection, FULL by default |
+| `AuditRouter` | which route a message takes (35, 150, 20) and which pass-through topics it goes to, whole or as the route's selected tags, plus tag 13011; the per-payload key check; the lenient-mode catch-all | none | new, a simplified `PublishPlanner`: FULL by default, a selection on request, and the route's `projection` handed to `RecordWriter` for the blotter ([07 §5](07-extension-points.md#5-which-tags-the-topics-and-the-record-carry)) |
 | `OrderKeyIndex` | two maps — ClOrdID → OrderKey and OrderID → OrderKey, never conflated ([03 §3.1](03-state-machine.md#31-resolution)); tombstones; answered ids | one map entry per id | new |
 | `OrderState` | the cache entry (§3) | one per order | new |
 | `PendingRequest` set | the in-flight D/G/F requests of one order, requested or inferred | inside `OrderState` | new |
@@ -373,6 +373,14 @@ the topics whose key it carries, and is still applied to the blotter
 (R21, S10). A `key-guard` on a route does the same for sentinel values
 (`37=NONE`, `17=0`).
 
+A route that lists `tags` (or `changeable-tags`) sends its topics only those
+tags, in rule order, plus the 13011 trailer, as a `delta_publish`: the old
+publisher's DELTA route, for a deployment that wants its wire shape. The
+startup check proves every topic's key is in the selection. A route's
+`projection` decides which of the message's own tags the blotter record
+carries beside the machine's fields, on every tag the machine does not own
+([07 §5](07-extension-points.md#5-which-tags-the-topics-and-the-record-carry)).
+
 ## 6. Configuration
 
 Bound to `OrderStateProperties`, validated at startup the way `Fix42Properties`
@@ -466,9 +474,11 @@ fix42-order-state:
     "[fix42/unrouted]": []          # not a SOW topic: no key
     "[fix42/malformed]": []
 
-  # Pass-through routing: matched in order, first match wins. A route sends
-  # the message WHOLE unless it lists tags. `apply-state` (default true) says
-  # whether a route's messages feed the state machine.
+  # Routing: matched in order on 35 (and 150/20 when a route lists
+  # exec-types/exec-trans-types), first match wins. A route sends the message
+  # WHOLE unless it lists tags. `apply-state` (default true) says whether a
+  # route's messages feed the state machine; `projection` which of their tags
+  # the record carries (docs/07 §5).
   routes:
     - name: new-order
       msg-types: ["D"]
@@ -497,13 +507,16 @@ fix42-order-state:
       apply-state: false
 ```
 
-What left the yml, and why: the `projection` blocks (they *were* the state
-machine), the per-`150` split of the `35=8` routes (the machine reads 150 and
-20 itself; a deployment that wants different *pass-through* tags per exec type
-can still split the route), and `changeable-tags` for the blotter (the machine
-stages 38/44 from a G and adopts `order-term-tags` from the confirming
-report). The audit topics' `mode` defaults to FULL; `tags:` on a route turns
-it back into a selected delta for a deployment that wants the old wire shape.
+What left the yml, and why: the `projection` blocks' rewrites of the
+order's state (they *were* the state machine: the pending family, 151=0 on a
+terminal report, 9014), the per-`150` split of the `35=8` routes as a
+default (the machine reads 150 and 20 itself), and `changeable-tags` for the
+blotter (the machine stages 38/44 from a G and adopts `order-term-tags` from
+the confirming report). The keys themselves are still there for what the
+machine does not own ([07 §5](07-extension-points.md#5-which-tags-the-topics-and-the-record-carry)):
+`exec-types`/`exec-trans-types` split a route, `tags:` turns the audit copy
+back into a selected delta, and `projection` chooses the record's other tags
+-- refused at startup if it names one the machine writes.
 
 ## 7. Threading and ordering
 

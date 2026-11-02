@@ -29,11 +29,28 @@ public final class OrderStateConfigurations {
      * overrides under {@code fix42-order-state.}.
      */
     public static OrderStateProperties shipped(String uri, String profile, String... overrides) {
+        return withYaml(uri, profile, null, overrides);
+    }
+
+    /**
+     * As {@link #shipped(String, String, String...)}, with the classpath yml
+     * {@code extraYaml} laid over {@code application.yml} (and under the
+     * overrides): a test's own {@code routes}, which a {@code key=value}
+     * override cannot express because a bound list is replaced, never merged.
+     */
+    public static OrderStateProperties withYaml(String uri, String profile, String extraYaml, String... overrides) {
         StandardEnvironment environment = new StandardEnvironment();
         List<PropertySource<?>> sources;
         try {
             sources = new YamlPropertySourceLoader()
                     .load("application.yml", new ClassPathResource("application.yml"));
+            if (extraYaml != null) {
+                List<PropertySource<?>> extra = new YamlPropertySourceLoader()
+                        .load(extraYaml, new ClassPathResource(extraYaml));
+                java.util.List<PropertySource<?>> all = new java.util.ArrayList<>(sources);
+                all.addAll(extra);
+                sources = all;
+            }
         } catch (Exception e) {
             throw new IllegalStateException("cannot read application.yml from the classpath", e);
         }

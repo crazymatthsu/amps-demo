@@ -18,12 +18,16 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * The publisher's configuration, bound from {@code application.yml}
  * (docs/02 §6).
  *
- * <p>Unlike {@code fix42-publisher}'s rulebook, nothing here says which tags
- * reach the blotter: that is the state machine's, in code. What is here is
- * the connection, the policy knobs a venue dialect bundles, and the
- * pass-through routing of the audit topics. {@link #validate()} runs at
- * startup and refuses to boot on a configuration that would fail later at
- * the server.
+ * <p>The state machine decides, in code, which of its own fields reach the
+ * blotter: the venue status, the quantities, the chain, the pending set. What
+ * is here is the connection, the policy knobs a venue dialect bundles, and the
+ * routes: which topics each message goes to, which of its tags they receive
+ * ({@code tags}, {@code changeable-tags}), and which of its tags the blotter
+ * record carries beside the machine's fields ({@code projection}) -- the
+ * same keys as {@code fix42-publisher}'s rulebook (docs/07 §5).
+ * {@link #validate()} runs at startup and refuses to boot on a configuration
+ * that would fail later at the server, or that would let a route write a
+ * field the machine owns.
  *
  * <p>Spring's, and so outside the core: the core takes plain option records,
  * which {@link #machineOptions()}, {@link #publisherOptions()},
@@ -36,7 +40,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param orderState the blotter and the machine's policies
  * @param audit      the pass-through topics' key trailer
  * @param topicKeys  the SOW key of every topic, mirroring the server flow
- * @param routes     pass-through routing, first match wins
+ * @param routes     routing, first match wins: topics, tag selection, projection
  */
 @ConfigurationProperties(prefix = "fix42-order-state")
 public record OrderStateProperties(Amps amps,
@@ -114,39 +118,104 @@ public record OrderStateProperties(Amps amps,
     }
 
     /**
-     * One pass-through route, as bound from the yml; {@link #toRoute()} maps it
-     * onto the core's {@code publish.Route}, which the router reads.
+     * One route, as bound from the yml; {@link #toRoute()} maps it onto the
+     * core's {@code publish.Route}, which the router reads. The matching and
+     * tag keys are {@code fix42-publisher}'s (docs/07 §5).
      *
-     * @param name       for logs and errors
-     * @param msgTypes   tag 35 values, or {@code *} for the lenient catch-all
-     * @param topics     destinations; the message goes whole, plus the key trailer
-     * @param keyGuard   per topic, per key tag, the sentinel values that skip
-     *                   that topic: {@code 37=NONE} would collapse execs onto
-     *                   one record, {@code 17=0} execs_audit
-     * @param applyState whether the route's messages feed the state machine
+     * @param name           for logs and errors
+     * @param msgTypes       tag 35 values, or {@code *} for the lenient catch-all
+     * @param execTypes      tag 150 values; empty for any
+     * @param execTransTypes tag 20 values; empty for any
+     * @param tags           with {@code changeableTags}, the tags {@code topics}
+     *                       receive; both empty sends the message whole
+     * @param changeableTags the business fields a desk tunes, kept apart from
+     *                       the identifying {@code tags} as in fix42-publisher
+     * @param topics         destinations, plus the key trailer
+     * @param keyGuard       per topic, per key tag, the sentinel values that skip
+     *                       that topic: {@code 37=NONE} would collapse execs onto
+     *                       one record, {@code 17=0} execs_audit
+     * @param applyState     whether the route's messages feed the state machine
+     * @param projection     the blotter record's extra tags for this route's
+     *                       messages; null for the machine's default
      */
     public record Route(String name,
                         @DefaultValue List<String> msgTypes,
+                        @DefaultValue List<String> execTypes,
+                        @DefaultValue List<String> execTransTypes,
+                        @DefaultValue List<Integer> tags,
+                        @DefaultValue List<Integer> changeableTags,
                         @DefaultValue List<String> topics,
                         Map<String, Map<Integer, List<String>>> keyGuard,
-                        @DefaultValue("true") boolean applyState) {
+                        @DefaultValue("true") boolean applyState,
+                        Projection projection) {
 
         /** The plain route the {@code AuditRouter} reads. */
         public com.demo.amps.fix42.state.publish.Route toRoute() {
-            return new com.demo.amps.fix42.state.publish.Route(name, msgTypes, topics, keyGuard, applyState);
+            com.demo.amps.fix42.state.machine.Projection compiled = null;
+            if (projection != null) {
+                try {
+                    compiled = projection.compile();
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalStateException("route '" + name + "': projection refused: " + e.getMessage(), e);
+                }
+            }
+            return new com.demo.amps.fix42.state.publish.Route(name, msgTypes, execTypes, execTransTypes, topics,
+                    selectedTags(), keyGuard, applyState, compiled);
         }
 
+        /** {@code tags} then {@code changeableTags}, de-duplicated, in rule order. */
+        public List<Integer> selectedTags() {
+            Set<Integer> selected = new LinkedHashSet<>(tags);
+            selected.addAll(changeableTags);
+            return List.copyOf(selected);
+        }
+
+        /** On tag 35 alone. Read without {@link #toRoute()}, which refuses a bad projection. */
         public boolean matches(String msgType) {
-            return toRoute().matches(msgType);
+            return msgTypes.contains(msgType) || catchAll();
         }
 
         public boolean catchAll() {
-            return toRoute().catchAll();
+            return msgTypes.contains(ANY_TYPE);
         }
 
         /** Whether {@code value} of {@code tag} is a sentinel that skips {@code topic}. */
         public boolean guarded(String topic, int tag, String value) {
-            return toRoute().guarded(topic, tag, value);
+            if (keyGuard == null) {
+                return false;
+            }
+            Map<Integer, List<String>> guards = keyGuard.get(topic);
+            return guards != null && guards.getOrDefault(tag, List.of()).contains(value);
+        }
+    }
+
+    /**
+     * What the blotter record carries from a route's messages beside the
+     * machine's own fields, as {@code fix42-publisher}'s {@code projection}
+     * block says it (docs/07 §5). There is one destination, the blotter, so
+     * no {@code projected-topics}.
+     *
+     * @param tags     copied verbatim; non-empty replaces the machine's default
+     *                 pass-through for the route, empty keeps it
+     * @param copyTags source tag to destination tag: the source's value under
+     *                 the destination's number
+     * @param setTags  destination tag to a literal value; never empty
+     */
+    public record Projection(@DefaultValue List<Integer> tags,
+                             @DefaultValue Map<Integer, Integer> copyTags,
+                             @DefaultValue Map<Integer, String> setTags) {
+
+        /** The core's compiled projection. */
+        public com.demo.amps.fix42.state.machine.Projection compile() {
+            return new com.demo.amps.fix42.state.machine.Projection(tags, copyTags, setTags);
+        }
+
+        /** Every tag the projection can write. */
+        public Set<Integer> producedTags() {
+            Set<Integer> produced = new LinkedHashSet<>(tags);
+            produced.addAll(copyTags.values());
+            produced.addAll(setTags.keySet());
+            return produced;
         }
     }
 
@@ -258,14 +327,69 @@ public record OrderStateProperties(Amps amps,
                                 + ", which has no topic-keys entry (use [] for a non-SOW topic)");
                     }
                     if (topic.equals(orderState.topic())) {
-                        problems.add("route '" + route.name() + "' sends to the blotter; only the machine writes it");
+                        problems.add("route '" + route.name() + "' sends to the blotter; only the machine writes "
+                                + "it -- use projection to choose the tags its record carries");
                     }
                 }
+                checkSelection(route, problems);
+                checkProjection(route, problems);
             }
         }
         if (!problems.isEmpty()) {
             throw new IllegalStateException("fix42-order-state configuration refused:\n  - "
                     + String.join("\n  - ", problems));
+        }
+    }
+
+    /** {@code tags}/{@code changeable-tags}: every topic's key among them, and never the trailer's tag. */
+    private void checkSelection(Route route, List<String> problems) {
+        String where = "route '" + route.name() + "'";
+        if (route.catchAll() && (!route.execTypes().isEmpty() || !route.execTransTypes().isEmpty())) {
+            problems.add(where + " matches every type, so exec-types/exec-trans-types would never apply");
+        }
+        List<Integer> selected = route.selectedTags();
+        if (selected.isEmpty()) {
+            return;
+        }
+        if (selected.stream().anyMatch(tag -> tag == null || tag <= 0)) {
+            problems.add(where + ": tags must be positive numbers, not " + selected);
+        }
+        if (audit.keyTag() != 0 && selected.contains(audit.keyTag())) {
+            problems.add(where + " selects " + audit.keyTag() + ", the trailer the publisher appends itself");
+        }
+        for (String topic : route.topics()) {
+            for (int key : keysOf(topic)) {
+                if (!selected.contains(key)) {
+                    problems.add(where + " sends " + topic + " a selection without its key tag " + key
+                            + ": AMPS refuses a SOW publish that lacks its key; add " + key + " to tags");
+                }
+            }
+        }
+    }
+
+    /**
+     * {@code projection}: only on a route that feeds the machine, never a
+     * field the machine writes or the internal ranges (the core's own
+     * check), and never a tag {@code strip-tags} keeps off the record.
+     */
+    private void checkProjection(Route route, List<String> problems) {
+        Projection projection = route.projection();
+        if (projection == null) {
+            return;
+        }
+        String where = "route '" + route.name() + "' projection";
+        if (!route.applyState() || route.catchAll()) {
+            problems.add(where + ": the route does not feed the state machine, so nothing would reach the blotter");
+        }
+        for (String problem : com.demo.amps.fix42.state.machine.Projection.problems(projection.tags(),
+                projection.copyTags(), projection.setTags())) {
+            problems.add(where + ": " + problem);
+        }
+        Set<Integer> stripped = new LinkedHashSet<>(projection.producedTags());
+        stripped.retainAll(orderState.stripTags());
+        if (!stripped.isEmpty()) {
+            problems.add(where + " writes " + stripped + ", which order-state.strip-tags keeps off the record: "
+                    + "remove them from one list or the other");
         }
     }
 }

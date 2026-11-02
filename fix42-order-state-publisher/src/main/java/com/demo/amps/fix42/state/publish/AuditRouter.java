@@ -25,6 +25,13 @@ import java.util.List;
  * value the venue meant. In strict mode a missing key, like an unrouted type,
  * raises.
  *
+ * <p>A route that lists {@code tags} (or {@code changeable-tags}) sends only
+ * those, in rule order, plus the trailer, as a {@code delta_publish} --
+ * {@code fix42-publisher}'s DELTA route (docs/07 §5). The key check above still reads the
+ * message: the startup check has proven every topic's key is among the
+ * selected tags. The catch-all copy of a message that lacked a key is always
+ * whole: it is there to be diagnosed.
+ *
  * <p>Routes by topic name only: the names are what the {@link PublishSink} is
  * handed, and a sink other than AMPS maps them to whatever it writes.
  */
@@ -43,8 +50,20 @@ public final class AuditRouter {
         this.catchAllTopic = last.catchAll() && !last.topics().isEmpty() ? last.topics().getFirst() : null;
     }
 
-    /** One planned pass-through publish. */
-    public record Publish(String topic, byte[] payload, int length) {
+    /**
+     * One planned pass-through publish.
+     *
+     * @param delta whether it goes as a {@code delta_publish}: a route's
+     *              selection merges into the topic's record, as
+     *              fix42-publisher's DELTA routes do; the whole message is
+     *              a {@code publish}
+     */
+    public record Publish(String topic, byte[] payload, int length, boolean delta) {
+
+        public Publish(String topic, byte[] payload, int length) {
+            this(topic, payload, length, false);
+        }
+
         public String printable() {
             return new String(payload, 0, length, java.nio.charset.StandardCharsets.ISO_8859_1).replace('\u0001', '|');
         }
@@ -55,7 +74,26 @@ public final class AuditRouter {
     }
 
     /**
-     * The route {@code msgType} takes, first match wins.
+     * The route {@code message} takes, on its 35, 150 and 20; first match wins.
+     *
+     * @throws UnroutedMessageException in strict mode, when only the catch-all
+     *         (or nothing) would take it
+     */
+    public Route match(FixFrame message) {
+        for (Route route : options.routes()) {
+            if (route.catchAll()) {
+                break;
+            }
+            if (route.matches(message)) {
+                return route;
+            }
+        }
+        return unmatched(describe(message));
+    }
+
+    /**
+     * The route a message of type {@code msgType} takes, on tag 35 alone:
+     * the first route for the type, whatever 150 or 20 it would ask for.
      *
      * @throws UnroutedMessageException in strict mode, when only the catch-all
      *         (or nothing) would take it
@@ -69,14 +107,26 @@ public final class AuditRouter {
                 return route;
             }
         }
+        return unmatched("35=" + msgType);
+    }
+
+    private Route unmatched(String what) {
         if (mode == Mode.STRICT) {
-            throw new UnroutedMessageException("no route for 35=" + msgType + " (strict mode)");
+            throw new UnroutedMessageException("no route for " + what + " (strict mode)");
         }
         Route last = options.routes().getLast();
         if (!last.catchAll()) {
-            throw new UnroutedMessageException("no route for 35=" + msgType + " and no catch-all route");
+            throw new UnroutedMessageException("no route for " + what + " and no catch-all route");
         }
         return last;
+    }
+
+    private static String describe(FixFrame message) {
+        String execType = message.value(FixTags.EXEC_TYPE);
+        String execTransType = message.value(FixTags.EXEC_TRANS_TYPE);
+        return "35=" + message.value(FixTags.MSG_TYPE)
+                + (execType.isEmpty() ? "" : " 150=" + execType)
+                + (execTransType.isEmpty() ? "" : " 20=" + execTransType);
     }
 
     /**
@@ -103,7 +153,7 @@ public final class AuditRouter {
             if (skip == Skip.GUARDED) {
                 continue;
             }
-            publishes.add(whole(topic, message, trailer));
+            publishes.add(route.selects() ? selected(topic, message, route, trailer) : whole(topic, message, trailer));
         }
         if (unrouted && !route.catchAll() && catchAllTopic != null) {
             publishes.add(whole(catchAllTopic, message, trailer));
@@ -139,6 +189,25 @@ public final class AuditRouter {
             }
         }
         return Skip.NONE;
+    }
+
+    /**
+     * The route's selected tags the message carries, in rule order, then the
+     * trailer: a delta, so a topic keyed by OrderID keeps the fields an
+     * earlier report wrote and this one does not carry.
+     */
+    private Publish selected(String topic, FixFrame message, Route route, String key) {
+        FixWriter out = new FixWriter(Math.max(64, message.length() + 32));
+        for (int tag : route.selectedTags()) {
+            int index = message.indexOf(tag);
+            if (index >= 0 && message.valueLengthAt(index) > 0 && !out.contains(tag)) {
+                message.copyFieldAt(index, out);
+            }
+        }
+        if (key != null) {
+            out.field(keyTag, key);
+        }
+        return new Publish(topic, java.util.Arrays.copyOf(out.buffer(), out.size()), out.size(), true);
     }
 
     private Publish whole(String topic, FixFrame message, String key) {

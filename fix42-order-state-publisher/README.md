@@ -263,6 +263,8 @@ its defaults are production's. The ones that change behaviour most:
 | `order-state.miss-lookup` | `true` | before creating a mid-stream order, look an unknown id up on the audit topics |
 | `order-state.terminal-retention` | `PT0S` | how long a finished order stays in the cache; `PT0S` keeps it forever |
 | `order-state.cancel-reject-status` and the other policies | per venue | what a reject's 39, a late fill or a late report may do ([docs/07 §1](docs/07-extension-points.md#1-tier-one-policies)) |
+| `routes[].tags`, `changeable-tags` | none: the message whole | the tags a route's audit topics receive, as a delta ([docs/07 §5](docs/07-extension-points.md#5-which-tags-the-topics-and-the-record-carry)) |
+| `routes[].projection` | none: the machine's default | the tags the record carries from a route's messages beside the machine's own: `tags`, `copy-tags`, `set-tags`, as in `fix42-publisher`; `exec-types`/`exec-trans-types` split a route per 150/20 |
 | `hooks.desk-status` | `false` | a one-word desk status in tag 12100 |
 | `hooks.reject-status-at-request-time` | `false` | for a venue whose rejects carry the request-time status (docs/11 F2) |
 
@@ -277,7 +279,9 @@ The record's tags sit in FIX's internal-use block, 10000–19999:
 The user-defined 9xxx range belongs to the upstream drop-copy system. A 9xxx
 tag on the message that creates an order (normally the D) passes through to
 the record; on later messages it stays on the audit topics, since those copy
-only their order-term tags onto the record. ParentOrderID stays at 9000. An
+only their order-term tags onto the record, unless a route's `projection`
+lists it. A projection may name any tag but the machine's own fields and its
+ranges; the start is refused otherwise. ParentOrderID stays at 9000. An
 upstream tag anywhere in 12000–12999, 13xxx or 15xxx is stripped, so nothing
 from upstream lands in the publisher's range. Records written before schema 2
 used 9xxx bookkeeping tags and refuse to load; see

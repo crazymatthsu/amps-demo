@@ -146,7 +146,7 @@ public final class OrderStatePublisher implements MessageSink {
     public synchronized Outcome send(FixFrame message) throws Exception {
         drainRepairs();
         String msgType = message.value(FixTags.MSG_TYPE);
-        Route route = router.match(msgType);
+        Route route = router.match(message);
 
         Outcome outcome = null;
         FixFrame applied = message;
@@ -197,13 +197,17 @@ public final class OrderStatePublisher implements MessageSink {
                 // under that empty key (docs/11 F5): never send either.
                 throw new IllegalStateException("a blotter publish without a key: " + outcome);
             }
-            if (writer.write(outcome, applied, out)) {
+            if (writer.write(outcome, applied, out, route.projection())) {
                 extra.writeTo(out);
                 publishBlotter(outcome.key(), outcome.publish() == Outcome.Publish.FULL, out.buffer(), out.size());
             }
         }
         for (AuditRouter.Publish publish : plan.publishes()) {
-            sink.publish(publish.topic(), publish.payload(), 0, publish.length());
+            if (publish.delta()) {
+                sink.deltaPublish(publish.topic(), publish.payload(), 0, publish.length());
+            } else {
+                sink.publish(publish.topic(), publish.payload(), 0, publish.length());
+            }
             counters.auditPublishes.incrementAndGet();
             if (log.isDebugEnabled()) {
                 log.debug("publish       {} {}", publish.topic(), publish.printable());
